@@ -42,7 +42,7 @@
       "minecraft": "1.21.x",
       "java": 21,
       "restartRequired": false,
-      "description": "MiaSkillpool test plugin with /mias reload."
+      "description": "MythicMobs-backed skill pool plugin with /mias."
     }
   ]
 }

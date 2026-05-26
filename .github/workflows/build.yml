@@ -49,6 +49,25 @@ jobs:
           echo "module=${module}" >> "${GITHUB_OUTPUT}"
           echo "tag_version=${tag_version}" >> "${GITHUB_OUTPUT}"
 
+      - name: Download private build dependencies
+        if: steps.release.outputs.module == 'all' || steps.release.outputs.module == 'miaskillpool'
+        shell: bash
+        env:
+          MIA_DEPS_URL: ${{ secrets.MIA_DEPS_URL }}
+          MIA_DEPS_BASIC_AUTH: ${{ secrets.MIA_DEPS_BASIC_AUTH }}
+        run: |
+          if [[ -z "${MIA_DEPS_URL}" || -z "${MIA_DEPS_BASIC_AUTH}" ]]; then
+            echo "MIA_DEPS_URL and MIA_DEPS_BASIC_AUTH repository secrets are required to build MiaSkillpool."
+            exit 1
+          fi
+
+          mkdir -p ../references
+          curl --fail --silent --show-error --location --retry 3 \
+            --cacert .github/ci/miahub-deps-ca.pem \
+            --user "${MIA_DEPS_BASIC_AUTH}" \
+            "${MIA_DEPS_URL}/MythicMobsPremium-5.12.0-SNAPSHOT.jar" \
+            --output ../references/MythicMobsPremium-5.12.0-SNAPSHOT.jar
+
       - name: Validate module release tag
         if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.module != 'all'
         shell: bash

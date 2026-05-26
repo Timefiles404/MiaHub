@@ -2,14 +2,24 @@ name: MiaSkillpool
 main: dev.timefiles.miaskillpool.MiaSkillpoolPlugin
 version: ${version}
 api-version: "1.21"
-description: 用于测试 MiaHub 下载和生命周期管理的 Mia 插件。
+description: MythicMobs-backed skill pool, slot, and resource plugin.
 author: Timefiles404
+depend:
+  - MythicMobs
 commands:
   mias:
     description: MiaSkillpool 命令。
-    usage: /mias reload
-    permission: miaskillpool.reload
+    usage: /mias [open|reload|learn|givebook|upgrade|mana|mode|random]
 permissions:
+  miaskillpool.use:
+    description: 允许使用 MiaSkillpool 技能池。
+    default: true
   miaskillpool.reload:
     description: 允许重载 MiaSkillpool。
+    default: op
+  miaskillpool.admin:
+    description: 允许管理 MiaSkillpool 玩家技能、随机装配和法力上限。
+    default: op
+  miaskillpool.upgrade:
+    description: 允许升级自己的技能槽位。
     default: op

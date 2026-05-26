@@ -1,0 +1,145 @@
+package dev.timefiles.miaskillpool.listener;
+
+import dev.timefiles.miaskillpool.MiaSkillpoolPlugin;
+import dev.timefiles.miaskillpool.config.SkillDefinition;
+import dev.timefiles.miaskillpool.config.SkillRegistry;
+import dev.timefiles.miaskillpool.data.PlayerDataStore;
+import dev.timefiles.miaskillpool.data.PlayerSkillData;
+import dev.timefiles.miaskillpool.gui.SkillPoolGui;
+import dev.timefiles.miaskillpool.gui.SkillPoolHolder;
+import dev.timefiles.miaskillpool.runtime.RuntimeState;
+import dev.timefiles.miaskillpool.runtime.SkillCastService;
+import dev.timefiles.miaskillpool.util.Texts;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.Player;
+import org.bukkit.entity.Projectile;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerSwapHandItemsEvent;
+import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.projectiles.ProjectileSource;
+
+public final class PlayerSkillListener implements Listener {
+    private final MiaSkillpoolPlugin plugin;
+    private final SkillRegistry skillRegistry;
+    private final PlayerDataStore dataStore;
+    private final RuntimeState runtimeState;
+    private final SkillCastService castService;
+    private final SkillPoolGui gui;
+
+    public PlayerSkillListener(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, RuntimeState runtimeState, SkillCastService castService, SkillPoolGui gui) {
+        this.plugin = plugin;
+        this.skillRegistry = skillRegistry;
+        this.dataStore = dataStore;
+        this.runtimeState = runtimeState;
+        this.castService = castService;
+        this.gui = gui;
+    }
+
+    @EventHandler
+    public void onInventoryClick(InventoryClickEvent event) {
+        gui.handleClick(event);
+    }
+
+    @EventHandler
+    public void onInventoryDrag(InventoryDragEvent event) {
+        if (event.getView().getTopInventory().getHolder() instanceof SkillPoolHolder) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler
+    public void onSwapHand(PlayerSwapHandItemsEvent event) {
+        Player player = event.getPlayer();
+        if (!player.hasPermission("miaskillpool.use")) {
+            return;
+        }
+
+        event.setCancelled(true);
+        int slotIndex = player.getInventory().getHeldItemSlot();
+        castService.castEquipped(player, slotIndex);
+    }
+
+    @EventHandler
+    public void onUseSkillBook(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND) {
+            return;
+        }
+        Action action = event.getAction();
+        if (action != Action.RIGHT_CLICK_AIR && action != Action.RIGHT_CLICK_BLOCK) {
+            return;
+        }
+
+        ItemStack item = event.getItem();
+        String skillId = gui.skillId(item);
+        if (skillId == null) {
+            return;
+        }
+
+        event.setCancelled(true);
+        Player player = event.getPlayer();
+        SkillDefinition skill = skillRegistry.get(skillId).orElse(null);
+        if (skill == null) {
+            player.sendMessage(Texts.PREFIX + Texts.color("&c技能书对应的技能配置不存在：" + skillId));
+            return;
+        }
+
+        PlayerSkillData data = dataStore.get(player);
+        if (!data.learn(skill.id())) {
+            player.sendMessage(Texts.PREFIX + Texts.color("&7你已经学过 " + skill.displayName() + "&7。"));
+            return;
+        }
+
+        decrementMainHand(player);
+        dataStore.save(data);
+        player.sendMessage(Texts.PREFIX + Texts.color("&a你学会了 " + skill.displayName() + "&a。"));
+    }
+
+    @EventHandler
+    public void onCombat(EntityDamageByEntityEvent event) {
+        if (event.getEntity() instanceof Player defender) {
+            runtimeState.addRage(defender, skillRegistry.rageGainOnTakeDamage());
+            runtimeState.enterCombat(defender);
+        }
+
+        Player attacker = attacker(event.getDamager());
+        if (attacker != null) {
+            runtimeState.addRage(attacker, skillRegistry.rageGainOnDealDamage());
+            runtimeState.enterCombat(attacker);
+        }
+    }
+
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        dataStore.save(dataStore.get(event.getPlayer()));
+    }
+
+    private Player attacker(Entity damager) {
+        if (damager instanceof Player player) {
+            return player;
+        }
+        if (damager instanceof Projectile projectile) {
+            ProjectileSource shooter = projectile.getShooter();
+            if (shooter instanceof Player player) {
+                return player;
+            }
+        }
+        return null;
+    }
+
+    private void decrementMainHand(Player player) {
+        ItemStack item = player.getInventory().getItemInMainHand();
+        if (item.getAmount() <= 1) {
+            player.getInventory().setItemInMainHand(null);
+            return;
+        }
+        item.setAmount(item.getAmount() - 1);
+    }
+}

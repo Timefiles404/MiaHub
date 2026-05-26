@@ -1,50 +1,94 @@
 package dev.timefiles.miaskillpool;
 
-import org.bukkit.ChatColor;
-import org.bukkit.command.Command;
-import org.bukkit.command.CommandExecutor;
-import org.bukkit.command.CommandSender;
-import org.bukkit.command.TabCompleter;
+import dev.timefiles.miaskillpool.api.MiaSkillpoolApi;
+import dev.timefiles.miaskillpool.command.MiaSkillpoolCommand;
+import dev.timefiles.miaskillpool.config.SkillRegistry;
+import dev.timefiles.miaskillpool.data.PlayerDataStore;
+import dev.timefiles.miaskillpool.gui.SkillPoolGui;
+import dev.timefiles.miaskillpool.listener.PlayerSkillListener;
+import dev.timefiles.miaskillpool.runtime.MiaSkillpoolService;
+import dev.timefiles.miaskillpool.runtime.RuntimeState;
+import dev.timefiles.miaskillpool.runtime.SkillCastService;
+import org.bukkit.NamespacedKey;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.util.List;
-import java.util.Locale;
+public final class MiaSkillpoolPlugin extends JavaPlugin {
+    private NamespacedKey skillBookKey;
+    private SkillRegistry skillRegistry;
+    private PlayerDataStore dataStore;
+    private RuntimeState runtimeState;
+    private SkillCastService castService;
+    private SkillPoolGui gui;
+    private MiaSkillpoolService api;
 
-public final class MiaSkillpoolPlugin extends JavaPlugin implements CommandExecutor, TabCompleter {
     @Override
     public void onEnable() {
         saveDefaultConfig();
-        var command = getCommand("mias");
-        if (command != null) {
-            command.setExecutor(this);
-            command.setTabCompleter(this);
-        }
+        this.skillBookKey = new NamespacedKey(this, "skill_id");
+        this.skillRegistry = new SkillRegistry(this);
+        this.dataStore = new PlayerDataStore(this);
+        this.runtimeState = new RuntimeState(this, dataStore);
+        this.castService = new SkillCastService(this, skillRegistry, dataStore, runtimeState);
+        this.gui = new SkillPoolGui(this, skillRegistry, dataStore);
+        this.api = new MiaSkillpoolService(skillRegistry, dataStore, gui, castService);
+
+        reloadSkillpool();
+        registerCommands();
+        getServer().getPluginManager().registerEvents(new PlayerSkillListener(this, skillRegistry, dataStore, runtimeState, castService, gui), this);
+        getServer().getServicesManager().register(MiaSkillpoolApi.class, api, this, ServicePriority.Normal);
+        getServer().getScheduler().runTaskTimer(this, runtimeState::tick, 20L, 20L);
+
         getLogger().info("MiaSkillpool is ready.");
     }
 
     @Override
-    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
-            if (!sender.hasPermission("miaskillpool.reload")) {
-                sender.sendMessage(ChatColor.RED + "你没有重载 MiaSkillpool 的权限。");
-                return true;
-            }
-
-            reloadConfig();
-            sender.sendMessage(ChatColor.DARK_AQUA + "[MiaSkillpool] " + ChatColor.GREEN + "已重载。");
-            return true;
+    public void onDisable() {
+        if (dataStore != null) {
+            dataStore.saveAll();
         }
-
-        sender.sendMessage(ChatColor.DARK_AQUA + "[MiaSkillpool] " + ChatColor.GRAY + "用法：/" + label + " reload");
-        return true;
+        getServer().getServicesManager().unregisterAll(this);
     }
 
-    @Override
-    public List<String> onTabComplete(CommandSender sender, Command command, String label, String[] args) {
-        if (args.length != 1) {
-            return List.of();
+    public void reloadSkillpool() {
+        reloadConfig();
+        skillRegistry.reload();
+        dataStore.reloadCached();
+    }
+
+    public NamespacedKey skillBookKey() {
+        return skillBookKey;
+    }
+
+    public SkillRegistry skillRegistry() {
+        return skillRegistry;
+    }
+
+    public PlayerDataStore dataStore() {
+        return dataStore;
+    }
+
+    public RuntimeState runtimeState() {
+        return runtimeState;
+    }
+
+    public SkillCastService castService() {
+        return castService;
+    }
+
+    public SkillPoolGui gui() {
+        return gui;
+    }
+
+    private void registerCommands() {
+        var command = getCommand("mias");
+        if (command == null) {
+            getLogger().warning("Command /mias is missing from plugin.yml.");
+            return;
         }
 
-        return "reload".startsWith(args[0].toLowerCase(Locale.ROOT)) ? List.of("reload") : List.of();
+        var executor = new MiaSkillpoolCommand(this, skillRegistry, dataStore, gui, runtimeState, api);
+        command.setExecutor(executor);
+        command.setTabCompleter(executor);
     }
 }

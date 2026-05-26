@@ -1,1 +1,74 @@
-# MiaSkillpool test plugin configuration.
+settings:
+  gui-title: "&3技能池"
+  slot-count: 5
+  actionbar: true
+  random-seed-secure: false
+  upgrade:
+    require-op: true
+    max-slot-level: 5
+    cost-reduction-per-level: 0.08
+    cooldown-reduction-per-level: 0.06
+    power-bonus-per-level: 0.10
+  mana:
+    base-max: 100.0
+    regen-per-second: 2.0
+  rage:
+    max: 100.0
+    regen-per-second-combat: 8.0
+    gain-on-deal-damage: 8.0
+    gain-on-take-damage: 5.0
+    combat-seconds: 8
+  modes:
+    health:
+      cost-multiplier: 0.45
+      cooldown-multiplier: 1.45
+      power-multiplier: 1.0
+    rage:
+      cost-multiplier: 1.25
+      cooldown-multiplier: 1.0
+      power-multiplier: 1.0
+    mana:
+      cost-multiplier: 1.0
+      cooldown-multiplier: 1.0
+      power-multiplier: 1.0
+
+skills:
+  firebolt:
+    display-name: "&c火焰箭"
+    icon: BLAZE_POWDER
+    mythic-skill: Firebolt
+    base-cost: 20.0
+    base-cooldown-seconds: 5.0
+    base-power: 1.0
+    book:
+      material: BOOK
+      name: "&6技能书：火焰箭"
+      lore:
+        - "&7右键学习技能。"
+        - "&8技能 ID: firebolt"
+  frostnova:
+    display-name: "&b冰霜新星"
+    icon: SNOWBALL
+    mythic-skill: FrostNova
+    base-cost: 25.0
+    base-cooldown-seconds: 8.0
+    base-power: 1.0
+    book:
+      material: BOOK
+      name: "&b技能书：冰霜新星"
+      lore:
+        - "&7右键学习技能。"
+        - "&8技能 ID: frostnova"
+  thunderstrike:
+    display-name: "&e雷击"
+    icon: LIGHTNING_ROD
+    mythic-skill: ThunderStrike
+    base-cost: 35.0
+    base-cooldown-seconds: 10.0
+    base-power: 1.15
+    book:
+      material: BOOK
+      name: "&e技能书：雷击"
+      lore:
+        - "&7右键学习技能。"
+        - "&8技能 ID: thunderstrike"
