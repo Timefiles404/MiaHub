@@ -1,0 +1,13 @@
+# Remote plugin catalog. Keep this URL under your control.
+catalog-url: "https://raw.githubusercontent.com/Timefiles404/MiaHub/main/catalog.json"
+
+# Only plugins listed in the catalog can be installed, updated, uninstalled,
+# enabled, or disabled by MiaHub.
+manage-catalog-only: true
+
+# GitHub API calls are unauthenticated by default. Set this only on private
+# deployments if you need a token for private repositories or higher rate limits.
+github-token: ""
+
+# Protect MiaHub from disabling or uninstalling itself at runtime.
+protect-self: true
