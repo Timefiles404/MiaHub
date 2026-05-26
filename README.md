@@ -40,6 +40,29 @@ https://raw.githubusercontent.com/Timefiles404/MiaHub/main/catalog.json
 Each catalog entry points to a GitHub repository and release asset. `releaseTag`
 may be empty, in which case MiaHub uses the repository's latest release.
 
+## Versioning
+
+This repository is a monorepo, but each plugin owns its own version in
+`gradle.properties`.
+
+```properties
+miahub.version=0.2.5
+miaforge.version=0.2.4
+miaskillpool.version=0.2.4
+```
+
+Module releases use tags in the form `<module>-v<version>`, for example:
+
+```text
+miahub-v0.2.5
+miaforge-v0.2.4
+miaskillpool-v0.2.4
+```
+
+The public `catalog.json` is the source of truth for the latest downloadable
+version of each plugin. MiaHub also bundles that same root catalog file at build
+time, so there is no second resource copy to keep in sync.
+
 ## Build
 
 ```powershell
@@ -51,5 +74,9 @@ Each module writes its jar to `<module>/build/libs/`.
 
 ## Release
 
-Push a version tag such as `v0.2.4`. GitHub Actions will build every module jar,
-generate `SHA256SUMS.txt`, and publish all files to the GitHub Release.
+Push a module tag such as `miahub-v0.2.5`. GitHub Actions validates that the tag
+matches the module version, builds that module jar, generates `SHA256SUMS.txt`,
+and publishes the files to that module release.
+
+The legacy `v*` tag shape still builds and publishes every module together, but
+new Mia plugin releases should prefer module tags.

@@ -1,11 +1,12 @@
 group = "dev.timefiles"
-version = "0.2.4"
+
+val paperApiVersion = providers.gradleProperty("paperApiVersion").get()
 
 subprojects {
     apply(plugin = "java")
 
     group = rootProject.group
-    version = rootProject.version
+    version = providers.gradleProperty("${project.name}.version").get()
 
     extensions.configure<JavaPluginExtension> {
         toolchain {
@@ -14,7 +15,7 @@ subprojects {
     }
 
     dependencies {
-        "compileOnly"("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
+        "compileOnly"("io.papermc.paper:paper-api:$paperApiVersion")
     }
 
     tasks.withType<ProcessResources> {

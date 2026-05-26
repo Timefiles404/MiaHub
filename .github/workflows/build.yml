@@ -3,7 +3,7 @@ name: Build
 on:
   push:
     branches: [ main ]
-    tags: [ "v*" ]
+    tags: [ "v*", "*-v*" ]
   pull_request:
   workflow_dispatch:
 
@@ -29,13 +29,63 @@ jobs:
         with:
           gradle-version: 9.5.1
 
+      - name: Resolve release target
+        id: release
+        shell: bash
+        run: |
+          module="all"
+          tag_version=""
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            if [[ "${tag}" == v* ]]; then
+              tag_version="${tag#v}"
+            elif [[ "${tag}" == *-v* ]]; then
+              module="${tag%%-v*}"
+              tag_version="${tag#${module}-v}"
+            fi
+          fi
+
+          echo "module=${module}" >> "${GITHUB_OUTPUT}"
+          echo "tag_version=${tag_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate module release tag
+        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.module != 'all'
+        shell: bash
+        run: |
+          module="${{ steps.release.outputs.module }}"
+          tag_version="${{ steps.release.outputs.tag_version }}"
+          expected="$(gradle -q ":${module}:properties" | awk -F': ' '$1 == "version" { print $2; exit }')"
+
+          if [[ -z "${expected}" ]]; then
+            echo "Could not read Gradle version for module ${module}."
+            exit 1
+          fi
+
+          if [[ "${tag_version}" != "${expected}" ]]; then
+            echo "Tag version ${tag_version} does not match ${module} version ${expected}."
+            exit 1
+          fi
+
       - name: Build
-        run: gradle build
+        shell: bash
+        run: |
+          module="${{ steps.release.outputs.module }}"
+          if [[ "${module}" == "all" ]]; then
+            gradle build
+          else
+            gradle ":${module}:build"
+          fi
 
       - name: Generate checksums
         shell: bash
         run: |
-          find . -path "*/build/libs/*.jar" -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          module="${{ steps.release.outputs.module }}"
+          if [[ "${module}" == "all" ]]; then
+            find . -path "*/build/libs/*.jar" -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          else
+            find "${module}/build/libs" -name "*.jar" -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -50,3 +100,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${GITHUB_REF_NAME}" */build/libs/*.jar SHA256SUMS.txt --generate-notes
+
+      - name: Publish module GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          module="${{ steps.release.outputs.module }}"
+          gh release create "${GITHUB_REF_NAME}" "${module}"/build/libs/*.jar SHA256SUMS.txt --generate-notes

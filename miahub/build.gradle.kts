@@ -11,3 +11,7 @@ tasks.jar {
 
     exclude("META-INF/*.RSA", "META-INF/*.SF", "META-INF/*.DSA")
 }
+
+tasks.processResources {
+    from(rootProject.file("catalog.json"))
+}
