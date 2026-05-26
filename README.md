@@ -47,7 +47,7 @@ This repository is a monorepo, but each plugin owns its own version in
 
 ```properties
 miahub.version=0.2.5
-miaforge.version=0.2.4
+miaforge.version=0.2.5
 miaskillpool.version=0.2.4
 ```
 
@@ -55,7 +55,7 @@ Module releases use tags in the form `<module>-v<version>`, for example:
 
 ```text
 miahub-v0.2.5
-miaforge-v0.2.4
+miaforge-v0.2.5
 miaskillpool-v0.2.4
 ```
 
