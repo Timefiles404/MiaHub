@@ -1,49 +1,71 @@
 # MiaHub
 
-This monorepo contains Paper 1.21.x / Java 21 plugins for the Mia plugin
-family.
+MiaHub 是 Mia 系列 Paper 插件的 GitHub 分发与生命周期管理器。当前仓库采用 monorepo：所有 Mia 插件放在同一个 GitHub 仓库里维护，但每个插件拥有独立版本号、独立 GitHub Release 和独立下载资产。
 
-- `miahub`: GitHub-backed manager for Mia plugins.
-- `miaforge`: Test plugin with `/miaf reload`.
-- `miaskillpool`: Test plugin with `/mias reload`.
+目标服务器环境：
 
-## Commands
+- Minecraft / Paper：`1.21.x`
+- Java：`21`
+- 构建工具：Gradle `9.5.1`
+- 分发平台：[Timefiles404/MiaHub](https://github.com/Timefiles404/MiaHub)
+
+## 当前模块
+
+| 模块 | 插件 | 当前版本 | Release Tag | 说明 |
+| --- | --- | --- | --- | --- |
+| `miahub` | `MiaHub` | `0.2.5` | `miahub-v0.2.5` | Mia 系列插件管理器，命令 `/miah` |
+| `miaforge` | `MiaForge` | `0.2.5` | `miaforge-v0.2.5` | 测试插件，命令 `/miaf reload` |
+| `miaskillpool` | `MiaSkillpool` | `0.2.4` | `miaskillpool-v0.2.4` | 测试插件，命令 `/mias reload` |
+
+## 命令
 
 ```text
+/miah help
 /miah pull
 /miah list
-/miah install <plugin>
-/miah update <plugin>
-/miah uninstall <plugin>
-/miah enable <plugin>
-/miah disable <plugin>
+/miah install <插件>
+/miah update <插件>
+/miah uninstall <插件>
+/miah enable <插件>
+/miah disable <插件>
 /miaf reload
 /mias reload
 ```
 
-The first version intentionally manages only plugins listed in `catalog.json`.
-MiaHub protects itself from live disable/uninstall/update operations; update it
-by replacing the jar and restarting the server.
-
-Plugin lifecycle handling follows the same practical boundaries as PlugManX:
-traditional Bukkit/Paper plugins can be dynamically loaded and unloaded, while
-`paper-plugin.yml` plugins are installed but require a restart.
-
-## Catalog
-
-The default catalog URL is:
+`/miah pull` 会从默认 catalog 地址拉取最新可用插件列表：
 
 ```text
 https://raw.githubusercontent.com/Timefiles404/MiaHub/main/catalog.json
 ```
 
-Each catalog entry points to a GitHub repository and release asset. `releaseTag`
-may be empty, in which case MiaHub uses the repository's latest release.
+## 管理边界
 
-## Versioning
+MiaHub 只管理 `catalog.json` 中注册的 Mia 系列插件。`install` 补全会隐藏已安装插件和 MiaHub 自身；`update` 补全只显示已安装且版本落后于 catalog 的插件。
 
-This repository is a monorepo, but each plugin owns its own version in
-`gradle.properties`.
+MiaHub 会保护自己，不能通过 `/miah install|update|uninstall|enable|disable miahub` 在运行时操作自身。更新 MiaHub 时请手动替换 `MiaHub.jar` 后重启服务器。
+
+传统 Bukkit/Paper `plugin.yml` 插件会尝试运行时加载、卸载、启用和禁用；带 `paper-plugin.yml` 的插件可以安装，但需要重启服务器加载。
+
+## 仓库结构
+
+```text
+MiaHub/
+├─ .github/workflows/build.yml
+├─ .codex/skills/mia-series-plugin-dev/SKILL.md
+├─ catalog.json
+├─ gradle.properties
+├─ settings.gradle.kts
+├─ build.gradle.kts
+├─ miahub/
+├─ miaforge/
+└─ miaskillpool/
+```
+
+`catalog.json` 是公开分发索引，也是 MiaHub jar 内置 catalog 的来源。构建 `miahub` 时，Gradle 会把根目录的 `catalog.json` 打进 jar，不再维护第二份资源副本。
+
+## 独立版本
+
+每个插件的版本写在 `gradle.properties`：
 
 ```properties
 miahub.version=0.2.5
@@ -51,7 +73,49 @@ miaforge.version=0.2.5
 miaskillpool.version=0.2.4
 ```
 
-Module releases use tags in the form `<module>-v<version>`, for example:
+根项目会按模块名读取 `${module}.version`。因此可以只升级 `miaforge`，而让 `miaskillpool` 留在旧版本，用于测试 MiaHub 的单插件更新探测。
+
+## Catalog
+
+每个 catalog 条目对应一个插件的当前最新版：
+
+```json
+{
+  "id": "miaforge",
+  "name": "MiaForge",
+  "pluginName": "MiaForge",
+  "repository": "Timefiles404/MiaHub",
+  "releaseTag": "miaforge-v0.2.5",
+  "asset": "MiaForge-0.2.5.jar",
+  "fileName": "MiaForge.jar",
+  "version": "0.2.5"
+}
+```
+
+MiaHub 根据 `version` 判断是否可更新，根据 `releaseTag` 和 `asset` 生成 GitHub Release 直链下载地址。
+
+## 本地构建
+
+PowerShell 示例：
+
+```powershell
+cd D:\Projects\MiaPlugins\MiaHub
+$env:JAVA_HOME='D:\Develop\Java\JDK21'
+$env:Path='D:\Develop\Java\JDK21\bin;D:\Develop\Gradle\bin;' + $env:Path
+gradle clean build
+```
+
+构建产物位于：
+
+```text
+miahub/build/libs/MiaHub-<version>.jar
+miaforge/build/libs/MiaForge-<version>.jar
+miaskillpool/build/libs/MiaSkillpool-<version>.jar
+```
+
+## 发布流程
+
+新版本优先使用模块 tag：
 
 ```text
 miahub-v0.2.5
@@ -59,24 +123,16 @@ miaforge-v0.2.5
 miaskillpool-v0.2.4
 ```
 
-The public `catalog.json` is the source of truth for the latest downloadable
-version of each plugin. MiaHub also bundles that same root catalog file at build
-time, so there is no second resource copy to keep in sync.
+GitHub Actions 会解析 tag 中的模块名，校验 tag 版本是否等于 `gradle.properties` 中对应模块版本，只构建该模块，并发布只包含该模块 jar 和 `SHA256SUMS.txt` 的 GitHub Release。
 
-## Build
+旧的 `v*` 总版本 tag 仍可用，会一次构建并发布所有模块；新 Mia 插件开发默认不要使用这种方式。
 
-```powershell
-gradle build
+## 给 Agent 的流程说明
+
+本仓库内置项目技能：
+
+```text
+.codex/skills/mia-series-plugin-dev/SKILL.md
 ```
 
-The plugin jar is written to `build/libs/`.
-Each module writes its jar to `<module>/build/libs/`.
-
-## Release
-
-Push a module tag such as `miahub-v0.2.5`. GitHub Actions validates that the tag
-matches the module version, builds that module jar, generates `SHA256SUMS.txt`,
-and publishes the files to that module release.
-
-The legacy `v*` tag shape still builds and publishes every module together, but
-new Mia plugin releases should prefer module tags.
+后续让其他 agent 开发、升级或发布 Mia 系列插件时，让它先使用 `$mia-series-plugin-dev`。技能里包含新增插件、修改版本、更新 catalog、构建验证、提交 GitHub、打模块 tag、确认 Release 和测试 MiaHub 更新探测的完整流程。

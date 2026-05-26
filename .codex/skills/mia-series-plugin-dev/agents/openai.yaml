@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mia 系列插件开发"
+  short_description: "Mia monorepo 插件开发构建发布流程指南"
+  default_prompt: "Use $mia-series-plugin-dev to develop, release, and register a Mia series Paper plugin."
