@@ -25,6 +25,10 @@ The first version intentionally manages only plugins listed in `catalog.json`.
 MiaHub protects itself from live disable/uninstall/update operations; update it
 by replacing the jar and restarting the server.
 
+Plugin lifecycle handling follows the same practical boundaries as PlugManX:
+traditional Bukkit/Paper plugins can be dynamically loaded and unloaded, while
+`paper-plugin.yml` plugins are installed but require a restart.
+
 ## Catalog
 
 The default catalog URL is:
@@ -47,5 +51,5 @@ Each module writes its jar to `<module>/build/libs/`.
 
 ## Release
 
-Push a version tag such as `v0.2.2`. GitHub Actions will build every module jar,
+Push a version tag such as `v0.2.3`. GitHub Actions will build every module jar,
 generate `SHA256SUMS.txt`, and publish all files to the GitHub Release.

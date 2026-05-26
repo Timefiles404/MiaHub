@@ -22,10 +22,14 @@ public final class ReflectionSupport {
     }
 
     public static Method findNoArgMethod(Class<?> type, String name) throws NoSuchMethodException {
+        return findMethod(type, name);
+    }
+
+    public static Method findMethod(Class<?> type, String name, Class<?>... parameterTypes) throws NoSuchMethodException {
         Class<?> current = type;
         while (current != null) {
             try {
-                var method = current.getDeclaredMethod(name);
+                var method = current.getDeclaredMethod(name, parameterTypes);
                 method.setAccessible(true);
                 return method;
             } catch (NoSuchMethodException ignored) {
@@ -36,6 +40,11 @@ public final class ReflectionSupport {
     }
 
     @SuppressWarnings("unchecked")
+    public static <T> T invoke(Object target, String name, Class<?>[] parameterTypes, Object... args) throws Exception {
+        return (T) findMethod(target.getClass(), name, parameterTypes).invoke(target, args);
+    }
+
+    @SuppressWarnings("unchecked")
     public static <T> T getFieldValue(Object target, String name) throws ReflectiveOperationException {
         return (T) findField(target.getClass(), name).get(target);
     }
@@ -43,5 +52,9 @@ public final class ReflectionSupport {
     @SuppressWarnings("unchecked")
     public static <T> T getStaticFieldValue(Class<?> type, String name) throws ReflectiveOperationException {
         return (T) findField(type, name).get(null);
+    }
+
+    public static void setFieldValue(Object target, String name, Object value) throws ReflectiveOperationException {
+        findField(target.getClass(), name).set(target, value);
     }
 }
