@@ -1,8 +1,11 @@
 # MiaHub
 
-MiaHub is a Paper 1.21.x / Java 21 plugin manager for the Mia plugin family.
-It reads a GitHub-hosted catalog, downloads plugin jars from GitHub Releases,
-and manages installed Mia plugins with `/miah`.
+This monorepo contains Paper 1.21.x / Java 21 plugins for the Mia plugin
+family.
+
+- `miahub`: GitHub-backed manager for Mia plugins.
+- `miaforge`: Test plugin with `/miaf reload`.
+- `miaskillpool`: Test plugin with `/mias reload`.
 
 ## Commands
 
@@ -14,6 +17,8 @@ and manages installed Mia plugins with `/miah`.
 /miah uninstall <plugin>
 /miah enable <plugin>
 /miah disable <plugin>
+/miaf reload
+/mias reload
 ```
 
 The first version intentionally manages only plugins listed in `catalog.json`.
@@ -38,8 +43,9 @@ gradle build
 ```
 
 The plugin jar is written to `build/libs/`.
+Each module writes its jar to `<module>/build/libs/`.
 
 ## Release
 
-Push a version tag such as `v0.1.0`. GitHub Actions will build the jar,
-generate `SHA256SUMS.txt`, and publish both files to the GitHub Release.
+Push a version tag such as `v0.2.0`. GitHub Actions will build every module jar,
+generate `SHA256SUMS.txt`, and publish all files to the GitHub Release.

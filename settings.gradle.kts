@@ -14,3 +14,7 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "MiaHub"
+
+include("miahub")
+include("miaforge")
+include("miaskillpool")
