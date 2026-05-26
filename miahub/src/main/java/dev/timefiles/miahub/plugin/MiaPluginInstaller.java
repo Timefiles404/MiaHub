@@ -74,6 +74,12 @@ public final class MiaPluginInstaller {
         if (!lifecycle.isLoaded(entry.pluginName()) && lifecycle.findPluginJar(entry).isEmpty()) {
             return OperationResult.fail(entry.pluginName() + " 尚未安装，请使用 /miah install " + entry.id() + "。");
         }
+        if (CatalogEntry.isPresent(entry.version)) {
+            var installedVersion = lifecycle.installedVersion(entry).orElse(null);
+            if (installedVersion != null && versionsMatch(installedVersion, entry.version)) {
+                return OperationResult.ok(entry.pluginName() + " 已经是最新版 " + entry.version + "。");
+            }
+        }
 
         try {
             var staged = download(entry);
@@ -237,5 +243,17 @@ public final class MiaPluginInstaller {
 
     private String sanitize(String fileName) {
         return fileName.replace("\\", "_").replace("/", "_").replace("..", "_");
+    }
+
+    private boolean versionsMatch(String installedVersion, String targetVersion) {
+        return normalizeVersion(installedVersion).equals(normalizeVersion(targetVersion));
+    }
+
+    private String normalizeVersion(String version) {
+        var normalized = version == null ? "" : version.trim();
+        if (normalized.startsWith("v") || normalized.startsWith("V")) {
+            return normalized.substring(1);
+        }
+        return normalized;
     }
 }

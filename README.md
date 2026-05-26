@@ -51,5 +51,5 @@ Each module writes its jar to `<module>/build/libs/`.
 
 ## Release
 
-Push a version tag such as `v0.2.3`. GitHub Actions will build every module jar,
+Push a version tag such as `v0.2.4`. GitHub Actions will build every module jar,
 generate `SHA256SUMS.txt`, and publish all files to the GitHub Release.

@@ -1,5 +1,5 @@
 group = "dev.timefiles"
-version = "0.2.3"
+version = "0.2.4"
 
 subprojects {
     apply(plugin = "java")

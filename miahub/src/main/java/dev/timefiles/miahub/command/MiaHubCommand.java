@@ -174,7 +174,13 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
                     .filter(entry -> !isInstalled(entry))
                     .map(CatalogEntry::id)
                     .toList();
-            case "update", "uninstall" -> catalogService.getCatalog().sortedPlugins().stream()
+            case "update" -> catalogService.getCatalog().sortedPlugins().stream()
+                    .filter(entry -> !entry.isSelf())
+                    .filter(this::isInstalled)
+                    .filter(lifecycle::hasUpdate)
+                    .map(CatalogEntry::id)
+                    .toList();
+            case "uninstall" -> catalogService.getCatalog().sortedPlugins().stream()
                     .filter(entry -> !entry.isSelf())
                     .filter(this::isInstalled)
                     .map(CatalogEntry::id)
