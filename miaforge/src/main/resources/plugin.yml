@@ -2,14 +2,14 @@ name: MiaForge
 main: dev.timefiles.miaforge.MiaForgePlugin
 version: ${version}
 api-version: "1.21"
-description: Test Mia plugin for MiaHub download and lifecycle checks.
+description: 用于测试 MiaHub 下载和生命周期管理的 Mia 插件。
 author: Timefiles404
 commands:
   miaf:
-    description: MiaForge command.
+    description: MiaForge 命令。
     usage: /miaf reload
     permission: miaforge.reload
 permissions:
   miaforge.reload:
-    description: Allows reloading MiaForge.
+    description: 允许重载 MiaForge。
     default: op

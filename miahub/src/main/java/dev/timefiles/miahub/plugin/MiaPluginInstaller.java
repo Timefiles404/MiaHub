@@ -36,13 +36,13 @@ public final class MiaPluginInstaller {
     public OperationResult install(String query) {
         var entry = catalogService.find(query).orElse(null);
         if (entry == null) {
-            return OperationResult.fail("Unknown Mia plugin: " + query + ". Run /miah pull first.");
+            return OperationResult.fail("未知 Mia 插件：" + query + "。请先执行 /miah pull。");
         }
         if (lifecycle.isProtectedSelf(entry)) {
-            return OperationResult.fail("MiaHub cannot install or reload itself at runtime. Replace the jar and restart.");
+            return OperationResult.fail("MiaHub 不能在运行时安装或重载自己，请手动替换 jar 后重启服务器。");
         }
         if (lifecycle.isLoaded(entry.pluginName()) || lifecycle.findPluginJar(entry).isPresent()) {
-            return OperationResult.fail(entry.pluginName() + " already appears to be installed. Use /miah update " + entry.id() + ".");
+            return OperationResult.fail(entry.pluginName() + " 已经安装，请使用 /miah update " + entry.id() + "。");
         }
 
         try {
@@ -52,24 +52,27 @@ public final class MiaPluginInstaller {
             Files.move(staged, target, StandardCopyOption.REPLACE_EXISTING);
 
             if (entry.restartRequired || JarFiles.hasEntry(target, "paper-plugin.yml")) {
-                return OperationResult.ok("Installed " + entry.displayName() + ". Restart the server to load it.");
+                return OperationResult.ok("已安装 " + entry.displayName() + "，请重启服务器加载。");
             }
 
             var load = lifecycle.load(target);
-            return load.success() ? OperationResult.ok("Installed " + entry.displayName() + ". " + load.message()) : load;
+            return load.success() ? OperationResult.ok("已安装 " + entry.displayName() + "。" + load.message()) : load;
         } catch (Exception exception) {
             plugin.getLogger().log(Level.WARNING, "Failed to install " + query, exception);
-            return OperationResult.fail("Install failed: " + exception.getMessage());
+            return OperationResult.fail("安装失败：" + exception.getMessage());
         }
     }
 
     public OperationResult update(String query) {
         var entry = catalogService.find(query).orElse(null);
         if (entry == null) {
-            return OperationResult.fail("Unknown Mia plugin: " + query + ". Run /miah pull first.");
+            return OperationResult.fail("未知 Mia 插件：" + query + "。请先执行 /miah pull。");
         }
         if (lifecycle.isProtectedSelf(entry)) {
-            return OperationResult.fail("MiaHub updates are staged manually for now. Replace MiaHub.jar and restart.");
+            return OperationResult.fail("MiaHub 不能通过自己更新自己，请手动替换 MiaHub.jar 后重启服务器。");
+        }
+        if (!lifecycle.isLoaded(entry.pluginName()) && lifecycle.findPluginJar(entry).isEmpty()) {
+            return OperationResult.fail(entry.pluginName() + " 尚未安装，请使用 /miah install " + entry.id() + "。");
         }
 
         try {
@@ -90,29 +93,29 @@ public final class MiaPluginInstaller {
             Files.move(staged, target, StandardCopyOption.REPLACE_EXISTING);
 
             if (entry.restartRequired || JarFiles.hasEntry(target, "paper-plugin.yml")) {
-                return OperationResult.ok("Updated " + entry.displayName() + ". Restart the server to load the new jar.");
+                return OperationResult.ok("已更新 " + entry.displayName() + "，请重启服务器加载新版 jar。");
             }
 
             var load = lifecycle.load(target);
             if (load.success()) {
-                return OperationResult.ok("Updated " + entry.displayName() + ". " + load.message());
+                return OperationResult.ok("已更新 " + entry.displayName() + "。" + load.message());
             }
 
             rollback(target, backup);
-            return OperationResult.fail("Update failed after replacement; old jar was restored. " + load.message());
+            return OperationResult.fail("替换后加载失败，已尝试恢复旧 jar。" + load.message());
         } catch (Exception exception) {
             plugin.getLogger().log(Level.WARNING, "Failed to update " + query, exception);
-            return OperationResult.fail("Update failed: " + exception.getMessage());
+            return OperationResult.fail("更新失败：" + exception.getMessage());
         }
     }
 
     public OperationResult uninstall(String query) {
         var entry = resolveManagedEntry(query);
         if (entry == null) {
-            return OperationResult.fail("Unknown or unmanaged Mia plugin: " + query + ".");
+            return OperationResult.fail("未知或未受 MiaHub 管理的插件：" + query + "。");
         }
         if (lifecycle.isProtectedSelf(entry)) {
-            return OperationResult.fail("MiaHub cannot uninstall itself at runtime.");
+            return OperationResult.fail("MiaHub 不能在运行时卸载自己。");
         }
 
         var unload = lifecycle.unload(entry.pluginName());
@@ -122,27 +125,27 @@ public final class MiaPluginInstaller {
 
         var jar = lifecycle.findPluginJar(entry);
         if (jar.isEmpty()) {
-            return OperationResult.ok("Unloaded " + entry.displayName() + ". No jar file was found to move.");
+            return OperationResult.ok("已卸载 " + entry.displayName() + "，但没有找到需要移动的 jar 文件。");
         }
 
         try {
             var target = trashPath(jar.get());
             Files.createDirectories(target.getParent());
             Files.move(jar.get(), target, StandardCopyOption.REPLACE_EXISTING);
-            return OperationResult.ok("Uninstalled " + entry.displayName() + ". Jar moved to " + target.getFileName() + ".");
+            return OperationResult.ok("已卸载 " + entry.displayName() + "，jar 已移动到 " + target.getFileName() + "。");
         } catch (IOException exception) {
             plugin.getLogger().log(Level.WARNING, "Failed to move plugin jar to trash", exception);
-            return OperationResult.fail("Unloaded plugin, but failed to move jar: " + exception.getMessage());
+            return OperationResult.fail("插件已卸载，但移动 jar 失败：" + exception.getMessage());
         }
     }
 
     public OperationResult enable(String query) {
         var entry = resolveManagedEntry(query);
         if (entry == null) {
-            return OperationResult.fail("Unknown or unmanaged Mia plugin: " + query + ".");
+            return OperationResult.fail("未知或未受 MiaHub 管理的插件：" + query + "。");
         }
         if (lifecycle.isProtectedSelf(entry)) {
-            return OperationResult.fail("MiaHub cannot enable itself through MiaHub.");
+            return OperationResult.fail("MiaHub 不需要通过自己启用自己。");
         }
         return lifecycle.enable(entry);
     }
@@ -150,10 +153,10 @@ public final class MiaPluginInstaller {
     public OperationResult disable(String query) {
         var entry = resolveManagedEntry(query);
         if (entry == null) {
-            return OperationResult.fail("Unknown or unmanaged Mia plugin: " + query + ".");
+            return OperationResult.fail("未知或未受 MiaHub 管理的插件：" + query + "。");
         }
         if (lifecycle.isProtectedSelf(entry)) {
-            return OperationResult.fail("MiaHub cannot disable itself at runtime.");
+            return OperationResult.fail("MiaHub 不能在运行时禁用自己。");
         }
         return lifecycle.disable(entry);
     }

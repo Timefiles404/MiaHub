@@ -26,16 +26,16 @@ public final class MiaForgePlugin extends JavaPlugin implements CommandExecutor,
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
             if (!sender.hasPermission("miaforge.reload")) {
-                sender.sendMessage(ChatColor.RED + "You do not have permission to reload MiaForge.");
+                sender.sendMessage(ChatColor.RED + "你没有重载 MiaForge 的权限。");
                 return true;
             }
 
             reloadConfig();
-            sender.sendMessage(ChatColor.DARK_AQUA + "[MiaForge] " + ChatColor.GREEN + "Reloaded.");
+            sender.sendMessage(ChatColor.DARK_AQUA + "[MiaForge] " + ChatColor.GREEN + "已重载。");
             return true;
         }
 
-        sender.sendMessage(ChatColor.DARK_AQUA + "[MiaForge] " + ChatColor.GRAY + "Usage: /" + label + " reload");
+        sender.sendMessage(ChatColor.DARK_AQUA + "[MiaForge] " + ChatColor.GRAY + "用法：/" + label + " reload");
         return true;
     }
 

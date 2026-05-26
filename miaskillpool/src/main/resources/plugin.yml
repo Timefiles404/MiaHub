@@ -2,14 +2,14 @@ name: MiaSkillpool
 main: dev.timefiles.miaskillpool.MiaSkillpoolPlugin
 version: ${version}
 api-version: "1.21"
-description: Test Mia plugin for MiaHub download and lifecycle checks.
+description: 用于测试 MiaHub 下载和生命周期管理的 Mia 插件。
 author: Timefiles404
 commands:
   mias:
-    description: MiaSkillpool command.
+    description: MiaSkillpool 命令。
     usage: /mias reload
     permission: miaskillpool.reload
 permissions:
   miaskillpool.reload:
-    description: Allows reloading MiaSkillpool.
+    description: 允许重载 MiaSkillpool。
     default: op

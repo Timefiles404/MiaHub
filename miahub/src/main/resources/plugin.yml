@@ -2,21 +2,21 @@ name: MiaHub
 main: dev.timefiles.miahub.MiaHubPlugin
 version: ${version}
 api-version: "1.21"
-description: GitHub-backed manager for Mia series Paper plugins.
+description: Mia 系列 Paper 插件的 GitHub 分发管理器。
 author: Timefiles404
 load: STARTUP
 folia-supported: false
 commands:
   miah:
-    description: Manage Mia series plugins.
+    description: 管理 Mia 系列插件。
     usage: /miah <help|pull|list|install|update|uninstall|enable|disable>
     permission: miahub.command
 permissions:
   miahub.command:
-    description: Allows using MiaHub commands.
+    description: 允许使用 MiaHub 命令。
     default: op
   miahub.admin:
-    description: Allows all MiaHub management commands.
+    description: 允许使用全部 MiaHub 管理命令。
     default: op
     children:
       miahub.command: true

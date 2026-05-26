@@ -37,13 +37,13 @@ public final class PluginLifecycleService {
         return callSync(() -> {
             var plugin = Bukkit.getPluginManager().getPlugin(entry.pluginName());
             if (plugin == null) {
-                return OperationResult.fail(entry.pluginName() + " is not loaded.");
+                return OperationResult.fail(entry.pluginName() + " 尚未加载。");
             }
             if (plugin.isEnabled()) {
-                return OperationResult.ok(entry.pluginName() + " is already enabled.");
+                return OperationResult.ok(entry.pluginName() + " 已经是启用状态。");
             }
             Bukkit.getPluginManager().enablePlugin(plugin);
-            return OperationResult.ok("Enabled " + plugin.getName() + ".");
+            return OperationResult.ok("已启用 " + plugin.getName() + "。");
         });
     }
 
@@ -51,24 +51,24 @@ public final class PluginLifecycleService {
         return callSync(() -> {
             var plugin = Bukkit.getPluginManager().getPlugin(entry.pluginName());
             if (plugin == null) {
-                return OperationResult.fail(entry.pluginName() + " is not loaded.");
+                return OperationResult.fail(entry.pluginName() + " 尚未加载。");
             }
             if (!plugin.isEnabled()) {
-                return OperationResult.ok(entry.pluginName() + " is already disabled.");
+                return OperationResult.ok(entry.pluginName() + " 已经是禁用状态。");
             }
             Bukkit.getPluginManager().disablePlugin(plugin);
             syncCommands();
-            return OperationResult.ok("Disabled " + plugin.getName() + ".");
+            return OperationResult.ok("已禁用 " + plugin.getName() + "。");
         });
     }
 
     public OperationResult load(Path pluginJar) {
         return callSync(() -> {
             if (!Files.isRegularFile(pluginJar)) {
-                return OperationResult.fail("Plugin jar does not exist: " + pluginJar.getFileName());
+                return OperationResult.fail("插件 jar 不存在：" + pluginJar.getFileName());
             }
             if (JarFiles.hasEntry(pluginJar, "paper-plugin.yml")) {
-                return OperationResult.ok("Installed " + pluginJar.getFileName() + ". Restart is required for paper-plugin.yml plugins.");
+                return OperationResult.ok("已安装 " + pluginJar.getFileName() + "。paper-plugin.yml 插件需要重启服务器加载。");
             }
 
             try {
@@ -79,10 +79,10 @@ public final class PluginLifecycleService {
                 loaded.onLoad();
                 Bukkit.getPluginManager().enablePlugin(loaded);
                 syncCommands();
-                return OperationResult.ok("Loaded and enabled " + loaded.getName() + ".");
+                return OperationResult.ok("已加载并启用 " + loaded.getName() + "。");
             } catch (Exception exception) {
                 owner.getLogger().log(Level.WARNING, "Failed to load " + pluginJar, exception);
-                return OperationResult.fail("Failed to load " + pluginJar.getFileName() + ": " + exception.getMessage());
+                return OperationResult.fail("加载 " + pluginJar.getFileName() + " 失败：" + exception.getMessage());
             }
         });
     }
@@ -91,7 +91,7 @@ public final class PluginLifecycleService {
         return callSync(() -> {
             var plugin = Bukkit.getPluginManager().getPlugin(pluginName);
             if (plugin == null) {
-                return OperationResult.ok(pluginName + " is not loaded.");
+                return OperationResult.ok(pluginName + " 尚未加载。");
             }
 
             Bukkit.getPluginManager().disablePlugin(plugin);
@@ -108,7 +108,7 @@ public final class PluginLifecycleService {
             syncCommands();
             System.gc();
 
-            return OperationResult.ok("Unloaded " + plugin.getName() + ".");
+            return OperationResult.ok("已卸载 " + plugin.getName() + "。");
         });
     }
 
@@ -263,7 +263,7 @@ public final class PluginLifecycleService {
             return Bukkit.getScheduler().callSyncMethod(owner, callable).get();
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            return OperationResult.fail("Operation was interrupted.");
+            return OperationResult.fail("操作已被中断。");
         } catch (ExecutionException exception) {
             owner.getLogger().log(Level.WARNING, "MiaHub sync operation failed", exception.getCause());
             return OperationResult.fail(exception.getCause().getMessage());

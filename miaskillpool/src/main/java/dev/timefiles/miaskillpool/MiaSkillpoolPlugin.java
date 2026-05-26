@@ -26,16 +26,16 @@ public final class MiaSkillpoolPlugin extends JavaPlugin implements CommandExecu
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
             if (!sender.hasPermission("miaskillpool.reload")) {
-                sender.sendMessage(ChatColor.RED + "You do not have permission to reload MiaSkillpool.");
+                sender.sendMessage(ChatColor.RED + "你没有重载 MiaSkillpool 的权限。");
                 return true;
             }
 
             reloadConfig();
-            sender.sendMessage(ChatColor.DARK_AQUA + "[MiaSkillpool] " + ChatColor.GREEN + "Reloaded.");
+            sender.sendMessage(ChatColor.DARK_AQUA + "[MiaSkillpool] " + ChatColor.GREEN + "已重载。");
             return true;
         }
 
-        sender.sendMessage(ChatColor.DARK_AQUA + "[MiaSkillpool] " + ChatColor.GRAY + "Usage: /" + label + " reload");
+        sender.sendMessage(ChatColor.DARK_AQUA + "[MiaSkillpool] " + ChatColor.GRAY + "用法：/" + label + " reload");
         return true;
     }
 

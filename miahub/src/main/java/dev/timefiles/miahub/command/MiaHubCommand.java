@@ -13,8 +13,6 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
@@ -36,7 +34,7 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!sender.hasPermission("miahub.command")) {
-            reply(sender, OperationResult.fail("You do not have permission to use MiaHub."));
+            reply(sender, OperationResult.fail("你没有使用 MiaHub 的权限。"));
             return true;
         }
 
@@ -49,18 +47,18 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         switch (subcommand) {
             case "pull" -> {
                 if (!requireAdmin(sender)) return true;
-                replyInfo(sender, "Pulling Mia plugin catalog...");
+                replyInfo(sender, "正在拉取 Mia 插件列表...");
                 runAsync(sender, catalogService::pull);
             }
             case "list" -> list(sender);
             case "install" -> {
                 if (!requireAdmin(sender) || !requireTarget(sender, label, args)) return true;
-                replyInfo(sender, "Installing " + args[1] + "...");
+                replyInfo(sender, "正在安装 " + args[1] + "...");
                 runAsync(sender, () -> installer.install(args[1]));
             }
             case "update" -> {
                 if (!requireAdmin(sender) || !requireTarget(sender, label, args)) return true;
-                replyInfo(sender, "Updating " + args[1] + "...");
+                replyInfo(sender, "正在更新 " + args[1] + "...");
                 runAsync(sender, () -> installer.update(args[1]));
             }
             case "uninstall" -> {
@@ -76,7 +74,7 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
                 reply(sender, installer.disable(args[1]));
             }
             default -> {
-                reply(sender, OperationResult.fail("Unknown subcommand: " + args[0]));
+                reply(sender, OperationResult.fail("未知子命令：" + args[0]));
                 help(sender, label);
             }
         }
@@ -88,16 +86,8 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         if (args.length == 1) {
             return filter(SUBCOMMANDS, args[0]);
         }
-        if (args.length == 2 && List.of("install", "update", "uninstall", "enable", "disable").contains(args[0].toLowerCase(Locale.ROOT))) {
-            var candidates = new ArrayList<String>();
-            catalogService.getCatalog().sortedPlugins().stream()
-                    .map(CatalogEntry::id)
-                    .forEach(candidates::add);
-            Arrays.stream(Bukkit.getPluginManager().getPlugins())
-                    .map(org.bukkit.plugin.Plugin::getName)
-                    .filter(name -> !candidates.contains(name))
-                    .forEach(candidates::add);
-            return filter(candidates, args[1]);
+        if (args.length == 2) {
+            return filter(candidatesFor(args[0]), args[1]);
         }
         return List.of();
     }
@@ -105,15 +95,15 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
     private void list(CommandSender sender) {
         var catalog = catalogService.getCatalog();
         if (catalog.plugins.isEmpty()) {
-            reply(sender, OperationResult.fail("No plugins in catalog. Try /miah pull."));
+            reply(sender, OperationResult.fail("插件列表为空，请先执行 /miah pull。"));
             return;
         }
 
-        replyInfo(sender, "Mia plugins:");
+        replyInfo(sender, "Mia 插件列表：");
         for (var entry : catalog.sortedPlugins()) {
             var installed = lifecycle.findPluginJar(entry).isPresent();
             var loaded = lifecycle.isLoaded(entry.pluginName());
-            var state = loaded ? "loaded" : installed ? "installed" : "available";
+            var state = loaded ? "已加载" : installed ? "已安装" : "可安装";
             var version = CatalogEntry.isPresent(entry.version) ? entry.version : "latest";
             sender.sendMessage(ChatColor.GRAY + "- " + ChatColor.AQUA + entry.id()
                     + ChatColor.GRAY + " (" + entry.displayName() + ") "
@@ -126,7 +116,7 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         if (sender.hasPermission("miahub.admin")) {
             return true;
         }
-        reply(sender, OperationResult.fail("You need miahub.admin for this command."));
+        reply(sender, OperationResult.fail("这个命令需要 miahub.admin 权限。"));
         return false;
     }
 
@@ -134,7 +124,7 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         if (args.length >= 2 && !args[1].isBlank()) {
             return true;
         }
-        reply(sender, OperationResult.fail("Usage: /" + label + " " + args[0] + " <plugin>"));
+        reply(sender, OperationResult.fail("用法：/" + label + " " + args[0] + " <插件>"));
         return false;
     }
 
@@ -146,13 +136,13 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
     }
 
     private void help(CommandSender sender, String label) {
-        replyInfo(sender, "MiaHub commands:");
-        sender.sendMessage(ChatColor.GRAY + "/" + label + " pull" + ChatColor.DARK_GRAY + " - refresh catalog");
-        sender.sendMessage(ChatColor.GRAY + "/" + label + " list" + ChatColor.DARK_GRAY + " - show catalog entries");
-        sender.sendMessage(ChatColor.GRAY + "/" + label + " install <plugin>" + ChatColor.DARK_GRAY + " - download and load a Mia plugin");
-        sender.sendMessage(ChatColor.GRAY + "/" + label + " update <plugin>" + ChatColor.DARK_GRAY + " - download, unload, replace, load");
-        sender.sendMessage(ChatColor.GRAY + "/" + label + " uninstall <plugin>" + ChatColor.DARK_GRAY + " - unload and move jar to trash");
-        sender.sendMessage(ChatColor.GRAY + "/" + label + " enable|disable <plugin>" + ChatColor.DARK_GRAY + " - toggle a loaded plugin");
+        replyInfo(sender, "MiaHub 命令：");
+        sender.sendMessage(ChatColor.GRAY + "/" + label + " pull" + ChatColor.DARK_GRAY + " - 刷新可下载插件列表");
+        sender.sendMessage(ChatColor.GRAY + "/" + label + " list" + ChatColor.DARK_GRAY + " - 查看插件列表和状态");
+        sender.sendMessage(ChatColor.GRAY + "/" + label + " install <插件>" + ChatColor.DARK_GRAY + " - 下载并加载 Mia 插件");
+        sender.sendMessage(ChatColor.GRAY + "/" + label + " update <插件>" + ChatColor.DARK_GRAY + " - 下载、卸载、替换并重新加载");
+        sender.sendMessage(ChatColor.GRAY + "/" + label + " uninstall <插件>" + ChatColor.DARK_GRAY + " - 卸载并把 jar 移到回收目录");
+        sender.sendMessage(ChatColor.GRAY + "/" + label + " enable|disable <插件>" + ChatColor.DARK_GRAY + " - 启用或禁用已加载插件");
     }
 
     private void reply(CommandSender sender, OperationResult result) {
@@ -168,7 +158,33 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         var normalized = prefix.toLowerCase(Locale.ROOT);
         return candidates.stream()
                 .filter(candidate -> candidate.toLowerCase(Locale.ROOT).startsWith(normalized))
+                .distinct()
                 .sorted()
                 .toList();
+    }
+
+    private List<String> candidatesFor(String subcommand) {
+        return switch (subcommand.toLowerCase(Locale.ROOT)) {
+            case "install" -> catalogService.getCatalog().sortedPlugins().stream()
+                    .filter(entry -> !entry.isSelf())
+                    .filter(entry -> !isInstalled(entry))
+                    .map(CatalogEntry::id)
+                    .toList();
+            case "update", "uninstall" -> catalogService.getCatalog().sortedPlugins().stream()
+                    .filter(entry -> !entry.isSelf())
+                    .filter(this::isInstalled)
+                    .map(CatalogEntry::id)
+                    .toList();
+            case "enable", "disable" -> catalogService.getCatalog().sortedPlugins().stream()
+                    .filter(entry -> !entry.isSelf())
+                    .filter(entry -> lifecycle.isLoaded(entry.pluginName()))
+                    .map(CatalogEntry::id)
+                    .toList();
+            default -> List.of();
+        };
+    }
+
+    private boolean isInstalled(CatalogEntry entry) {
+        return lifecycle.isLoaded(entry.pluginName()) || lifecycle.findPluginJar(entry).isPresent();
     }
 }

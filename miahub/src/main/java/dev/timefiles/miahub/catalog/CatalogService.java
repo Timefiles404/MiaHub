@@ -36,7 +36,7 @@ public final class CatalogService {
     public OperationResult pull() {
         var url = plugin.getConfig().getString("catalog-url", "");
         if (url == null || url.isBlank()) {
-            return OperationResult.fail("catalog-url is empty.");
+            return OperationResult.fail("catalog-url 为空。");
         }
 
         try {
@@ -48,7 +48,7 @@ public final class CatalogService {
 
             var response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                return OperationResult.fail("Catalog request failed with HTTP " + response.statusCode() + ".");
+                return OperationResult.fail("插件列表请求失败，HTTP " + response.statusCode() + "。");
             }
 
             var catalog = parse(response.body());
@@ -59,10 +59,10 @@ public final class CatalogService {
 
             Files.writeString(cachePath, gson.toJson(catalog), StandardCharsets.UTF_8);
             cachedCatalog = catalog;
-            return OperationResult.ok("Pulled " + catalog.plugins.size() + " plugin(s).");
+            return OperationResult.ok("已拉取 " + catalog.plugins.size() + " 个插件。");
         } catch (Exception exception) {
             plugin.getLogger().log(Level.WARNING, "Failed to pull MiaHub catalog", exception);
-            return OperationResult.fail("Failed to pull catalog: " + exception.getMessage());
+            return OperationResult.fail("拉取插件列表失败：" + exception.getMessage());
         }
     }
 
@@ -116,19 +116,19 @@ public final class CatalogService {
 
     private OperationResult validate(PluginCatalog catalog) {
         if (catalog.schema <= 0) {
-            return OperationResult.fail("Catalog schema is missing or invalid.");
+            return OperationResult.fail("插件列表 schema 缺失或无效。");
         }
         if (catalog.plugins == null) {
             catalog.plugins = new java.util.ArrayList<>();
         }
         for (var entry : catalog.plugins) {
             if (entry == null || !CatalogEntry.isPresent(entry.id) || !CatalogEntry.isPresent(entry.name)) {
-                return OperationResult.fail("Catalog contains a plugin without id or name.");
+                return OperationResult.fail("插件列表中存在缺少 id 或 name 的插件。");
             }
             if (!entry.hasRepository() && !CatalogEntry.isPresent(entry.downloadUrl)) {
-                return OperationResult.fail("Catalog entry " + entry.id() + " has no repository or downloadUrl.");
+                return OperationResult.fail("插件 " + entry.id() + " 缺少 repository 或 downloadUrl。");
             }
         }
-        return OperationResult.ok("Catalog is valid.");
+        return OperationResult.ok("插件列表有效。");
     }
 }
