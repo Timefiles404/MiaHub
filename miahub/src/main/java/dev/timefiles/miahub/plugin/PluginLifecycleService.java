@@ -141,8 +141,41 @@ public final class PluginLifecycleService {
         return Bukkit.getPluginManager().getPlugin(pluginName) != null;
     }
 
+    public Optional<String> installedVersion(CatalogEntry entry) {
+        var plugin = Bukkit.getPluginManager().getPlugin(entry.pluginName());
+        if (plugin != null) {
+            return Optional.ofNullable(plugin.getPluginMeta().getVersion());
+        }
+
+        return findPluginJar(entry)
+                .flatMap(path -> {
+                    try {
+                        return Optional.ofNullable(JarFiles.readPluginDescription(path).getVersion());
+                    } catch (Exception exception) {
+                        return Optional.empty();
+                    }
+                });
+    }
+
+    public boolean hasUpdate(CatalogEntry entry) {
+        if (!CatalogEntry.isPresent(entry.version)) {
+            return false;
+        }
+        return installedVersion(entry)
+                .map(installed -> !normalizeVersion(installed).equals(normalizeVersion(entry.version)))
+                .orElse(false);
+    }
+
     public boolean isProtectedSelf(CatalogEntry entry) {
         return owner.getConfig().getBoolean("protect-self", true) && entry.isSelf();
+    }
+
+    private String normalizeVersion(String version) {
+        var normalized = version == null ? "" : version.trim();
+        if (normalized.startsWith("v") || normalized.startsWith("V")) {
+            return normalized.substring(1);
+        }
+        return normalized;
     }
 
     private boolean pluginNameEquals(Path path, String pluginName) {

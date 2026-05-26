@@ -103,12 +103,16 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         for (var entry : catalog.sortedPlugins()) {
             var installed = lifecycle.findPluginJar(entry).isPresent();
             var loaded = lifecycle.isLoaded(entry.pluginName());
-            var state = loaded ? "已加载" : installed ? "已安装" : "可安装";
-            var version = CatalogEntry.isPresent(entry.version) ? entry.version : "latest";
+            var installedVersion = lifecycle.installedVersion(entry).orElse(null);
+            var targetVersion = CatalogEntry.isPresent(entry.version) ? entry.version : "latest";
+            var hasUpdate = lifecycle.hasUpdate(entry);
+            var state = stateText(entry, hasUpdate, loaded, installed);
+            var version = versionText(installedVersion, targetVersion, hasUpdate);
+            var stateColor = hasUpdate ? ChatColor.YELLOW : ChatColor.DARK_GRAY;
             sender.sendMessage(ChatColor.GRAY + "- " + ChatColor.AQUA + entry.id()
                     + ChatColor.GRAY + " (" + entry.displayName() + ") "
                     + ChatColor.WHITE + version
-                    + ChatColor.DARK_GRAY + " [" + state + "]");
+                    + stateColor + " [" + state + "]");
         }
     }
 
@@ -186,5 +190,28 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
 
     private boolean isInstalled(CatalogEntry entry) {
         return lifecycle.isLoaded(entry.pluginName()) || lifecycle.findPluginJar(entry).isPresent();
+    }
+
+    private String stateText(CatalogEntry entry, boolean hasUpdate, boolean loaded, boolean installed) {
+        if (hasUpdate) {
+            return entry.isSelf() ? "待手动更新" : "待更新";
+        }
+        if (loaded) {
+            return "已加载";
+        }
+        if (installed) {
+            return "已安装";
+        }
+        return "可安装";
+    }
+
+    private String versionText(String installedVersion, String targetVersion, boolean hasUpdate) {
+        if (installedVersion == null || installedVersion.isBlank()) {
+            return targetVersion;
+        }
+        if (hasUpdate) {
+            return installedVersion + " -> " + targetVersion;
+        }
+        return installedVersion;
     }
 }

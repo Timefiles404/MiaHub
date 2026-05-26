@@ -38,6 +38,11 @@ public final class GitHubReleaseService {
             throw new IOException("No GitHub repository configured for " + entry.id());
         }
 
+        if (CatalogEntry.isPresent(entry.asset)) {
+            var downloadUrl = directReleaseAssetUrl(entry);
+            return new ReleaseAsset(entry.version, entry.releaseTag, entry.asset, downloadUrl);
+        }
+
         var release = requestRelease(entry);
         var assets = release.getAsJsonArray("assets");
         if (assets == null || assets.isEmpty()) {
@@ -83,10 +88,21 @@ public final class GitHubReleaseService {
     private String releaseApiUrl(CatalogEntry entry) {
         var repository = entry.repository.trim();
         if (CatalogEntry.isPresent(entry.releaseTag)) {
-            var tag = URLEncoder.encode(entry.releaseTag, StandardCharsets.UTF_8);
+            var tag = urlSegment(entry.releaseTag);
             return "https://api.github.com/repos/" + repository + "/releases/tags/" + tag;
         }
         return "https://api.github.com/repos/" + repository + "/releases/latest";
+    }
+
+    private String directReleaseAssetUrl(CatalogEntry entry) {
+        var repository = entry.repository.trim();
+        var release = CatalogEntry.isPresent(entry.releaseTag) ? urlSegment(entry.releaseTag) : "latest";
+        var asset = urlSegment(entry.asset);
+        return "https://github.com/" + repository + "/releases/" + (release.equals("latest") ? "latest/download/" : "download/" + release + "/") + asset;
+    }
+
+    private String urlSegment(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
     }
 
     private JsonObject findAsset(CatalogEntry entry, JsonArray assets) throws IOException {
