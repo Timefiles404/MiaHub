@@ -49,24 +49,77 @@ jobs:
           echo "module=${module}" >> "${GITHUB_OUTPUT}"
           echo "tag_version=${tag_version}" >> "${GITHUB_OUTPUT}"
 
-      - name: Download private build dependencies
-        if: steps.release.outputs.module == 'all' || steps.release.outputs.module == 'miaskillpool'
+      - name: Download compile plugin dependencies
         shell: bash
         env:
-          MIA_DEPS_URL: ${{ secrets.MIA_DEPS_URL }}
-          MIA_DEPS_BASIC_AUTH: ${{ secrets.MIA_DEPS_BASIC_AUTH }}
+          RELEASE_MODULE: ${{ steps.release.outputs.module }}
+          PLUG_SITE_URL: ${{ secrets.PLUG_SITE_URL }}
+          PLUG_SITE_DOWNLOAD_TOKEN: ${{ secrets.PLUG_SITE_DOWNLOAD_TOKEN }}
         run: |
-          if [[ -z "${MIA_DEPS_URL}" || -z "${MIA_DEPS_BASIC_AUTH}" ]]; then
-            echo "MIA_DEPS_URL and MIA_DEPS_BASIC_AUTH repository secrets are required to build MiaSkillpool."
-            exit 1
-          fi
+          python3 <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import sys
+          import urllib.parse
+          import urllib.request
 
-          mkdir -p ../references
-          curl --fail --silent --show-error --location --retry 3 \
-            --cacert .github/ci/miahub-deps-ca.pem \
-            --user "${MIA_DEPS_BASIC_AUTH}" \
-            "${MIA_DEPS_URL}/MythicMobsPremium-5.12.0-SNAPSHOT.jar" \
-            --output ../references/MythicMobsPremium-5.12.0-SNAPSHOT.jar
+          module = os.environ["RELEASE_MODULE"]
+          root = pathlib.Path.cwd()
+          modules = [path for path in root.iterdir() if path.is_dir() and (path / "build.gradle.kts").is_file()] if module == "all" else [root / module]
+          dependency_files = [path / "compile-dependencies.json" for path in modules if (path / "compile-dependencies.json").is_file()]
+          if not dependency_files:
+              print("No compile plugin dependencies declared.")
+              raise SystemExit(0)
+
+          base_url = os.environ.get("PLUG_SITE_URL", "").rstrip("/")
+          token = os.environ.get("PLUG_SITE_DOWNLOAD_TOKEN", "")
+          if not base_url or not token:
+              raise SystemExit("PLUG_SITE_URL and PLUG_SITE_DOWNLOAD_TOKEN repository secrets are required for compile plugin dependencies.")
+
+          references = root.parent / "references"
+          references.mkdir(parents=True, exist_ok=True)
+
+          def request_json(url):
+              request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "MiaHub-CI"})
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.load(response)
+
+          def download(url, target):
+              request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "User-Agent": "MiaHub-CI"})
+              with urllib.request.urlopen(request, timeout=180) as response:
+                  target.write_bytes(response.read())
+
+          seen = set()
+          for dependency_file in dependency_files:
+              data = json.loads(dependency_file.read_text(encoding="utf-8"))
+              for item in data.get("dependencies", []):
+                  plugin_name = item if isinstance(item, str) else item.get("plugin")
+                  if not plugin_name:
+                      continue
+                  key = "".join(ch for ch in plugin_name.lower() if ch.isalnum())
+                  if key in seen:
+                      continue
+                  seen.add(key)
+
+                  lookup_url = f"{base_url}/api/dependencies/{urllib.parse.quote(plugin_name)}"
+                  artifact = request_json(lookup_url)
+                  actual_name = artifact.get("pluginName") or plugin_name
+                  download_url = artifact.get("downloadUrl")
+                  if not download_url:
+                      raise SystemExit(f"PlugSite dependency {plugin_name} has no downloadUrl.")
+
+                  target = references / f"{actual_name}.jar"
+                  download(download_url, target)
+                  expected_sha256 = artifact.get("sha256")
+                  if expected_sha256:
+                      actual_sha256 = hashlib.sha256(target.read_bytes()).hexdigest()
+                      if actual_sha256.lower() != expected_sha256.lower():
+                          target.unlink(missing_ok=True)
+                          raise SystemExit(f"SHA-256 mismatch for {actual_name}.")
+                  print(f"Downloaded compile dependency {actual_name} -> {target.name}")
+          PY
 
       - name: Validate module release tag
         if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.module != 'all'

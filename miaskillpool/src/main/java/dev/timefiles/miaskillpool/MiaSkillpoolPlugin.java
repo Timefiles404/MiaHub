@@ -25,6 +25,7 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
     @Override
     public void onEnable() {
         saveDefaultConfig();
+        saveResource("wiki.html", false);
         this.skillBookKey = new NamespacedKey(this, "skill_id");
         this.skillRegistry = new SkillRegistry(this);
         this.dataStore = new PlayerDataStore(this);

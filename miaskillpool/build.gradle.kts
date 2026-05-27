@@ -1,5 +1,5 @@
 dependencies {
-    compileOnly(files(rootProject.layout.projectDirectory.dir("../references").file("MythicMobsPremium-5.12.0-SNAPSHOT.jar")))
+    compileOnly(files(rootProject.layout.projectDirectory.dir("../references").file("MythicMobs.jar")))
 }
 
 tasks.jar {

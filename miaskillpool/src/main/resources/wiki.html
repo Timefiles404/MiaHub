@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>MiaSkillpool Wiki</title>
+  <style>
+    body{margin:0;background:#f6f8fb;color:#1c2430;font:15px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    main{max-width:980px;margin:0 auto;padding:42px 24px}
+    h1{font-size:32px;margin:0 0 8px}h2{font-size:20px;margin:30px 0 10px}
+    code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+    pre{background:#172033;color:#eef4ff;padding:16px;border-radius:8px;overflow:auto}
+    section{background:white;border:1px solid #dfe6f0;border-radius:8px;padding:22px;margin-top:18px}
+    table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #edf1f6;text-align:left}
+  </style>
+</head>
+<body>
+<main>
+  <h1>MiaSkillpool</h1>
+  <p>MiaSkillpool 是依赖 MythicMobs 的技能池插件，提供技能学习、技能池 GUI、五个装备槽、槽位升级、随机装配和三种释放资源模式。</p>
+
+  <section>
+    <h2>前置依赖</h2>
+    <p>运行前需要安装并加载 <code>MythicMobs</code>。通过 MiaHub 安装时可以使用：</p>
+    <pre>/miah install miaskillpool --deps</pre>
+  </section>
+
+  <section>
+    <h2>玩家命令</h2>
+    <pre>/mias
+/mias open
+/mias mode &lt;health|rage|mana&gt;
+/mias upgrade slot &lt;1-5&gt;</pre>
+  </section>
+
+  <section>
+    <h2>管理命令</h2>
+    <pre>/mias learn &lt;玩家&gt; &lt;skillId&gt;
+/mias givebook &lt;玩家&gt; &lt;skillId&gt; [数量]
+/mias random &lt;玩家&gt; &lt;roll|enable|disable&gt;
+/mias mana addmax &lt;玩家&gt; &lt;数值&gt;
+/mias reload</pre>
+  </section>
+
+  <section>
+    <h2>释放方式</h2>
+    <p>玩家将客户端“交换副手”键绑定为 <code>Z</code>。服务端监听副手交换事件并取消原版交换，热键栏 <code>1-5</code> 对应五个技能槽。</p>
+  </section>
+
+  <section>
+    <h2>资源模式</h2>
+    <table>
+      <thead><tr><th>模式</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>health</code></td><td>消耗生命值，消耗较少，但槽位冷却更长，最低保留半颗心。</td></tr>
+        <tr><td><code>rage</code></td><td>消耗怒气，默认 0，进入战斗后恢复。</td></tr>
+        <tr><td><code>mana</code></td><td>消耗法力值，按配置自然缓慢恢复。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>配置文件</h2>
+    <pre>plugins/MiaSkillpool/config.yml
+plugins/MiaSkillpool/players/&lt;uuid&gt;.yml
+plugins/MiaSkillpool/wiki.html</pre>
+  </section>
+</main>
+</body>
+</html>

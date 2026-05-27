@@ -62,6 +62,13 @@ def safe_segment(value):
     return re.sub(r"[^A-Za-z0-9._@+-]+", "_", value).strip("._") or "artifact"
 
 
+def normalize_plugin_name(value):
+    normalized = re.sub(r"[^A-Za-z0-9]+", "", value or "").lower()
+    if not normalized:
+        raise ValueError("plugin name is empty")
+    return normalized
+
+
 def parse_scalar(value):
     value = value.strip()
     if not value:
@@ -292,8 +299,48 @@ class PlugStore:
     def load(self):
         if self.registry_path.is_file():
             with self.registry_path.open("r", encoding="utf-8") as handle:
-                return json.load(handle)
+                return self.normalize_registry(json.load(handle))
         return {"schema": 1, "generatedBy": "MiaHub PlugSite", "updatedAt": now_iso(), "plugins": {}, "dependencies": {}}
+
+    def normalize_registry(self, registry):
+        registry.setdefault("plugins", {})
+        registry.setdefault("dependencies", {})
+
+        plugins = {}
+        for key, entry in registry.get("plugins", {}).items():
+            if not isinstance(entry, dict):
+                continue
+            plugin_name = entry.get("pluginName") or entry.get("name") or key
+            entry["pluginName"] = plugin_name
+            entry["normalizedPluginName"] = normalize_plugin_name(plugin_name)
+            entry["id"] = safe_segment(entry.get("id") or key).lower()
+            entry["version"] = str(entry.get("version") or entry.get("pluginVersion") or "latest")
+            entry["pluginVersion"] = str(entry.get("pluginVersion") or entry["version"])
+            entry.setdefault("dependencies", [])
+            entry.setdefault("softDependencies", [])
+            entry.setdefault("loadBefore", [])
+            plugins[entry["id"]] = entry
+
+        dependencies = {}
+        for key, entry in registry.get("dependencies", {}).items():
+            if not isinstance(entry, dict):
+                continue
+            plugin_name = entry.get("pluginName") or key
+            normalized = normalize_plugin_name(plugin_name)
+            entry["pluginName"] = plugin_name
+            entry["normalizedName"] = normalized
+            entry["version"] = str(entry.get("version") or entry.get("pluginVersion") or "latest")
+            entry["pluginVersion"] = str(entry.get("pluginVersion") or entry["version"])
+            entry["fileName"] = plugin_name + ".jar"
+            entry.setdefault("dependencies", [])
+            entry.setdefault("softDependencies", [])
+            entry.setdefault("loadBefore", [])
+            entry.setdefault("autoInstall", True)
+            dependencies[normalized] = entry
+
+        registry["plugins"] = plugins
+        registry["dependencies"] = dependencies
+        return registry
 
     def save(self, registry):
         registry["updatedAt"] = now_iso()
@@ -322,6 +369,7 @@ class PlugStore:
             entry = {
                 "id": module,
                 "pluginName": metadata["pluginName"],
+                "normalizedPluginName": normalize_plugin_name(metadata["pluginName"]),
                 "version": version,
                 "pluginVersion": metadata.get("version") or version,
                 "fileName": fields.get("fileName") or metadata["pluginName"] + ".jar",
@@ -340,17 +388,18 @@ class PlugStore:
             registry.setdefault("plugins", {})[module] = entry
         elif kind == "dependency":
             plugin_name = metadata["pluginName"]
-            key = plugin_name.lower()
-            version = safe_segment(fields.get("version") or metadata.get("version") or "latest")
+            key = normalize_plugin_name(plugin_name)
+            version = safe_segment(metadata.get("version") or fields.get("version") or "latest")
             target_dir = self.artifacts / "dependencies" / safe_segment(plugin_name) / version
             target_dir.mkdir(parents=True, exist_ok=True)
             target = target_dir / artifact_name
             shutil.move(str(temp_path), target)
             entry = {
                 "pluginName": plugin_name,
+                "normalizedName": key,
                 "version": version,
                 "pluginVersion": metadata.get("version") or version,
-                "fileName": fields.get("fileName") or artifact_name,
+                "fileName": fields.get("fileName") or plugin_name + ".jar",
                 "artifact": artifact_name,
                 "sha256": digest,
                 "size": size,
@@ -371,7 +420,7 @@ class PlugStore:
 
     def find_dependency(self, plugin_name):
         registry = self.load()
-        return registry.get("dependencies", {}).get(plugin_name.lower())
+        return registry.get("dependencies", {}).get(normalize_plugin_name(plugin_name))
 
     def artifact_path(self, kind, name, version, artifact):
         if kind == "mia":

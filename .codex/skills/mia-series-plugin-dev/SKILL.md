@@ -40,8 +40,8 @@ Current module version keys:
 
 ```properties
 miahub.version=0.2.8
-miaforge.version=0.2.5
-miaskillpool.version=0.2.5
+miaforge.version=0.2.6
+miaskillpool.version=0.2.6
 ```
 
 ## Local Build Setup
@@ -132,6 +132,24 @@ Every managed plugin needs a catalog entry with these fields:
 ```
 
 MiaHub uses `version` for update detection, `fileName` for the installed jar name, `releaseTag + asset` for direct GitHub Release downloads, and `dependencies` for runtime prerequisite checks in `/miah list`, `install`, and `update`. Keep `id` lowercase and put external Paper plugin dependencies there by plugin name, for example `["MythicMobs"]`.
+
+## Documentation Boundary
+
+Keep the root `README.md` about MiaHub only: commands, download behavior, catalog behavior, local build, and release workflow. Do not put MiaForge, MiaSkillpool, or future subplugin user manuals into the root README.
+
+Each Mia subplugin should ship a `src/main/resources/wiki.html` and release it on startup with `saveResource("wiki.html", false)`. Users should be able to open `plugins/<PluginName>/wiki.html` after the plugin has created its data folder.
+
+## Compile Plugin Dependencies
+
+When a module needs a third-party plugin jar to compile, declare plugin names in `<module>/compile-dependencies.json`:
+
+```json
+{
+  "dependencies": ["MythicMobs"]
+}
+```
+
+CI must query PlugSite by plugin name, let PlugSite normalize from the jar's `plugin.yml` or `paper-plugin.yml`, and download the artifact to `../references/<pluginName>.jar`. Avoid hard-coding versioned jar names such as `MythicMobsPremium-5.12.0-SNAPSHOT.jar` in workflow code.
 
 ## Release Workflow
 

@@ -14,6 +14,7 @@ public final class MiaForgePlugin extends JavaPlugin implements CommandExecutor,
     @Override
     public void onEnable() {
         saveDefaultConfig();
+        saveResource("wiki.html", false);
         var command = getCommand("miaf");
         if (command != null) {
             command.setExecutor(this);

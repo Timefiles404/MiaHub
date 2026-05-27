@@ -23,7 +23,7 @@ POST /api/upload
 ```
 
 `POST /api/upload` requires `Authorization: Bearer <upload-token>`.
-Dependency downloads require `Authorization: Bearer <download-token>` unless the requester has a web login session.
+Dependency lookups are keyed by normalized plugin name derived from `plugin.yml` or `paper-plugin.yml`, such as `MythicMobs` -> `mythicmobs`. Dependency downloads require `Authorization: Bearer <download-token>` unless the requester has a web login session.
 
 ## Deployment
 
