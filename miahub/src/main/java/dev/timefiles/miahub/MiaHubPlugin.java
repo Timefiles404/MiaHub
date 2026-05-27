@@ -20,7 +20,7 @@ public final class MiaHubPlugin extends JavaPlugin {
     @Override
     public void onEnable() {
         saveDefaultConfig();
-        if (!getConfig().isSet("download-site.base-url")) {
+        if (!getConfig().isSet("download-site.base-url") || !getConfig().isSet("dangerous-manage-unlisted-plugins")) {
             getConfig().options().copyDefaults(true);
             saveConfig();
         }

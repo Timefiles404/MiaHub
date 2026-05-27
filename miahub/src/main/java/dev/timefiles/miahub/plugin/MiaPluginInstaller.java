@@ -46,7 +46,7 @@ public final class MiaPluginInstaller {
     public OperationResult install(String query, boolean autoDependencies, String password) {
         var entry = catalogService.find(query).orElse(null);
         if (entry == null) {
-            return OperationResult.fail("未知 Mia 插件：" + query + "。请先执行 /miah pull。");
+            return installUnlistedLocal(query);
         }
         if (lifecycle.isProtectedSelf(entry)) {
             return OperationResult.fail("MiaHub 不能在运行时安装或重载自己，请手动替换 jar 后重启服务器。");
@@ -78,6 +78,27 @@ public final class MiaPluginInstaller {
             plugin.getLogger().log(Level.WARNING, "Failed to install " + query, exception);
             return OperationResult.fail("安装失败：" + exception.getMessage());
         }
+    }
+
+    private OperationResult installUnlistedLocal(String query) {
+        if (!catalogService.allowsDangerousUnlistedPluginManagement()) {
+            return OperationResult.fail("未知 Mia 插件：" + query + "。请先执行 /miah pull。");
+        }
+
+        var entry = findUnlistedLocalEntry(query, true);
+        if (entry == null) {
+            return OperationResult.fail("未找到可安装的本地非 catalog 插件：" + query + "。请确认 jar 已放入 plugins/ 且当前未加载。");
+        }
+        if (lifecycle.isProtectedSelf(entry)) {
+            return OperationResult.fail("MiaHub 不能在运行时安装或重载自己，请手动替换 jar 后重启服务器。");
+        }
+
+        var jar = lifecycle.findPluginJar(entry).orElse(plugin.pluginsDirectory().resolve(entry.fileName()));
+        var load = lifecycle.load(jar);
+        if (load.success()) {
+            return OperationResult.ok("已处理本地非 catalog 插件 " + entry.displayName() + "。" + load.message());
+        }
+        return load;
     }
 
     public OperationResult update(String query) {
@@ -204,7 +225,11 @@ public final class MiaPluginInstaller {
         if (entry != null) {
             return entry;
         }
-        return catalogService.isCatalogOnly() ? null : unmanagedEntry(query);
+        if (!catalogService.allowsDangerousUnlistedPluginManagement()) {
+            return null;
+        }
+        var localEntry = findUnlistedLocalEntry(query, false);
+        return localEntry == null ? unmanagedEntry(query) : localEntry;
     }
 
     private CatalogEntry unmanagedEntry(String query) {
@@ -214,6 +239,33 @@ public final class MiaPluginInstaller {
         entry.pluginName = query;
         entry.fileName = query + ".jar";
         return entry;
+    }
+
+    private CatalogEntry findUnlistedLocalEntry(String query, boolean unloadedOnly) {
+        var entries = unloadedOnly ? lifecycle.unloadedLocalPlugins() : lifecycle.localPlugins();
+        return entries.stream()
+                .filter(this::isUnlisted)
+                .filter(entry -> matches(entry, query))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private boolean isUnlisted(CatalogEntry entry) {
+        return catalogService.find(entry.id()).isEmpty() && catalogService.find(entry.pluginName()).isEmpty();
+    }
+
+    private boolean matches(CatalogEntry entry, String query) {
+        if (query == null || query.isBlank()) {
+            return false;
+        }
+        var normalized = query.toLowerCase(Locale.ROOT);
+        var fileName = entry.fileName();
+        var fileStem = fileName.toLowerCase(Locale.ROOT).endsWith(".jar") ? fileName.substring(0, fileName.length() - 4) : fileName;
+        return entry.id().equalsIgnoreCase(query)
+                || entry.displayName().equalsIgnoreCase(query)
+                || entry.pluginName().equalsIgnoreCase(query)
+                || fileName.equalsIgnoreCase(query)
+                || fileStem.equalsIgnoreCase(normalized);
     }
 
     private OperationResult ensureDependencies(CatalogEntry entry, boolean autoInstall) throws IOException, InterruptedException {

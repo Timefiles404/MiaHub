@@ -92,7 +92,11 @@ public final class CatalogService {
     }
 
     public boolean isCatalogOnly() {
-        return plugin.getConfig().getBoolean("manage-catalog-only", true);
+        return !allowsDangerousUnlistedPluginManagement();
+    }
+
+    public boolean allowsDangerousUnlistedPluginManagement() {
+        return plugin.getConfig().getBoolean("dangerous-manage-unlisted-plugins", false);
     }
 
     private PluginCatalog fetch(String url) throws IOException, InterruptedException {

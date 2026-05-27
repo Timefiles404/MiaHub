@@ -13,6 +13,7 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 
@@ -110,29 +111,45 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
 
     private void list(CommandSender sender) {
         var catalog = catalogService.getCatalog();
-        if (catalog.plugins.isEmpty()) {
+        var localUnlisted = unlistedUnloadedLocalPlugins();
+        if (catalog.plugins.isEmpty() && localUnlisted.isEmpty()) {
             reply(sender, OperationResult.fail("插件列表为空，请先执行 /miah pull。"));
             return;
         }
 
-        replyInfo(sender, "Mia 插件列表：");
-        for (var entry : catalog.sortedPlugins()) {
-            var installed = lifecycle.findPluginJar(entry).isPresent();
-            var loaded = lifecycle.isLoaded(entry.pluginName());
-            var installedVersion = lifecycle.installedVersion(entry).orElse(null);
-            var targetVersion = CatalogEntry.isPresent(entry.version) ? entry.version : "latest";
-            var hasUpdate = lifecycle.hasUpdate(entry);
-            var hasMissingDependencies = !lifecycle.missingDependencies(entry).isEmpty();
-            var state = stateText(entry, hasUpdate, loaded, installed, hasMissingDependencies);
-            var version = versionText(installedVersion, targetVersion, hasUpdate);
-            var stateColor = hasMissingDependencies ? ChatColor.RED : hasUpdate ? ChatColor.YELLOW : ChatColor.DARK_GRAY;
-            sender.sendMessage(ChatColor.GRAY + "- " + ChatColor.AQUA + entry.id()
-                    + ChatColor.GRAY + " (" + entry.displayName() + ") "
-                    + ChatColor.WHITE + version
-                    + stateColor + " [" + state + "]"
-                    + (entry.passwordProtected ? ChatColor.GOLD + " [需密码]" : ""));
-            if (entry.hasDependencies()) {
-                dependencyLines(sender, entry);
+        if (!catalog.plugins.isEmpty()) {
+            replyInfo(sender, "Mia 插件列表：");
+            for (var entry : catalog.sortedPlugins()) {
+                var installed = lifecycle.findPluginJar(entry).isPresent();
+                var loaded = lifecycle.isLoaded(entry.pluginName());
+                var installedVersion = lifecycle.installedVersion(entry).orElse(null);
+                var targetVersion = CatalogEntry.isPresent(entry.version) ? entry.version : "latest";
+                var hasUpdate = lifecycle.hasUpdate(entry);
+                var hasMissingDependencies = !lifecycle.missingDependencies(entry).isEmpty();
+                var state = stateText(entry, hasUpdate, loaded, installed, hasMissingDependencies);
+                var version = versionText(installedVersion, targetVersion, hasUpdate);
+                var stateColor = hasMissingDependencies ? ChatColor.RED : hasUpdate ? ChatColor.YELLOW : ChatColor.DARK_GRAY;
+                sender.sendMessage(ChatColor.GRAY + "- " + ChatColor.AQUA + entry.id()
+                        + ChatColor.GRAY + " (" + entry.displayName() + ") "
+                        + ChatColor.WHITE + version
+                        + stateColor + " [" + state + "]"
+                        + (entry.passwordProtected ? ChatColor.GOLD + " [需密码]" : ""));
+                if (entry.hasDependencies()) {
+                    dependencyLines(sender, entry);
+                }
+            }
+        }
+
+        if (!localUnlisted.isEmpty()) {
+            replyInfo(sender, "本地非 catalog 未加载插件：");
+            for (var entry : localUnlisted) {
+                var version = CatalogEntry.isPresent(entry.version) ? entry.version : "unknown";
+                var restart = entry.restartRequired ? ChatColor.YELLOW + " [需重启]" : "";
+                sender.sendMessage(ChatColor.GRAY + "- " + ChatColor.AQUA + entry.id()
+                        + ChatColor.GRAY + " (" + entry.pluginName() + ") "
+                        + ChatColor.WHITE + version
+                        + ChatColor.DARK_GRAY + " [可本地 install]"
+                        + restart);
             }
         }
     }
@@ -189,6 +206,7 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(ChatColor.GRAY + "/" + label + " update <插件> --password <密码>" + ChatColor.DARK_GRAY + " - 更新需要凭据的插件");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " uninstall <插件>" + ChatColor.DARK_GRAY + " - 卸载并把 jar 移到回收目录");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " enable|disable <插件>" + ChatColor.DARK_GRAY + " - 启用或禁用已加载插件");
+        sender.sendMessage(ChatColor.DARK_GRAY + "dangerous-manage-unlisted-plugins=true 后，install/enable/disable/uninstall 可管理非 catalog 插件。");
     }
 
     private void reply(CommandSender sender, OperationResult result) {
@@ -211,29 +229,64 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
 
     private List<String> candidatesFor(String subcommand) {
         return switch (subcommand.toLowerCase(Locale.ROOT)) {
-            case "install" -> catalogService.getCatalog().sortedPlugins().stream()
-                    .filter(entry -> !entry.isSelf())
-                    .filter(entry -> !isInstalled(entry))
-                    .map(CatalogEntry::id)
-                    .toList();
+            case "install" -> installCandidates();
             case "update" -> catalogService.getCatalog().sortedPlugins().stream()
                     .filter(entry -> !entry.isSelf())
                     .filter(this::isInstalled)
                     .filter(lifecycle::hasUpdate)
                     .map(CatalogEntry::id)
                     .toList();
-            case "uninstall" -> catalogService.getCatalog().sortedPlugins().stream()
-                    .filter(entry -> !entry.isSelf())
-                    .filter(this::isInstalled)
-                    .map(CatalogEntry::id)
-                    .toList();
-            case "enable", "disable" -> catalogService.getCatalog().sortedPlugins().stream()
-                    .filter(entry -> !entry.isSelf())
-                    .filter(entry -> lifecycle.isLoaded(entry.pluginName()))
-                    .map(CatalogEntry::id)
-                    .toList();
+            case "uninstall" -> uninstallCandidates();
+            case "enable", "disable" -> loadedCandidates();
             default -> List.of();
         };
+    }
+
+    private List<String> installCandidates() {
+        var candidates = new LinkedHashSet<String>();
+        catalogService.getCatalog().sortedPlugins().stream()
+                .filter(entry -> !entry.isSelf())
+                .filter(entry -> !isInstalled(entry))
+                .map(CatalogEntry::id)
+                .forEach(candidates::add);
+        if (catalogService.allowsDangerousUnlistedPluginManagement()) {
+            unlistedUnloadedLocalPlugins().stream()
+                    .filter(entry -> !entry.isSelf())
+                    .map(CatalogEntry::id)
+                    .forEach(candidates::add);
+        }
+        return candidates.stream().toList();
+    }
+
+    private List<String> uninstallCandidates() {
+        var candidates = new LinkedHashSet<String>();
+        catalogService.getCatalog().sortedPlugins().stream()
+                .filter(entry -> !entry.isSelf())
+                .filter(this::isInstalled)
+                .map(CatalogEntry::id)
+                .forEach(candidates::add);
+        if (catalogService.allowsDangerousUnlistedPluginManagement()) {
+            unlistedManageablePluginNames().stream()
+                    .filter(name -> !"MiaHub".equalsIgnoreCase(name))
+                    .forEach(candidates::add);
+        }
+        return candidates.stream().toList();
+    }
+
+    private List<String> loadedCandidates() {
+        var candidates = new LinkedHashSet<String>();
+        catalogService.getCatalog().sortedPlugins().stream()
+                .filter(entry -> !entry.isSelf())
+                .filter(entry -> lifecycle.isLoaded(entry.pluginName()))
+                .map(CatalogEntry::id)
+                .forEach(candidates::add);
+        if (catalogService.allowsDangerousUnlistedPluginManagement()) {
+            lifecycle.loadedPluginNames().stream()
+                    .filter(this::isUnlistedPluginName)
+                    .filter(name -> !"MiaHub".equalsIgnoreCase(name))
+                    .forEach(candidates::add);
+        }
+        return candidates.stream().toList();
     }
 
     private CommandOptions commandOptions(String[] args) {
@@ -263,6 +316,35 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
 
     private boolean isInstalled(CatalogEntry entry) {
         return lifecycle.isLoaded(entry.pluginName()) || lifecycle.findPluginJar(entry).isPresent();
+    }
+
+    private List<CatalogEntry> unlistedUnloadedLocalPlugins() {
+        if (!catalogService.allowsDangerousUnlistedPluginManagement()) {
+            return List.of();
+        }
+        return lifecycle.unloadedLocalPlugins().stream()
+                .filter(this::isUnlistedEntry)
+                .toList();
+    }
+
+    private List<String> unlistedManageablePluginNames() {
+        var candidates = new LinkedHashSet<String>();
+        lifecycle.localPlugins().stream()
+                .filter(this::isUnlistedEntry)
+                .map(CatalogEntry::pluginName)
+                .forEach(candidates::add);
+        lifecycle.loadedPluginNames().stream()
+                .filter(this::isUnlistedPluginName)
+                .forEach(candidates::add);
+        return candidates.stream().toList();
+    }
+
+    private boolean isUnlistedEntry(CatalogEntry entry) {
+        return catalogService.find(entry.id()).isEmpty() && catalogService.find(entry.pluginName()).isEmpty();
+    }
+
+    private boolean isUnlistedPluginName(String pluginName) {
+        return catalogService.find(pluginName).isEmpty();
     }
 
     private String stateText(CatalogEntry entry, boolean hasUpdate, boolean loaded, boolean installed, boolean hasMissingDependencies) {

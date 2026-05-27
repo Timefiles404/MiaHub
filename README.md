@@ -36,6 +36,8 @@ https://raw.githubusercontent.com/Timefiles404/MiaHub/main/catalog.json
 
 `/miah list` 会显示 catalog 中插件的安装状态、版本状态、硬依赖状态和是否需要下载密码。安装或更新时，如果硬依赖缺失，MiaHub 默认会拦截；管理员可以使用 `--deps` 从 PlugSite 自动补齐已登记且允许自动安装的依赖插件。需要凭据的安装插件使用 `--password <密码>` 下载，`--deps` 与 `--password` 可以同时使用。
 
+默认情况下，MiaHub 只管理 catalog 中的插件。把 `plugins/MiaHub/config.yml` 里的 `dangerous-manage-unlisted-plugins` 改成 `true` 并重启服务器后，MiaHub 会解锁非 catalog 插件的危险托管：`install` 会扫描 `plugins/` 目录里未加载的本地 jar 并加入补全，执行后尝试加载；`enable`、`disable`、`uninstall` 也可以作用于非 catalog 插件。
+
 ## 下载源
 
 MiaHub 默认按以下顺序下载 Mia 插件：
@@ -47,7 +49,7 @@ MiaHub 默认按以下顺序下载 Mia 插件：
 
 ## 管理边界
 
-MiaHub 只管理 `catalog.json` 中注册的插件。MiaHub 会保护自己，不能通过 `/miah install|update|uninstall|enable|disable miahub` 在运行时操作自身。更新 MiaHub 时需要手动替换 `MiaHub.jar` 并重启服务器。
+MiaHub 默认只管理 `catalog.json` 中注册的插件；危险托管开关开启后才会管理非 catalog 插件。MiaHub 会保护自己，不能通过 `/miah install|update|uninstall|enable|disable miahub` 在运行时操作自身。更新 MiaHub 时需要手动替换 `MiaHub.jar` 并重启服务器。
 
 传统 Bukkit/Paper `plugin.yml` 插件会尝试运行时加载、卸载、启用和禁用；带 `paper-plugin.yml` 的插件可以安装，但需要重启服务器加载。
 

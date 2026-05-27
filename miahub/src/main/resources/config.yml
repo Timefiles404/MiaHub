@@ -7,6 +7,13 @@ catalog-fallback-url: "https://raw.githubusercontent.com/Timefiles404/MiaHub/mai
 # enabled, or disabled by MiaHub.
 manage-catalog-only: true
 
+# Dangerous: when true and the server has been restarted, MiaHub can also
+# load, enable, disable, and uninstall plugins that are not in the MiaHub
+# catalog. It scans local jars in plugins/ and exposes unloaded jars in
+# /miah install tab completion. Keep this false on production servers unless
+# you intentionally want MiaHub to manage non-Mia plugins.
+dangerous-manage-unlisted-plugins: false
+
 # GitHub API calls are unauthenticated by default. Set this only on private
 # deployments if you need a token for private repositories or higher rate limits.
 github-token: ""

@@ -19,6 +19,7 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -140,6 +141,50 @@ public final class PluginLifecycleService {
             owner.getLogger().log(Level.WARNING, "Failed to scan plugin jars", exception);
             return Optional.empty();
         }
+    }
+
+    public List<CatalogEntry> unloadedLocalPlugins() {
+        var pluginDir = owner.pluginsDirectory();
+        if (!Files.isDirectory(pluginDir)) {
+            return List.of();
+        }
+
+        try (Stream<Path> paths = Files.list(pluginDir)) {
+            return paths
+                    .filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar"))
+                    .flatMap(path -> localEntry(path).stream())
+                    .filter(entry -> !isLoaded(entry.pluginName()))
+                    .sorted(Comparator.comparing(CatalogEntry::id))
+                    .toList();
+        } catch (IOException exception) {
+            owner.getLogger().log(Level.WARNING, "Failed to scan unloaded local plugin jars", exception);
+            return List.of();
+        }
+    }
+
+    public List<CatalogEntry> localPlugins() {
+        var pluginDir = owner.pluginsDirectory();
+        if (!Files.isDirectory(pluginDir)) {
+            return List.of();
+        }
+
+        try (Stream<Path> paths = Files.list(pluginDir)) {
+            return paths
+                    .filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar"))
+                    .flatMap(path -> localEntry(path).stream())
+                    .sorted(Comparator.comparing(CatalogEntry::id))
+                    .toList();
+        } catch (IOException exception) {
+            owner.getLogger().log(Level.WARNING, "Failed to scan local plugin jars", exception);
+            return List.of();
+        }
+    }
+
+    public List<String> loadedPluginNames() {
+        return Stream.of(Bukkit.getPluginManager().getPlugins())
+                .map(Plugin::getName)
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
     }
 
     public boolean isLoaded(String pluginName) {
@@ -572,9 +617,27 @@ public final class PluginLifecycleService {
 
     private boolean pluginNameEquals(Path path, String pluginName) {
         try {
-            return JarFiles.readPluginDescription(path).getName().equalsIgnoreCase(pluginName);
+            return JarFiles.readPluginMetadata(path).name().equalsIgnoreCase(pluginName);
         } catch (Exception ignored) {
             return false;
+        }
+    }
+
+    private Optional<CatalogEntry> localEntry(Path path) {
+        try {
+            var metadata = JarFiles.readPluginMetadata(path);
+            var entry = new CatalogEntry();
+            entry.id = metadata.name().toLowerCase(Locale.ROOT);
+            entry.name = metadata.name();
+            entry.pluginName = metadata.name();
+            entry.fileName = path.getFileName().toString();
+            entry.version = metadata.version();
+            entry.restartRequired = metadata.paperPlugin();
+            entry.description = "Local plugin jar outside the MiaHub catalog.";
+            return Optional.of(entry);
+        } catch (Exception exception) {
+            owner.getLogger().log(Level.FINE, "Skipping unreadable plugin jar " + path.getFileName(), exception);
+            return Optional.empty();
         }
     }
 
