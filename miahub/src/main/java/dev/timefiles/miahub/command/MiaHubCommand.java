@@ -53,13 +53,23 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
             case "list" -> list(sender);
             case "install" -> {
                 if (!requireAdmin(sender) || !requireTarget(sender, label, args)) return true;
+                var options = commandOptions(args);
+                if (!options.success()) {
+                    reply(sender, OperationResult.fail(options.error()));
+                    return true;
+                }
                 replyInfo(sender, "正在安装 " + args[1] + "...");
-                runAsync(sender, () -> installer.install(args[1], withDependencies(args)));
+                runAsync(sender, () -> installer.install(args[1], options.autoDependencies(), options.password()));
             }
             case "update" -> {
                 if (!requireAdmin(sender) || !requireTarget(sender, label, args)) return true;
+                var options = commandOptions(args);
+                if (!options.success()) {
+                    reply(sender, OperationResult.fail(options.error()));
+                    return true;
+                }
                 replyInfo(sender, "正在更新 " + args[1] + "...");
-                runAsync(sender, () -> installer.update(args[1], withDependencies(args)));
+                runAsync(sender, () -> installer.update(args[1], options.autoDependencies(), options.password()));
             }
             case "uninstall" -> {
                 if (!requireAdmin(sender) || !requireTarget(sender, label, args)) return true;
@@ -89,8 +99,11 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         if (args.length == 2) {
             return filter(candidatesFor(args[0]), args[1]);
         }
-        if (args.length == 3 && (args[0].equalsIgnoreCase("install") || args[0].equalsIgnoreCase("update"))) {
-            return filter(List.of("--deps"), args[2]);
+        if (args.length >= 3 && (args[0].equalsIgnoreCase("install") || args[0].equalsIgnoreCase("update"))) {
+            if (args.length > 2 && args[args.length - 2].equalsIgnoreCase("--password")) {
+                return List.of();
+            }
+            return filter(List.of("--deps", "--password"), args[args.length - 1]);
         }
         return List.of();
     }
@@ -116,7 +129,8 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage(ChatColor.GRAY + "- " + ChatColor.AQUA + entry.id()
                     + ChatColor.GRAY + " (" + entry.displayName() + ") "
                     + ChatColor.WHITE + version
-                    + stateColor + " [" + state + "]");
+                    + stateColor + " [" + state + "]"
+                    + (entry.passwordProtected ? ChatColor.GOLD + " [需密码]" : ""));
             if (entry.hasDependencies()) {
                 dependencyLines(sender, entry);
             }
@@ -169,8 +183,10 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(ChatColor.GRAY + "/" + label + " list" + ChatColor.DARK_GRAY + " - 查看插件列表和状态");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " install <插件>" + ChatColor.DARK_GRAY + " - 下载并加载 Mia 插件");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " install <插件> --deps" + ChatColor.DARK_GRAY + " - 从 PlugSite 自动补齐前置依赖");
+        sender.sendMessage(ChatColor.GRAY + "/" + label + " install <插件> --password <密码>" + ChatColor.DARK_GRAY + " - 安装需要凭据的插件");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " update <插件>" + ChatColor.DARK_GRAY + " - 下载、卸载、替换并重新加载");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " update <插件> --deps" + ChatColor.DARK_GRAY + " - 更新前自动补齐前置依赖");
+        sender.sendMessage(ChatColor.GRAY + "/" + label + " update <插件> --password <密码>" + ChatColor.DARK_GRAY + " - 更新需要凭据的插件");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " uninstall <插件>" + ChatColor.DARK_GRAY + " - 卸载并把 jar 移到回收目录");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " enable|disable <插件>" + ChatColor.DARK_GRAY + " - 启用或禁用已加载插件");
     }
@@ -220,13 +236,29 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         };
     }
 
-    private boolean withDependencies(String[] args) {
-        for (var arg : args) {
+    private CommandOptions commandOptions(String[] args) {
+        var autoDependencies = plugin.getConfig().getBoolean("download-site.auto-install-dependencies", false);
+        var password = "";
+        for (var index = 2; index < args.length; index++) {
+            var arg = args[index];
             if (arg.equalsIgnoreCase("--deps")) {
-                return true;
+                autoDependencies = true;
+                continue;
             }
+            if (arg.toLowerCase(Locale.ROOT).startsWith("--password=")) {
+                password = arg.substring("--password=".length());
+                continue;
+            }
+            if (arg.equalsIgnoreCase("--password")) {
+                if (index + 1 >= args.length || args[index + 1].startsWith("--")) {
+                    return CommandOptions.fail("--password 后需要填写密码。");
+                }
+                password = args[++index];
+                continue;
+            }
+            return CommandOptions.fail("未知参数：" + arg);
         }
-        return plugin.getConfig().getBoolean("download-site.auto-install-dependencies", false);
+        return new CommandOptions(true, autoDependencies, password, "");
     }
 
     private boolean isInstalled(CatalogEntry entry) {
@@ -257,5 +289,11 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
             return installedVersion + " -> " + targetVersion;
         }
         return installedVersion;
+    }
+
+    private record CommandOptions(boolean success, boolean autoDependencies, String password, String error) {
+        static CommandOptions fail(String error) {
+            return new CommandOptions(false, false, "", error);
+        }
     }
 }

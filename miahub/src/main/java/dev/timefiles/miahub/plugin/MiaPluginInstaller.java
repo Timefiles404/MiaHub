@@ -40,6 +40,10 @@ public final class MiaPluginInstaller {
     }
 
     public OperationResult install(String query, boolean autoDependencies) {
+        return install(query, autoDependencies, "");
+    }
+
+    public OperationResult install(String query, boolean autoDependencies, String password) {
         var entry = catalogService.find(query).orElse(null);
         if (entry == null) {
             return OperationResult.fail("未知 Mia 插件：" + query + "。请先执行 /miah pull。");
@@ -50,13 +54,16 @@ public final class MiaPluginInstaller {
         if (lifecycle.isLoaded(entry.pluginName()) || lifecycle.findPluginJar(entry).isPresent()) {
             return OperationResult.fail(entry.pluginName() + " 已经安装，请使用 /miah update " + entry.id() + "。");
         }
+        if (entry.passwordProtected && !CatalogEntry.isPresent(password)) {
+            return OperationResult.fail(entry.displayName() + " 需要下载密码，请使用 --password <密码>。");
+        }
 
         try {
             var dependencies = ensureDependencies(entry, autoDependencies);
             if (!dependencies.success()) {
                 return dependencies;
             }
-            var staged = download(entry);
+            var staged = download(entry, password);
             verify(entry, staged);
             var target = plugin.pluginsDirectory().resolve(entry.fileName());
             Files.move(staged, target, StandardCopyOption.REPLACE_EXISTING);
@@ -78,6 +85,10 @@ public final class MiaPluginInstaller {
     }
 
     public OperationResult update(String query, boolean autoDependencies) {
+        return update(query, autoDependencies, "");
+    }
+
+    public OperationResult update(String query, boolean autoDependencies, String password) {
         var entry = catalogService.find(query).orElse(null);
         if (entry == null) {
             return OperationResult.fail("未知 Mia 插件：" + query + "。请先执行 /miah pull。");
@@ -94,13 +105,16 @@ public final class MiaPluginInstaller {
                 return OperationResult.ok(entry.pluginName() + " 已经是最新版 " + entry.version + "。");
             }
         }
+        if (entry.passwordProtected && !CatalogEntry.isPresent(password)) {
+            return OperationResult.fail(entry.displayName() + " 需要下载密码，请使用 --password <密码>。");
+        }
 
         try {
             var dependencies = ensureDependencies(entry, autoDependencies);
             if (!dependencies.success()) {
                 return dependencies;
             }
-            var staged = download(entry);
+            var staged = download(entry, password);
             verify(entry, staged);
             var target = lifecycle.findPluginJar(entry).orElse(plugin.pluginsDirectory().resolve(entry.fileName()));
             var backup = backupPath(target);
@@ -276,8 +290,8 @@ public final class MiaPluginInstaller {
         return OperationResult.fail("前置插件 " + artifact.pluginName() + " 已下载但加载失败：" + load.message());
     }
 
-    private Path download(CatalogEntry entry) throws IOException, InterruptedException {
-        return downloads.downloadPlugin(entry);
+    private Path download(CatalogEntry entry, String password) throws IOException, InterruptedException {
+        return downloads.downloadPlugin(entry, password);
     }
 
     private void verify(CatalogEntry entry, Path path) throws IOException {

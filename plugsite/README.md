@@ -4,10 +4,11 @@ PlugSite is the small artifact registry used by MiaHub.
 
 It provides:
 
-- A password-protected web dashboard for uploading dependency jars.
+- A password-protected web dashboard for uploading install-plugin jars and dependency jars.
 - A GitHub Actions upload endpoint for released Mia plugin jars.
 - A public registry API for metadata.
-- Token-protected downloads for private dependency jars.
+- A public MiaHub catalog generated from uploaded install plugins.
+- Optional per-plugin install/update passwords.
 
 Runtime dependencies are intentionally minimal: Python 3.10+ standard library only.
 
@@ -16,14 +17,18 @@ Runtime dependencies are intentionally minimal: Python 3.10+ standard library on
 ```text
 GET  /
 GET  /api/registry
+GET  /api/catalog
 GET  /api/dependencies/<pluginName>
-GET  /api/download/mia/<module>/<version>/<artifact>
+GET  /api/download/mia/<pluginId>/<version>/<artifact>
 GET  /api/download/dependencies/<pluginName>/<version>/<artifact>
 POST /api/upload
 ```
 
 `POST /api/upload` requires `Authorization: Bearer <upload-token>`.
-Dependency lookups are keyed by normalized plugin name derived from `plugin.yml` or `paper-plugin.yml`, such as `MythicMobs` -> `mythicmobs`. Dependency downloads require `Authorization: Bearer <download-token>` unless the requester has a web login session.
+
+The web upload form only asks for a jar and whether it is an install plugin or dependency plugin. PlugSite reads `plugin.yml` or `paper-plugin.yml` to derive the plugin id, plugin name, version, hard dependencies, soft dependencies, restart requirement, artifact name, and SHA-256. If an uploaded id already exists, older or equal versions are not saved again; newer versions replace the catalog entry. Install-plugin uploads can set or change an optional password, which MiaHub passes with `/miah install|update <plugin> --password <password>`.
+
+Dependency lookups are keyed by normalized plugin name derived from `plugin.yml` or `paper-plugin.yml`, such as `MythicMobs` -> `mythicmobs`. Dependency downloads accept the public bearer token `xobby` unless the requester has a web login session.
 
 ## Deployment
 

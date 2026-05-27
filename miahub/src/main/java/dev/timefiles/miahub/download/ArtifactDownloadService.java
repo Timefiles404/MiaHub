@@ -23,6 +23,7 @@ import java.util.logging.Level;
 
 public final class ArtifactDownloadService {
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
+    private static final String PUBLIC_DEPENDENCY_TOKEN = "xobby";
 
     private final MiaHubPlugin plugin;
     private final GitHubReleaseService gitHub;
@@ -37,12 +38,21 @@ public final class ArtifactDownloadService {
         this.gitHub = gitHub;
     }
 
-    public Path downloadPlugin(CatalogEntry entry) throws IOException, InterruptedException {
+    public Path downloadPlugin(CatalogEntry entry, String password) throws IOException, InterruptedException {
         if (plugSiteEnabled() && plugin.getConfig().getBoolean("download-site.prefer", true)) {
             try {
-                return downloadPluginFromPlugSite(entry);
+                return downloadPluginFromPlugSite(entry, password);
             } catch (Exception exception) {
                 plugin.getLogger().log(Level.WARNING, "PlugSite download failed for " + entry.id() + ", falling back to GitHub", exception);
+                if (entry.passwordProtected) {
+                    if (exception instanceof IOException ioException) {
+                        throw ioException;
+                    }
+                    if (exception instanceof InterruptedException interruptedException) {
+                        throw interruptedException;
+                    }
+                    throw new IOException(exception);
+                }
             }
         }
 
@@ -107,13 +117,15 @@ public final class ArtifactDownloadService {
         return plugin.getConfig().getBoolean("download-site.enabled", true) && CatalogEntry.isPresent(baseUrl());
     }
 
-    private Path downloadPluginFromPlugSite(CatalogEntry entry) throws IOException, InterruptedException {
-        if (!CatalogEntry.isPresent(entry.version) || !CatalogEntry.isPresent(entry.asset)) {
-            throw new IOException("Catalog entry has no version or asset for PlugSite download.");
+    private Path downloadPluginFromPlugSite(CatalogEntry entry, String password) throws IOException, InterruptedException {
+        var url = CatalogEntry.isPresent(entry.downloadUrl)
+                ? entry.downloadUrl
+                : baseUrl() + "/api/download/mia/" + urlSegment(entry.id()) + "/" + urlSegment(entry.version) + "/" + urlSegment(entry.asset);
+        if (!CatalogEntry.isPresent(url) || (!CatalogEntry.isPresent(entry.downloadUrl) && (!CatalogEntry.isPresent(entry.version) || !CatalogEntry.isPresent(entry.asset)))) {
+            throw new IOException("Catalog entry has no PlugSite download URL.");
         }
-        var url = baseUrl() + "/api/download/mia/" + urlSegment(entry.id()) + "/" + urlSegment(entry.version) + "/" + urlSegment(entry.asset);
-        var target = stagingPath(entry.asset);
-        var response = httpClient.send(request(url).GET().build(), HttpResponse.BodyHandlers.ofFile(target));
+        var target = stagingPath(CatalogEntry.isPresent(entry.asset) ? entry.asset : entry.fileName());
+        var response = httpClient.send(request(url, password).GET().build(), HttpResponse.BodyHandlers.ofFile(target));
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             Files.deleteIfExists(target);
             throw new IOException("PlugSite download failed with HTTP " + response.statusCode() + ".");
@@ -122,12 +134,22 @@ public final class ArtifactDownloadService {
     }
 
     private HttpRequest.Builder request(String url) {
+        return request(url, "");
+    }
+
+    private HttpRequest.Builder request(String url, String pluginPassword) {
         var builder = HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofMinutes(2))
                 .header("User-Agent", "MiaHub/" + plugin.getPluginMeta().getVersion());
-        var token = plugin.getConfig().getString("download-site.token", "");
+        var token = plugin.getConfig().getString("download-site.token", PUBLIC_DEPENDENCY_TOKEN);
+        if (!CatalogEntry.isPresent(token)) {
+            token = PUBLIC_DEPENDENCY_TOKEN;
+        }
         if (CatalogEntry.isPresent(token)) {
             builder.header("Authorization", "Bearer " + token);
+        }
+        if (CatalogEntry.isPresent(pluginPassword)) {
+            builder.header("X-MiaHub-Plugin-Password", pluginPassword);
         }
         return builder;
     }

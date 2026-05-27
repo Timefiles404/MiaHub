@@ -39,7 +39,7 @@ MiaHub/
 Current module version keys:
 
 ```properties
-miahub.version=0.2.8
+miahub.version=0.2.9
 miaforge.version=0.2.6
 miaskillpool.version=0.2.6
 ```
@@ -127,11 +127,14 @@ Every managed plugin needs a catalog entry with these fields:
   "minecraft": "1.21.x",
   "java": 21,
   "restartRequired": false,
-  "dependencies": []
+  "dependencies": [],
+  "passwordProtected": false
 }
 ```
 
-MiaHub uses `version` for update detection, `fileName` for the installed jar name, `releaseTag + asset` for direct GitHub Release downloads, and `dependencies` for runtime prerequisite checks in `/miah list`, `install`, and `update`. Keep `id` lowercase and put external Paper plugin dependencies there by plugin name, for example `["MythicMobs"]`.
+MiaHub uses `version` for update detection, `fileName` for the installed jar name, `downloadUrl` or `releaseTag + asset` for downloads, `passwordProtected` to require `/miah install|update <plugin> --password <password>`, and `dependencies` for runtime prerequisite checks in `/miah list`, `install`, and `update`. Keep `id` lowercase and put external Paper plugin dependencies there by plugin name, for example `["MythicMobs"]`.
+
+MiaHub pulls the PlugSite catalog first (`https://plug.timefiles.online/api/catalog`) so web-uploaded install plugins can enter the normal install/update flow. The GitHub raw `catalog.json` is a fallback and remains the bundled catalog source for local builds.
 
 ## Documentation Boundary
 
@@ -149,7 +152,7 @@ When a module needs a third-party plugin jar to compile, declare plugin names in
 }
 ```
 
-CI must query PlugSite by plugin name, let PlugSite normalize from the jar's `plugin.yml` or `paper-plugin.yml`, and download the artifact to `../references/<pluginName>.jar`. Avoid hard-coding versioned jar names such as `MythicMobsPremium-5.12.0-SNAPSHOT.jar` in workflow code.
+CI must query PlugSite by plugin name, let PlugSite normalize from the jar's `plugin.yml` or `paper-plugin.yml`, and download the artifact to `../references/<pluginName>.jar`. Dependency downloads use the public bearer token `xobby`; do not require a private download-token secret. Avoid hard-coding versioned jar names such as `MythicMobsPremium-5.12.0-SNAPSHOT.jar` in workflow code.
 
 ## Release Workflow
 
@@ -185,7 +188,7 @@ For a module release, the assets should be only:
 SHA256SUMS.txt
 ```
 
-The release workflow also mirrors module jars to PlugSite (`https://plug.timefiles.online`) after a successful module tag release. MiaHub downloads from PlugSite first and falls back to GitHub Releases. Never commit PlugSite upload or download tokens; keep them in GitHub Secrets or server-side config only.
+The release workflow also mirrors module jars to PlugSite (`https://plug.timefiles.online`) after a successful module tag release. MiaHub downloads from PlugSite first and falls back to GitHub Releases. Never commit the PlugSite upload token; keep it in GitHub Secrets or server-side config. The dependency download token is intentionally public and fixed to `xobby`.
 
 ## Update Detection Test
 

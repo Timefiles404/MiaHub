@@ -54,7 +54,6 @@ jobs:
         env:
           RELEASE_MODULE: ${{ steps.release.outputs.module }}
           PLUG_SITE_URL: ${{ secrets.PLUG_SITE_URL }}
-          PLUG_SITE_DOWNLOAD_TOKEN: ${{ secrets.PLUG_SITE_DOWNLOAD_TOKEN }}
         run: |
           python3 <<'PY'
           import hashlib
@@ -73,10 +72,10 @@ jobs:
               print("No compile plugin dependencies declared.")
               raise SystemExit(0)
 
-          base_url = os.environ.get("PLUG_SITE_URL", "").rstrip("/")
-          token = os.environ.get("PLUG_SITE_DOWNLOAD_TOKEN", "")
-          if not base_url or not token:
-              raise SystemExit("PLUG_SITE_URL and PLUG_SITE_DOWNLOAD_TOKEN repository secrets are required for compile plugin dependencies.")
+          base_url = (os.environ.get("PLUG_SITE_URL") or "https://plug.timefiles.online").rstrip("/")
+          token = "xobby"
+          if not base_url:
+              raise SystemExit("PLUG_SITE_URL is required for compile plugin dependencies.")
 
           references = root.parent / "references"
           references.mkdir(parents=True, exist_ok=True)
@@ -214,8 +213,7 @@ jobs:
 
           curl --fail --silent --show-error --location --retry 3 \
             -H "Authorization: Bearer ${PLUG_SITE_UPLOAD_TOKEN}" \
-            -F "kind=mia" \
-            -F "module=${module}" \
+            -F "kind=plugin" \
             -F "version=${version}" \
             -F "releaseTag=${GITHUB_REF_NAME}" \
             -F "repository=${GITHUB_REPOSITORY}" \

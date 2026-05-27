@@ -2,6 +2,8 @@ package dev.timefiles.miahub.catalog;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import dev.timefiles.miahub.MiaHubPlugin;
 import dev.timefiles.miahub.util.OperationResult;
 
@@ -15,6 +17,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.logging.Level;
 
@@ -34,36 +39,31 @@ public final class CatalogService {
     }
 
     public OperationResult pull() {
-        var url = plugin.getConfig().getString("catalog-url", "");
-        if (url == null || url.isBlank()) {
+        var urls = catalogUrls();
+        if (urls.isEmpty()) {
             return OperationResult.fail("catalog-url 为空。");
         }
 
-        try {
-            var request = HttpRequest.newBuilder(URI.create(url))
-                    .timeout(Duration.ofSeconds(30))
-                    .header("User-Agent", "MiaHub/" + plugin.getPluginMeta().getVersion())
-                    .GET()
-                    .build();
+        var errors = new ArrayList<String>();
+        for (var url : urls) {
+            try {
+                var catalog = fetch(url);
+                var validation = validate(catalog);
+                if (!validation.success()) {
+                    errors.add(url + "：" + validation.message());
+                    continue;
+                }
 
-            var response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                return OperationResult.fail("插件列表请求失败，HTTP " + response.statusCode() + "。");
+                Files.writeString(cachePath, gson.toJson(catalog), StandardCharsets.UTF_8);
+                cachedCatalog = catalog;
+                return OperationResult.ok("已从 " + url + " 拉取 " + catalog.plugins.size() + " 个插件。");
+            } catch (Exception exception) {
+                plugin.getLogger().log(Level.WARNING, "Failed to pull MiaHub catalog from " + url, exception);
+                errors.add(url + "：" + exception.getMessage());
             }
-
-            var catalog = parse(response.body());
-            var validation = validate(catalog);
-            if (!validation.success()) {
-                return validation;
-            }
-
-            Files.writeString(cachePath, gson.toJson(catalog), StandardCharsets.UTF_8);
-            cachedCatalog = catalog;
-            return OperationResult.ok("已拉取 " + catalog.plugins.size() + " 个插件。");
-        } catch (Exception exception) {
-            plugin.getLogger().log(Level.WARNING, "Failed to pull MiaHub catalog", exception);
-            return OperationResult.fail("拉取插件列表失败：" + exception.getMessage());
         }
+
+        return OperationResult.fail("拉取插件列表失败：" + String.join("；", errors));
     }
 
     public PluginCatalog getCatalog() {
@@ -95,6 +95,46 @@ public final class CatalogService {
         return plugin.getConfig().getBoolean("manage-catalog-only", true);
     }
 
+    private PluginCatalog fetch(String url) throws IOException, InterruptedException {
+        var request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(30))
+                .header("User-Agent", "MiaHub/" + plugin.getPluginMeta().getVersion())
+                .GET()
+                .build();
+
+        var response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IOException("HTTP " + response.statusCode());
+        }
+        return parse(response.body());
+    }
+
+    private List<String> catalogUrls() {
+        var urls = new LinkedHashSet<String>();
+        if (plugin.getConfig().getBoolean("download-site.enabled", true)) {
+            var baseUrl = downloadSiteBaseUrl();
+            if (CatalogEntry.isPresent(baseUrl)) {
+                urls.add(baseUrl + "/api/catalog");
+            }
+        }
+
+        addUrl(urls, plugin.getConfig().getString("catalog-url", ""));
+        addUrl(urls, plugin.getConfig().getString("catalog-fallback-url", ""));
+        plugin.getConfig().getStringList("catalog-fallback-urls").forEach(url -> addUrl(urls, url));
+        return List.copyOf(urls);
+    }
+
+    private String downloadSiteBaseUrl() {
+        var value = plugin.getConfig().getString("download-site.base-url", "https://plug.timefiles.online");
+        return value == null ? "" : value.strip().replaceAll("/+$", "");
+    }
+
+    private void addUrl(LinkedHashSet<String> urls, String url) {
+        if (CatalogEntry.isPresent(url)) {
+            urls.add(url.strip());
+        }
+    }
+
     private PluginCatalog loadBundledCatalog() {
         try (var input = plugin.getResource("catalog.json")) {
             if (input == null) {
@@ -110,7 +150,21 @@ public final class CatalogService {
     }
 
     private PluginCatalog parse(String json) {
-        var catalog = gson.fromJson(json, PluginCatalog.class);
+        var root = JsonParser.parseString(json);
+        if (root instanceof JsonObject object && object.get("plugins") instanceof JsonObject pluginsObject) {
+            var catalog = new PluginCatalog();
+            catalog.schema = object.has("schema") ? object.get("schema").getAsInt() : 1;
+            catalog.generatedBy = object.has("generatedBy") ? object.get("generatedBy").getAsString() : "MiaHub PlugSite";
+            for (var element : pluginsObject.entrySet()) {
+                var entry = gson.fromJson(element.getValue(), CatalogEntry.class);
+                if (entry != null) {
+                    catalog.plugins.add(entry);
+                }
+            }
+            return catalog;
+        }
+
+        var catalog = gson.fromJson(root, PluginCatalog.class);
         return catalog == null ? new PluginCatalog() : catalog;
     }
 

@@ -69,6 +69,30 @@ def normalize_plugin_name(value):
     return normalized
 
 
+def version_parts(value):
+    text = str(value or "").strip()
+    parts = []
+    for part in re.findall(r"\d+|[A-Za-z]+", text):
+        if part.isdigit():
+            parts.append((1, int(part)))
+        else:
+            parts.append((0, part.lower()))
+    return parts or [(0, text.lower())]
+
+
+def compare_versions(left, right):
+    left_parts = version_parts(left)
+    right_parts = version_parts(right)
+    total = max(len(left_parts), len(right_parts))
+    for index in range(total):
+        left_part = left_parts[index] if index < len(left_parts) else (1, 0)
+        right_part = right_parts[index] if index < len(right_parts) else (1, 0)
+        if left_part == right_part:
+            continue
+        return 1 if left_part > right_part else -1
+    return 0
+
+
 def parse_scalar(value):
     value = value.strip()
     if not value:
@@ -313,12 +337,15 @@ class PlugStore:
             plugin_name = entry.get("pluginName") or entry.get("name") or key
             entry["pluginName"] = plugin_name
             entry["normalizedPluginName"] = normalize_plugin_name(plugin_name)
-            entry["id"] = safe_segment(entry.get("id") or key).lower()
+            entry["id"] = normalize_plugin_name(entry.get("id") or plugin_name or key)
             entry["version"] = str(entry.get("version") or entry.get("pluginVersion") or "latest")
             entry["pluginVersion"] = str(entry.get("pluginVersion") or entry["version"])
             entry.setdefault("dependencies", [])
             entry.setdefault("softDependencies", [])
             entry.setdefault("loadBefore", [])
+            if entry.get("passwordHash") and not entry.get("installPasswordHash"):
+                entry["installPasswordHash"] = entry.pop("passwordHash")
+            entry["passwordProtected"] = bool(entry.get("installPasswordHash") or entry.get("passwordProtected"))
             plugins[entry["id"]] = entry
 
         dependencies = {}
@@ -342,6 +369,56 @@ class PlugStore:
         registry["dependencies"] = dependencies
         return registry
 
+    def public_registry(self):
+        registry = self.load()
+        return {
+            "schema": registry.get("schema", 1),
+            "generatedBy": registry.get("generatedBy", "MiaHub PlugSite"),
+            "updatedAt": registry.get("updatedAt", now_iso()),
+            "plugins": {key: self.public_plugin_entry(entry) for key, entry in registry.get("plugins", {}).items()},
+            "dependencies": {key: self.public_dependency_entry(entry) for key, entry in registry.get("dependencies", {}).items()},
+        }
+
+    def catalog(self):
+        registry = self.load()
+        plugins = [self.catalog_entry(entry) for entry in registry.get("plugins", {}).values()]
+        plugins.sort(key=lambda item: item.get("id", ""))
+        return {
+            "schema": 1,
+            "generatedBy": "MiaHub PlugSite",
+            "updatedAt": registry.get("updatedAt", now_iso()),
+            "plugins": plugins,
+        }
+
+    def public_plugin_entry(self, entry):
+        public = {key: value for key, value in entry.items() if key not in {"installPasswordHash", "passwordHash"}}
+        public["passwordProtected"] = bool(entry.get("installPasswordHash") or entry.get("passwordProtected"))
+        return public
+
+    def public_dependency_entry(self, entry):
+        return {key: value for key, value in entry.items() if key not in {"installPasswordHash", "passwordHash"}}
+
+    def catalog_entry(self, entry):
+        public = self.public_plugin_entry(entry)
+        return {
+            "id": public.get("id") or normalize_plugin_name(public.get("pluginName", "")),
+            "name": public.get("name") or public.get("pluginName"),
+            "pluginName": public.get("pluginName"),
+            "repository": public.get("repository", ""),
+            "releaseTag": public.get("releaseTag", ""),
+            "asset": public.get("artifact", ""),
+            "fileName": public.get("fileName") or (public.get("pluginName", "Plugin") + ".jar"),
+            "version": public.get("version", ""),
+            "sha256": public.get("sha256", ""),
+            "minecraft": public.get("minecraft", "1.21.x"),
+            "java": int(public.get("java") or 21),
+            "restartRequired": bool(public.get("restartRequired")),
+            "dependencies": public.get("dependencies") or [],
+            "description": public.get("description", ""),
+            "downloadUrl": public.get("downloadUrl", ""),
+            "passwordProtected": bool(public.get("passwordProtected")),
+        }
+
     def save(self, registry):
         registry["updatedAt"] = now_iso()
         tmp = self.registry_path.with_suffix(".tmp")
@@ -359,37 +436,74 @@ class PlugStore:
         size = Path(temp_path).stat().st_size
         registry = self.load()
 
-        if kind == "mia":
-            module = safe_segment(fields.get("module") or metadata["pluginName"]).lower()
-            version = safe_segment(fields.get("version") or metadata.get("version") or "latest")
-            target_dir = self.artifacts / "mia" / module / version
+        normalized_kind = (kind or "dependency").lower()
+        if normalized_kind in {"mia", "plugin", "install", "install-plugin"}:
+            plugin_name = metadata["pluginName"]
+            plugin_id = normalize_plugin_name(plugin_name)
+            version = safe_segment(metadata.get("version") or fields.get("version") or "latest")
+            existing = registry.setdefault("plugins", {}).get(plugin_id)
+            password = fields.get("installPassword") or fields.get("password") or ""
+
+            if existing is not None:
+                comparison = compare_versions(version, existing.get("version", ""))
+                if comparison < 0:
+                    Path(temp_path).unlink(missing_ok=True)
+                    entry = self.public_plugin_entry(existing)
+                    entry["skipped"] = True
+                    entry["message"] = f"{plugin_name} 已有更新版本 {existing.get('version')}，本次 {version} 未保存。"
+                    return entry
+                if comparison == 0:
+                    password_updated = False
+                    if password:
+                        existing["installPasswordHash"] = hash_secret(password)
+                        existing["passwordProtected"] = True
+                        self.save(registry)
+                        password_updated = True
+                    Path(temp_path).unlink(missing_ok=True)
+                    entry = self.public_plugin_entry(existing)
+                    entry["skipped"] = True
+                    entry["message"] = f"{plugin_name} {version} 已存在，{'密码已更新，' if password_updated else ''}artifact 未重复保存。"
+                    return entry
+
+            target_dir = self.artifacts / "mia" / plugin_id / version
             target_dir.mkdir(parents=True, exist_ok=True)
             target = target_dir / artifact_name
             shutil.move(str(temp_path), target)
+            install_password_hash = hash_secret(password) if password else (existing or {}).get("installPasswordHash", "")
             entry = {
-                "id": module,
-                "pluginName": metadata["pluginName"],
-                "normalizedPluginName": normalize_plugin_name(metadata["pluginName"]),
+                "id": plugin_id,
+                "name": plugin_name,
+                "pluginName": plugin_name,
+                "normalizedPluginName": plugin_id,
                 "version": version,
                 "pluginVersion": metadata.get("version") or version,
-                "fileName": fields.get("fileName") or metadata["pluginName"] + ".jar",
+                "fileName": fields.get("fileName") or plugin_name + ".jar",
                 "artifact": artifact_name,
                 "releaseTag": fields.get("releaseTag") or "",
                 "repository": fields.get("repository") or "",
                 "sha256": digest,
                 "size": size,
-                "downloadUrl": f"{self.public_base_url}/api/download/mia/{urllib.parse.quote(module)}/{urllib.parse.quote(version)}/{urllib.parse.quote(artifact_name)}",
+                "downloadUrl": f"{self.public_base_url}/api/download/mia/{urllib.parse.quote(plugin_id)}/{urllib.parse.quote(version)}/{urllib.parse.quote(artifact_name)}",
                 "dependencies": metadata.get("dependencies") or [],
                 "softDependencies": metadata.get("softDependencies") or [],
                 "loadBefore": metadata.get("loadBefore") or [],
                 "restartRequired": bool(metadata.get("restartRequired")),
+                "installPasswordHash": install_password_hash,
+                "passwordProtected": bool(install_password_hash),
                 "uploadedAt": now_iso(),
             }
-            registry.setdefault("plugins", {})[module] = entry
-        elif kind == "dependency":
+            registry.setdefault("plugins", {})[plugin_id] = entry
+        elif normalized_kind == "dependency":
             plugin_name = metadata["pluginName"]
             key = normalize_plugin_name(plugin_name)
             version = safe_segment(metadata.get("version") or fields.get("version") or "latest")
+            existing = registry.setdefault("dependencies", {}).get(key)
+            if existing is not None and compare_versions(version, existing.get("version", "")) <= 0:
+                Path(temp_path).unlink(missing_ok=True)
+                entry = self.public_dependency_entry(existing)
+                entry["skipped"] = True
+                entry["message"] = f"{plugin_name} 已有版本 {existing.get('version')}，本次 {version} 未保存。"
+                return entry
             target_dir = self.artifacts / "dependencies" / safe_segment(plugin_name) / version
             target_dir.mkdir(parents=True, exist_ok=True)
             target = target_dir / artifact_name
@@ -413,14 +527,21 @@ class PlugStore:
             }
             registry.setdefault("dependencies", {})[key] = entry
         else:
-            raise ValueError("kind must be mia or dependency")
+            raise ValueError("kind must be plugin or dependency")
 
         self.save(registry)
-        return entry
+        public = self.public_plugin_entry(entry) if normalized_kind in {"mia", "plugin", "install", "install-plugin"} else self.public_dependency_entry(entry)
+        public["skipped"] = False
+        public["message"] = f"已保存 {metadata['pluginName']} {public.get('version')}。"
+        return public
 
     def find_dependency(self, plugin_name):
         registry = self.load()
         return registry.get("dependencies", {}).get(normalize_plugin_name(plugin_name))
+
+    def find_plugin(self, plugin_id):
+        registry = self.load()
+        return registry.get("plugins", {}).get(normalize_plugin_name(plugin_id))
 
     def artifact_path(self, kind, name, version, artifact):
         if kind == "mia":
@@ -433,7 +554,7 @@ class PlugHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         route = urllib.parse.urlparse(self.path)
-        if route.path == "/" or route.path == "/api/registry":
+        if route.path in {"/", "/api/registry", "/api/catalog"}:
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8" if route.path == "/" else "application/json; charset=utf-8")
             self.end_headers()
@@ -444,17 +565,19 @@ class PlugHandler(BaseHTTPRequestHandler):
         route = urllib.parse.urlparse(self.path)
         path = route.path
         if path == "/":
-            return self.dashboard() if self.current_user() else self.login_page()
+            return self.dashboard(route) if self.current_user() else self.login_page()
         if path == "/logout":
             return self.logout()
         if path == "/api/registry":
-            return self.json_response(self.store.load())
+            return self.json_response(self.store.public_registry())
+        if path == "/api/catalog":
+            return self.json_response(self.store.catalog())
         if path.startswith("/api/dependencies/"):
             name = urllib.parse.unquote(path.removeprefix("/api/dependencies/"))
             entry = self.store.find_dependency(name)
             if not entry:
                 return self.error_json(HTTPStatus.NOT_FOUND, "dependency not found")
-            return self.json_response(entry)
+            return self.json_response(self.store.public_dependency_entry(entry))
         if path.startswith("/api/download/mia/"):
             return self.download_artifact(path, "mia", protected=False)
         if path.startswith("/api/download/dependencies/"):
@@ -501,21 +624,36 @@ class PlugHandler(BaseHTTPRequestHandler):
             return ""
 
     def valid_token(self, key):
+        token = self.request_token()
+        encoded = self.config.get(key, "")
+        return bool(token and encoded and verify_secret(token, encoded))
+
+    def request_token(self):
         header = self.headers.get("Authorization", "")
         token = ""
         if header.lower().startswith("bearer "):
             token = header[7:].strip()
         if not token:
             token = self.headers.get("X-Plug-Token", "").strip()
-        encoded = self.config.get(key, "")
-        return bool(token and encoded and verify_secret(token, encoded))
+        return token
+
+    def valid_dependency_download(self):
+        public_token = self.config.get("publicDependencyToken", "xobby")
+        return self.valid_token("downloadTokenHash") or (public_token and hmac.compare_digest(self.request_token(), public_token))
+
+    def valid_plugin_password(self, entry):
+        encoded = entry.get("installPasswordHash", "")
+        if not encoded:
+            return True
+        password = self.headers.get("X-MiaHub-Plugin-Password", "").strip()
+        return bool(password and verify_secret(password, encoded))
 
     def login_page(self, error=""):
         body = f"""
         <main class="login">
           <form method="post" action="/login" class="panel">
             <h1>MiaHub Plug</h1>
-            <p>登录后上传依赖 jar，查看 Mia 插件镜像状态。</p>
+            <p>登录后上传插件 jar，查看安装插件与依赖插件状态。</p>
             {'<div class="error">' + html.escape(error) + '</div>' if error else ''}
             <label>账号<input name="username" autocomplete="username" required></label>
             <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
@@ -525,11 +663,16 @@ class PlugHandler(BaseHTTPRequestHandler):
         """
         return self.html_response("MiaHub Plug 登录", body)
 
-    def dashboard(self):
+    def dashboard(self, route=None):
         registry = self.store.load()
         plugins = sorted(registry.get("plugins", {}).values(), key=lambda item: item.get("id", ""))
         dependencies = sorted(registry.get("dependencies", {}).values(), key=lambda item: item.get("pluginName", "").lower())
-        plugin_rows = "\n".join(self.artifact_row(item, item.get("id", "")) for item in plugins) or "<tr><td colspan='6'>暂无 Mia 插件镜像。</td></tr>"
+        notice = ""
+        if route is not None:
+            notice_value = urllib.parse.parse_qs(route.query).get("notice", [""])[0]
+            if notice_value:
+                notice = f"<div class='notice'>{html.escape(notice_value)}</div>"
+        plugin_rows = "\n".join(self.artifact_row(item, item.get("id", ""), show_password=True) for item in plugins) or "<tr><td colspan='7'>暂无安装插件。</td></tr>"
         dependency_rows = "\n".join(self.artifact_row(item, item.get("pluginName", "")) for item in dependencies) or "<tr><td colspan='6'>暂无依赖插件。</td></tr>"
         body = f"""
         <header>
@@ -542,25 +685,24 @@ class PlugHandler(BaseHTTPRequestHandler):
         <section class="upload">
           <form method="post" action="/upload" enctype="multipart/form-data" class="panel">
             <h2>上传 jar</h2>
-            <div class="grid">
-              <label>类型
-                <select name="kind">
-                  <option value="dependency">依赖插件</option>
-                  <option value="mia">Mia 插件</option>
-                </select>
-              </label>
-              <label>Mia 模块 id<input name="module" placeholder="例如 miaskillpool"></label>
-              <label>版本<input name="version" placeholder="留空则读取 plugin.yml"></label>
-              <label>安装文件名<input name="fileName" placeholder="例如 MythicMobs.jar"></label>
-            </div>
+            {notice}
+            <label>类型
+              <select name="kind" id="kind">
+                <option value="plugin">安装插件</option>
+                <option value="dependency">依赖插件</option>
+              </select>
+            </label>
+            <label id="password-row">安装/更新密码
+              <input name="installPassword" type="password" autocomplete="new-password" placeholder="留空则公开；已有插件留空不修改">
+            </label>
             <input type="file" name="artifact" accept=".jar" required>
             <button type="submit">上传并解析</button>
           </form>
         </section>
         <section>
-          <h2>Mia 插件</h2>
+          <h2>安装插件</h2>
           <table>
-            <thead><tr><th>插件</th><th>版本</th><th>文件</th><th>硬依赖</th><th>SHA-256</th><th>时间</th></tr></thead>
+            <thead><tr><th>ID</th><th>版本</th><th>文件</th><th>硬依赖</th><th>凭据</th><th>SHA-256</th><th>时间</th></tr></thead>
             <tbody>{plugin_rows}</tbody>
           </table>
         </section>
@@ -571,20 +713,32 @@ class PlugHandler(BaseHTTPRequestHandler):
             <tbody>{dependency_rows}</tbody>
           </table>
         </section>
+        <script>
+        const kind = document.getElementById('kind');
+        const row = document.getElementById('password-row');
+        function syncPasswordRow() {{
+          row.style.display = kind.value === 'plugin' ? 'grid' : 'none';
+        }}
+        kind.addEventListener('change', syncPasswordRow);
+        syncPasswordRow();
+        </script>
         """
         return self.html_response("MiaHub Plug", body)
 
-    def artifact_row(self, item, name):
+    def artifact_row(self, item, name, show_password=False):
         dependencies = ", ".join(item.get("dependencies") or []) or "-"
         digest = item.get("sha256", "")
         digest_short = digest[:12] + "..." if len(digest) > 12 else digest
         link = html.escape(item.get("downloadUrl", "#"))
+        password = "需密码" if item.get("passwordProtected") else "公开"
+        password_cell = f"<td>{html.escape(password)}</td>" if show_password else ""
         return f"""
         <tr>
           <td>{html.escape(name)}</td>
           <td>{html.escape(item.get('version', '-'))}</td>
           <td><a href="{link}">{html.escape(item.get('artifact', '-'))}</a></td>
           <td>{html.escape(dependencies)}</td>
+          {password_cell}
           <td title="{html.escape(digest)}"><code>{html.escape(digest_short)}</code></td>
           <td>{html.escape(item.get('uploadedAt', '-'))}</td>
         </tr>
@@ -620,7 +774,7 @@ class PlugHandler(BaseHTTPRequestHandler):
         if file_item is None or not file_item.get("filename"):
             return self.error_json(HTTPStatus.BAD_REQUEST, "artifact file is required")
         kind = fields.get("kind", "dependency").lower()
-        metadata_fields = {name: fields.get(name, "") for name in ("module", "version", "fileName", "releaseTag", "repository")}
+        metadata_fields = {name: fields.get(name, "") for name in ("version", "fileName", "releaseTag", "repository", "installPassword", "password")}
         tmp = tempfile.NamedTemporaryFile(prefix="plug-upload-", suffix=".jar", delete=False)
         tmp_path = Path(tmp.name)
         try:
@@ -629,7 +783,7 @@ class PlugHandler(BaseHTTPRequestHandler):
             entry = self.store.register_artifact(kind, tmp_path, file_item["filename"], metadata_fields)
             if require_token:
                 return self.json_response({"ok": True, "artifact": entry})
-            return self.redirect("/")
+            return self.redirect("/?notice=" + urllib.parse.quote(entry.get("message", "上传完成。")))
         except Exception as exc:
             tmp_path.unlink(missing_ok=True)
             if require_token:
@@ -637,12 +791,16 @@ class PlugHandler(BaseHTTPRequestHandler):
             return self.html_response("上传失败", f"<main class='login'><section class='panel'><h1>上传失败</h1><p>{html.escape(str(exc))}</p><a href='/'>返回</a></section></main>", HTTPStatus.BAD_REQUEST)
 
     def download_artifact(self, path, kind, protected):
-        if protected and not (self.current_user() or self.valid_token("downloadTokenHash")):
+        if protected and not (self.current_user() or self.valid_dependency_download()):
             return self.error_json(HTTPStatus.UNAUTHORIZED, "download token required")
         prefix = "/api/download/mia/" if kind == "mia" else "/api/download/dependencies/"
         parts = [urllib.parse.unquote(part) for part in path.removeprefix(prefix).split("/", 2)]
         if len(parts) != 3:
             return self.not_found()
+        if kind == "mia":
+            entry = self.store.find_plugin(parts[0])
+            if entry and entry.get("passwordProtected") and not (self.current_user() or self.valid_plugin_password(entry)):
+                return self.error_json(HTTPStatus.UNAUTHORIZED, "plugin password required")
         artifact_path = self.store.artifact_path(kind, parts[0], parts[1], parts[2])
         if not artifact_path.is_file():
             return self.not_found()
@@ -667,6 +825,7 @@ class PlugHandler(BaseHTTPRequestHandler):
         form{display:grid;gap:14px}.upload{padding:0 40px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
         table{width:calc(100% - 80px);margin:0 40px 26px;border-collapse:collapse;background:white;border:1px solid #dfe5ef;border-radius:8px;overflow:hidden}
         th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #edf1f6;vertical-align:top}th{background:#eef3f8;color:#394457}code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.error{color:#b42318;background:#fff0ee;border:1px solid #ffd1cc;border-radius:6px;padding:8px 10px}
+        .notice{color:#067647;background:#ecfdf3;border:1px solid #abefc6;border-radius:6px;padding:8px 10px}
         @media(max-width:760px){header{padding:24px}.upload{padding:0 24px}.grid{grid-template-columns:1fr}table{width:calc(100% - 48px);margin-left:24px;margin-right:24px;display:block;overflow:auto}}
         """
         data = f"<!doctype html><meta charset='utf-8'><title>{html.escape(title)}</title><style>{css}</style>{body}".encode("utf-8")

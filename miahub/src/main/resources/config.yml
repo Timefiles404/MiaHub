@@ -1,5 +1,7 @@
-# Remote plugin catalog. Keep this URL under your control.
-catalog-url: "https://raw.githubusercontent.com/Timefiles404/MiaHub/main/catalog.json"
+# Remote plugin catalog. MiaHub pulls PlugSite first so web uploads can enter
+# the install/update flow; GitHub remains a read-only fallback.
+catalog-url: "https://plug.timefiles.online/api/catalog"
+catalog-fallback-url: "https://raw.githubusercontent.com/Timefiles404/MiaHub/main/catalog.json"
 
 # Only plugins listed in the catalog can be installed, updated, uninstalled,
 # enabled, or disabled by MiaHub.
@@ -14,8 +16,8 @@ download-site:
   enabled: true
   prefer: true
   base-url: "https://plug.timefiles.online"
-  # Optional bearer token. Required only for protected dependency artifacts.
-  token: ""
+  # Public bearer token used for dependency artifact downloads.
+  token: "xobby"
   # Keep false by default; admins can opt in with /miah install <plugin> --deps.
   auto-install-dependencies: false
 

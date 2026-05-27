@@ -19,6 +19,7 @@ public final class CatalogEntry {
     public boolean restartRequired;
     public String description;
     public String downloadUrl;
+    public boolean passwordProtected;
     public List<String> dependencies = new ArrayList<>();
 
     public String id() {
