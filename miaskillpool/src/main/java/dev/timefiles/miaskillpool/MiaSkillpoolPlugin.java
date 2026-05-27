@@ -4,6 +4,7 @@ import dev.timefiles.miaskillpool.api.MiaSkillpoolApi;
 import dev.timefiles.miaskillpool.command.MiaSkillpoolCommand;
 import dev.timefiles.miaskillpool.config.SkillRegistry;
 import dev.timefiles.miaskillpool.data.PlayerDataStore;
+import dev.timefiles.miaskillpool.gui.RandomSkillRollGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolGui;
 import dev.timefiles.miaskillpool.listener.PlayerSkillListener;
 import dev.timefiles.miaskillpool.runtime.MiaSkillpoolService;
@@ -20,6 +21,7 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
     private RuntimeState runtimeState;
     private SkillCastService castService;
     private SkillPoolGui gui;
+    private RandomSkillRollGui randomGui;
     private MiaSkillpoolService api;
 
     @Override
@@ -32,11 +34,12 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
         this.runtimeState = new RuntimeState(this, dataStore);
         this.castService = new SkillCastService(this, skillRegistry, dataStore, runtimeState);
         this.gui = new SkillPoolGui(this, skillRegistry, dataStore);
-        this.api = new MiaSkillpoolService(skillRegistry, dataStore, gui, castService);
+        this.randomGui = new RandomSkillRollGui(this, skillRegistry, dataStore);
+        this.api = new MiaSkillpoolService(skillRegistry, dataStore, gui, randomGui, castService);
 
         reloadSkillpool();
         registerCommands();
-        getServer().getPluginManager().registerEvents(new PlayerSkillListener(this, skillRegistry, dataStore, runtimeState, castService, gui), this);
+        getServer().getPluginManager().registerEvents(new PlayerSkillListener(this, skillRegistry, dataStore, runtimeState, castService, gui, randomGui), this);
         getServer().getServicesManager().register(MiaSkillpoolApi.class, api, this, ServicePriority.Normal);
         getServer().getScheduler().runTaskTimer(this, runtimeState::tick, 20L, 20L);
 
@@ -81,6 +84,10 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
         return gui;
     }
 
+    public RandomSkillRollGui randomGui() {
+        return randomGui;
+    }
+
     private void registerCommands() {
         var command = getCommand("mias");
         if (command == null) {
@@ -88,7 +95,7 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
             return;
         }
 
-        var executor = new MiaSkillpoolCommand(this, skillRegistry, dataStore, gui, runtimeState, api);
+        var executor = new MiaSkillpoolCommand(this, skillRegistry, dataStore, gui, randomGui, runtimeState, api);
         command.setExecutor(executor);
         command.setTabCompleter(executor);
     }

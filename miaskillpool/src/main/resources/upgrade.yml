@@ -1,0 +1,6 @@
+upgrade:
+  require-op: true
+  max-slot-level: 5
+  cost-reduction-per-level: 0.08
+  cooldown-reduction-per-level: 0.06
+  power-bonus-per-level: 0.10

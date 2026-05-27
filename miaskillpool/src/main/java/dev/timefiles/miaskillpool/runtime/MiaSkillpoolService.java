@@ -5,6 +5,7 @@ import dev.timefiles.miaskillpool.config.SkillDefinition;
 import dev.timefiles.miaskillpool.config.SkillRegistry;
 import dev.timefiles.miaskillpool.data.PlayerDataStore;
 import dev.timefiles.miaskillpool.data.PlayerSkillData;
+import dev.timefiles.miaskillpool.gui.RandomSkillRollGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolGui;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
@@ -17,12 +18,14 @@ public final class MiaSkillpoolService implements MiaSkillpoolApi {
     private final SkillRegistry skillRegistry;
     private final PlayerDataStore dataStore;
     private final SkillPoolGui gui;
+    private final RandomSkillRollGui randomGui;
     private final SkillCastService castService;
 
-    public MiaSkillpoolService(SkillRegistry skillRegistry, PlayerDataStore dataStore, SkillPoolGui gui, SkillCastService castService) {
+    public MiaSkillpoolService(SkillRegistry skillRegistry, PlayerDataStore dataStore, SkillPoolGui gui, RandomSkillRollGui randomGui, SkillCastService castService) {
         this.skillRegistry = skillRegistry;
         this.dataStore = dataStore;
         this.gui = gui;
+        this.randomGui = randomGui;
         this.castService = castService;
     }
 
@@ -47,6 +50,10 @@ public final class MiaSkillpoolService implements MiaSkillpoolApi {
 
     @Override
     public boolean rollRandomSkills(OfflinePlayer player) {
+        if (player instanceof Player onlinePlayer && onlinePlayer.isOnline()) {
+            return randomGui.openRoll(onlinePlayer);
+        }
+
         PlayerSkillData data = dataStore.get(player);
         List<String> learned = new ArrayList<>(data.learnedSkills().stream()
                 .filter(skillRegistry::contains)
@@ -61,13 +68,6 @@ public final class MiaSkillpoolService implements MiaSkillpoolApi {
         }
         dataStore.save(data);
         return true;
-    }
-
-    @Override
-    public void setRandomEnabled(OfflinePlayer player, boolean enabled) {
-        PlayerSkillData data = dataStore.get(player);
-        data.randomEnabled(enabled);
-        dataStore.save(data);
     }
 
     public SkillCastService castService() {

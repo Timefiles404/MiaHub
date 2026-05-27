@@ -6,6 +6,7 @@ import dev.timefiles.miaskillpool.config.SkillDefinition;
 import dev.timefiles.miaskillpool.config.SkillRegistry;
 import dev.timefiles.miaskillpool.data.PlayerDataStore;
 import dev.timefiles.miaskillpool.data.PlayerSkillData;
+import dev.timefiles.miaskillpool.gui.RandomSkillRollGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolGui;
 import dev.timefiles.miaskillpool.runtime.MiaSkillpoolService;
 import dev.timefiles.miaskillpool.runtime.RuntimeState;
@@ -31,14 +32,16 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
     private final SkillRegistry skillRegistry;
     private final PlayerDataStore dataStore;
     private final SkillPoolGui gui;
+    private final RandomSkillRollGui randomGui;
     private final RuntimeState runtimeState;
     private final MiaSkillpoolService api;
 
-    public MiaSkillpoolCommand(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, SkillPoolGui gui, RuntimeState runtimeState, MiaSkillpoolService api) {
+    public MiaSkillpoolCommand(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, SkillPoolGui gui, RandomSkillRollGui randomGui, RuntimeState runtimeState, MiaSkillpoolService api) {
         this.plugin = plugin;
         this.skillRegistry = skillRegistry;
         this.dataStore = dataStore;
         this.gui = gui;
+        this.randomGui = randomGui;
         this.runtimeState = runtimeState;
         this.api = api;
     }
@@ -91,7 +94,7 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
             return filter(Arrays.stream(ResourceMode.values()).map(ResourceMode::id).toList(), args[1]);
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("random")) {
-            return filter(List.of("roll", "enable", "disable"), args[2]);
+            return filter(List.of("roll"), args[2]);
         }
         return List.of();
     }
@@ -249,26 +252,22 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
             return true;
         }
         if (args.length < 3) {
-            sender.sendMessage(Texts.PREFIX + Texts.color("&7用法：/mias random <player> <roll|enable|disable>"));
+            sender.sendMessage(Texts.PREFIX + Texts.color("&7用法：/mias random <player> roll"));
             return true;
         }
 
-        OfflinePlayer target = Bukkit.getOfflinePlayer(args[1]);
-        switch (args[2].toLowerCase(Locale.ROOT)) {
-            case "roll" -> {
-                boolean rolled = api.rollRandomSkills(target);
-                sender.sendMessage(Texts.PREFIX + Texts.color(rolled ? "&a已随机装配技能。" : "&7目标没有可随机装配的已学技能。"));
-            }
-            case "enable" -> {
-                api.setRandomEnabled(target, true);
-                sender.sendMessage(Texts.PREFIX + Texts.color("&a已开启随机装配模式。"));
-            }
-            case "disable" -> {
-                api.setRandomEnabled(target, false);
-                sender.sendMessage(Texts.PREFIX + Texts.color("&7已关闭随机装配模式。"));
-            }
-            default -> sender.sendMessage(Texts.PREFIX + Texts.color("&7用法：/mias random <player> <roll|enable|disable>"));
+        if (!args[2].equalsIgnoreCase("roll")) {
+            sender.sendMessage(Texts.PREFIX + Texts.color("&7用法：/mias random <player> roll"));
+            return true;
         }
+        Player target = Bukkit.getPlayerExact(args[1]);
+        if (target == null) {
+            sender.sendMessage(Texts.PREFIX + Texts.color("&c玩家不在线，无法打开随机技能装配界面。"));
+            return true;
+        }
+
+        boolean opened = randomGui.openRoll(target);
+        sender.sendMessage(Texts.PREFIX + Texts.color(opened ? "&a已打开随机技能装配界面。" : "&7目标没有可随机装配的已学技能。"));
         return true;
     }
 
@@ -287,7 +286,7 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
         if (sender.hasPermission("miaskillpool.admin")) {
             sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " learn <player> <skillId>"));
             sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " givebook <player> <skillId> [amount]"));
-            sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " random <player> <roll|enable|disable>"));
+            sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " random <player> roll"));
             sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " mana addmax <player> <amount>"));
         }
     }

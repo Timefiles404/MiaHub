@@ -18,7 +18,6 @@ public final class PlayerSkillData {
     private final int[] slotLevels = new int[SLOT_COUNT];
     private ResourceMode resourceMode = ResourceMode.MANA;
     private double maxManaBonus = 0.0;
-    private boolean randomEnabled = false;
 
     public PlayerSkillData(UUID uuid) {
         this.uuid = uuid;
@@ -90,21 +89,12 @@ public final class PlayerSkillData {
         maxManaBonus = Math.max(0.0, maxManaBonus + amount);
     }
 
-    public boolean randomEnabled() {
-        return randomEnabled;
-    }
-
-    public void randomEnabled(boolean randomEnabled) {
-        this.randomEnabled = randomEnabled;
-    }
-
     public void saveTo(YamlConfiguration yaml) {
         yaml.set("learned", new ArrayList<>(learnedSkills));
         yaml.set("equipped", equippedList());
         yaml.set("slot-levels", slotLevelList());
         yaml.set("resource-mode", resourceMode.id());
         yaml.set("max-mana-bonus", maxManaBonus);
-        yaml.set("random-enabled", randomEnabled);
     }
 
     public static PlayerSkillData load(UUID uuid, YamlConfiguration yaml) {
@@ -124,7 +114,6 @@ public final class PlayerSkillData {
 
         ResourceMode.parse(yaml.getString("resource-mode")).ifPresent(data::resourceMode);
         data.maxManaBonus = Math.max(0.0, yaml.getDouble("max-mana-bonus", 0.0));
-        data.randomEnabled = yaml.getBoolean("random-enabled", false);
         return data;
     }
 

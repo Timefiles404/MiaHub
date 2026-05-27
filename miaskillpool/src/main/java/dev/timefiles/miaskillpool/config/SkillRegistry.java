@@ -4,7 +4,10 @@ import dev.timefiles.miaskillpool.MiaSkillpoolPlugin;
 import dev.timefiles.miaskillpool.util.Texts;
 import org.bukkit.Material;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.configuration.file.YamlConfiguration;
 
+import java.io.File;
 import java.security.SecureRandom;
 import java.util.Collection;
 import java.util.EnumMap;
@@ -34,6 +37,9 @@ public final class SkillRegistry {
     private double rageGainOnDealDamage = 8.0;
     private double rageGainOnTakeDamage = 5.0;
     private long combatMillis = 8000L;
+    private String randomRollTitle = Texts.color("&5随机技能装配");
+    private int randomRollAnimationTicks = 40;
+    private int randomRollAnimationIntervalTicks = 4;
 
     public SkillRegistry(MiaSkillpoolPlugin plugin) {
         this.plugin = plugin;
@@ -41,9 +47,13 @@ public final class SkillRegistry {
 
     public void reload() {
         plugin.saveDefaultConfig();
+        saveDefaultResource("skills.yml");
+        saveDefaultResource("upgrade.yml");
         plugin.reloadConfig();
-        loadSettings();
-        loadSkills();
+        YamlConfiguration skillsConfig = YamlConfiguration.loadConfiguration(new File(plugin.getDataFolder(), "skills.yml"));
+        YamlConfiguration upgradeConfig = YamlConfiguration.loadConfiguration(new File(plugin.getDataFolder(), "upgrade.yml"));
+        loadSettings(upgradeConfig);
+        loadSkills(skillsConfig);
     }
 
     public Optional<SkillDefinition> get(String id) {
@@ -114,6 +124,18 @@ public final class SkillRegistry {
         return random;
     }
 
+    public String randomRollTitle() {
+        return randomRollTitle;
+    }
+
+    public int randomRollAnimationTicks() {
+        return randomRollAnimationTicks;
+    }
+
+    public int randomRollAnimationIntervalTicks() {
+        return randomRollAnimationIntervalTicks;
+    }
+
     public ModeTuning tuning(ResourceMode mode) {
         return modeTunings.getOrDefault(mode, ModeTuning.DEFAULT);
     }
@@ -130,15 +152,18 @@ public final class SkillRegistry {
         return Math.max(0.1, 1.0 + (Math.max(1, level) - 1) * powerBonusPerLevel);
     }
 
-    private void loadSettings() {
+    private void loadSettings(YamlConfiguration upgradeConfig) {
         guiTitle = Texts.color(plugin.getConfig().getString("settings.gui-title", "&3技能池"));
         slotCount = clamp(plugin.getConfig().getInt("settings.slot-count", 5), 1, 5);
         actionbarEnabled = plugin.getConfig().getBoolean("settings.actionbar", true);
-        upgradeRequiresOp = plugin.getConfig().getBoolean("settings.upgrade.require-op", true);
-        maxSlotLevel = Math.max(1, plugin.getConfig().getInt("settings.upgrade.max-slot-level", 5));
-        costReductionPerLevel = plugin.getConfig().getDouble("settings.upgrade.cost-reduction-per-level", 0.08);
-        cooldownReductionPerLevel = plugin.getConfig().getDouble("settings.upgrade.cooldown-reduction-per-level", 0.06);
-        powerBonusPerLevel = plugin.getConfig().getDouble("settings.upgrade.power-bonus-per-level", 0.10);
+        upgradeRequiresOp = upgradeBoolean(upgradeConfig, "upgrade.require-op", "settings.upgrade.require-op", true);
+        maxSlotLevel = Math.max(1, upgradeInt(upgradeConfig, "upgrade.max-slot-level", "settings.upgrade.max-slot-level", 5));
+        costReductionPerLevel = upgradeDouble(upgradeConfig, "upgrade.cost-reduction-per-level", "settings.upgrade.cost-reduction-per-level", 0.08);
+        cooldownReductionPerLevel = upgradeDouble(upgradeConfig, "upgrade.cooldown-reduction-per-level", "settings.upgrade.cooldown-reduction-per-level", 0.06);
+        powerBonusPerLevel = upgradeDouble(upgradeConfig, "upgrade.power-bonus-per-level", "settings.upgrade.power-bonus-per-level", 0.10);
+        randomRollTitle = Texts.color(plugin.getConfig().getString("settings.random-roll.title", "&5随机技能装配"));
+        randomRollAnimationTicks = Math.max(0, plugin.getConfig().getInt("settings.random-roll.animation-ticks", 40));
+        randomRollAnimationIntervalTicks = Math.max(1, plugin.getConfig().getInt("settings.random-roll.animation-interval-ticks", 4));
         baseMaxMana = Math.max(1.0, plugin.getConfig().getDouble("settings.mana.base-max", 100.0));
         manaRegenPerSecond = Math.max(0.0, plugin.getConfig().getDouble("settings.mana.regen-per-second", 2.0));
         maxRage = Math.max(1.0, plugin.getConfig().getDouble("settings.rage.max", 100.0));
@@ -159,9 +184,14 @@ public final class SkillRegistry {
         }
     }
 
-    private void loadSkills() {
+    private void loadSkills(YamlConfiguration skillsConfig) {
         skills.clear();
-        ConfigurationSection section = plugin.getConfig().getConfigurationSection("skills");
+        ConfigurationSection section = skillsConfig.getConfigurationSection("skills");
+        FileConfiguration source = skillsConfig;
+        if (section == null) {
+            section = plugin.getConfig().getConfigurationSection("skills");
+            source = plugin.getConfig();
+        }
         if (section == null) {
             plugin.getLogger().warning("No skills configured under skills.");
             return;
@@ -170,28 +200,47 @@ public final class SkillRegistry {
         for (String rawId : section.getKeys(false)) {
             String id = normalizeId(rawId);
             String path = "skills." + rawId;
-            String mythicSkill = plugin.getConfig().getString(path + ".mythic-skill", "");
+            String mythicSkill = source.getString(path + ".mythic-skill", "");
             if (mythicSkill.isBlank()) {
                 plugin.getLogger().warning("Skipping skill " + rawId + " because mythic-skill is empty.");
                 continue;
             }
 
-            Material icon = parseMaterial(plugin.getConfig().getString(path + ".icon", "BOOK"), Material.BOOK);
-            Material bookMaterial = parseMaterial(plugin.getConfig().getString(path + ".book.material", "BOOK"), Material.BOOK);
-            List<String> lore = plugin.getConfig().getStringList(path + ".book.lore");
+            Material icon = parseMaterial(source.getString(path + ".icon", "BOOK"), Material.BOOK);
+            Material bookMaterial = parseMaterial(source.getString(path + ".book.material", "BOOK"), Material.BOOK);
+            List<String> lore = source.getStringList(path + ".book.lore");
             skills.put(id, new SkillDefinition(
                     id,
-                    Texts.color(plugin.getConfig().getString(path + ".display-name", rawId)),
+                    Texts.color(source.getString(path + ".display-name", rawId)),
                     icon,
                     mythicSkill,
-                    Math.max(0.0, plugin.getConfig().getDouble(path + ".base-cost", 0.0)),
-                    Math.max(0.0, plugin.getConfig().getDouble(path + ".base-cooldown-seconds", 0.0)),
-                    (float) plugin.getConfig().getDouble(path + ".base-power", 1.0),
+                    Math.max(0.0, source.getDouble(path + ".base-cost", 0.0)),
+                    Math.max(0.0, source.getDouble(path + ".base-cooldown-seconds", 0.0)),
+                    (float) source.getDouble(path + ".base-power", 1.0),
                     bookMaterial,
-                    Texts.color(plugin.getConfig().getString(path + ".book.name", "&f技能书：" + rawId)),
+                    Texts.color(source.getString(path + ".book.name", "&f技能书：" + rawId)),
                     Texts.color(lore)
             ));
         }
+    }
+
+    private void saveDefaultResource(String name) {
+        File file = new File(plugin.getDataFolder(), name);
+        if (!file.exists()) {
+            plugin.saveResource(name, false);
+        }
+    }
+
+    private boolean upgradeBoolean(YamlConfiguration upgradeConfig, String path, String legacyPath, boolean fallback) {
+        return upgradeConfig.contains(path) ? upgradeConfig.getBoolean(path, fallback) : plugin.getConfig().getBoolean(legacyPath, fallback);
+    }
+
+    private int upgradeInt(YamlConfiguration upgradeConfig, String path, String legacyPath, int fallback) {
+        return upgradeConfig.contains(path) ? upgradeConfig.getInt(path, fallback) : plugin.getConfig().getInt(legacyPath, fallback);
+    }
+
+    private double upgradeDouble(YamlConfiguration upgradeConfig, String path, String legacyPath, double fallback) {
+        return upgradeConfig.contains(path) ? upgradeConfig.getDouble(path, fallback) : plugin.getConfig().getDouble(legacyPath, fallback);
     }
 
     private Material parseMaterial(String input, Material fallback) {

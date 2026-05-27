@@ -9,6 +9,4 @@ public interface MiaSkillpoolApi {
     boolean learnSkill(OfflinePlayer player, String skillId);
 
     boolean rollRandomSkills(OfflinePlayer player);
-
-    void setRandomEnabled(OfflinePlayer player, boolean enabled);
 }

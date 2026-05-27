@@ -16,7 +16,7 @@
 <body>
 <main>
   <h1>MiaSkillpool</h1>
-  <p>MiaSkillpool 是依赖 MythicMobs 的技能池插件，提供技能学习、技能池 GUI、五个装备槽、槽位升级、随机装配和三种释放资源模式。</p>
+  <p>MiaSkillpool 是依赖 MythicMobs 的技能池插件，提供技能学习、技能池 GUI、五个装备槽、槽位升级、随机抽取装配和三种释放资源模式。</p>
 
   <section>
     <h2>前置依赖</h2>
@@ -36,9 +36,14 @@
     <h2>管理命令</h2>
     <pre>/mias learn &lt;玩家&gt; &lt;skillId&gt;
 /mias givebook &lt;玩家&gt; &lt;skillId&gt; [数量]
-/mias random &lt;玩家&gt; &lt;roll|enable|disable&gt;
+/mias random &lt;玩家&gt; roll
 /mias mana addmax &lt;玩家&gt; &lt;数值&gt;
 /mias reload</pre>
+  </section>
+
+  <section>
+    <h2>随机装配</h2>
+    <p><code>/mias random &lt;玩家&gt; roll</code> 会为在线玩家打开随机技能装配界面。上方两行显示 14 个随机候选技能，候选可以重复；动画结束后点击上方技能放入下方五个槽位，点击下方槽位可归还。选满五个后界面自动关闭并立即写入玩家装备槽。</p>
   </section>
 
   <section>
@@ -61,6 +66,8 @@
   <section>
     <h2>配置文件</h2>
     <pre>plugins/MiaSkillpool/config.yml
+plugins/MiaSkillpool/skills.yml
+plugins/MiaSkillpool/upgrade.yml
 plugins/MiaSkillpool/players/&lt;uuid&gt;.yml
 plugins/MiaSkillpool/wiki.html</pre>
   </section>

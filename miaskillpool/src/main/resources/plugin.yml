@@ -18,7 +18,7 @@ permissions:
     description: 允许重载 MiaSkillpool。
     default: op
   miaskillpool.admin:
-    description: 允许管理 MiaSkillpool 玩家技能、随机装配和法力上限。
+    description: 允许管理 MiaSkillpool 玩家技能、随机装配界面和法力上限。
     default: op
   miaskillpool.upgrade:
     description: 允许升级自己的技能槽位。

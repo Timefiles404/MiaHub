@@ -1,0 +1,40 @@
+skills:
+  firebolt:
+    display-name: "&c火焰箭"
+    icon: BLAZE_POWDER
+    mythic-skill: Firebolt
+    base-cost: 20.0
+    base-cooldown-seconds: 5.0
+    base-power: 1.0
+    book:
+      material: BOOK
+      name: "&6技能书：火焰箭"
+      lore:
+        - "&7右键学习技能。"
+        - "&8技能 ID: firebolt"
+  frostnova:
+    display-name: "&b冰霜新星"
+    icon: SNOWBALL
+    mythic-skill: FrostNova
+    base-cost: 25.0
+    base-cooldown-seconds: 8.0
+    base-power: 1.0
+    book:
+      material: BOOK
+      name: "&b技能书：冰霜新星"
+      lore:
+        - "&7右键学习技能。"
+        - "&8技能 ID: frostnova"
+  thunderstrike:
+    display-name: "&e雷击"
+    icon: LIGHTNING_ROD
+    mythic-skill: ThunderStrike
+    base-cost: 35.0
+    base-cooldown-seconds: 10.0
+    base-power: 1.15
+    book:
+      material: BOOK
+      name: "&e技能书：雷击"
+      lore:
+        - "&7右键学习技能。"
+        - "&8技能 ID: thunderstrike"

@@ -5,6 +5,7 @@ import dev.timefiles.miaskillpool.config.SkillDefinition;
 import dev.timefiles.miaskillpool.config.SkillRegistry;
 import dev.timefiles.miaskillpool.data.PlayerDataStore;
 import dev.timefiles.miaskillpool.data.PlayerSkillData;
+import dev.timefiles.miaskillpool.gui.RandomSkillRollGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolHolder;
 import dev.timefiles.miaskillpool.runtime.RuntimeState;
@@ -18,6 +19,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -33,19 +35,22 @@ public final class PlayerSkillListener implements Listener {
     private final RuntimeState runtimeState;
     private final SkillCastService castService;
     private final SkillPoolGui gui;
+    private final RandomSkillRollGui randomGui;
 
-    public PlayerSkillListener(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, RuntimeState runtimeState, SkillCastService castService, SkillPoolGui gui) {
+    public PlayerSkillListener(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, RuntimeState runtimeState, SkillCastService castService, SkillPoolGui gui, RandomSkillRollGui randomGui) {
         this.plugin = plugin;
         this.skillRegistry = skillRegistry;
         this.dataStore = dataStore;
         this.runtimeState = runtimeState;
         this.castService = castService;
         this.gui = gui;
+        this.randomGui = randomGui;
     }
 
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         gui.handleClick(event);
+        randomGui.handleClick(event);
     }
 
     @EventHandler
@@ -53,6 +58,12 @@ public final class PlayerSkillListener implements Listener {
         if (event.getView().getTopInventory().getHolder() instanceof SkillPoolHolder) {
             event.setCancelled(true);
         }
+        randomGui.handleDrag(event);
+    }
+
+    @EventHandler
+    public void onInventoryClose(InventoryCloseEvent event) {
+        randomGui.handleClose(event);
     }
 
     @EventHandler
