@@ -16,7 +16,7 @@ Use this skill when working in the `Timefiles404/MiaHub` monorepo. The repositor
 - Use the root `catalog.json` as the only catalog file. `miahub/build.gradle.kts` packages this file into the MiaHub jar.
 - Use module tags for new releases: `<module>-v<version>`, for example `miaforge-v0.2.5`.
 - Avoid legacy `v*` tags unless the user explicitly wants one release containing every module.
-- MiaHub protects itself at runtime. Updating MiaHub means replacing `MiaHub.jar` and restarting the server.
+- MiaHub protects install/disable/uninstall paths for itself at runtime. Updating MiaHub now uses `/miah update miahub`, which releases the bundled `MiaHubSelfUpdater` helper, unloads MiaHub, replaces `MiaHub.jar`, hot-loads the new jar, and lets the new MiaHub remove the helper. If helper hot-load fails, fall back to backup/restart recovery.
 - Treat user-visible plugin updates as releasable by default. Unless the user explicitly asks to leave changes local, every code/config/catalog change that should be installable or detectable by MiaHub must include the module version bump, root `catalog.json` update, local build, jar metadata inspection, commit, module tag, push, GitHub Actions watch, and GitHub Release asset confirmation in the same workflow.
 - If the user says "update", "修改", "实现", "修复", or asks whether MiaHub can detect an update, assume a patch release is required for the touched module unless they explicitly say "do not release", "local only", or provide a different version.
 
@@ -31,6 +31,7 @@ MiaHub/
 ├─ settings.gradle.kts
 ├─ build.gradle.kts
 ├─ miahub/
+├─ miahub-self-updater/
 ├─ miaforge/
 ├─ miaskillpool/
 └─ plugsite/
@@ -39,7 +40,8 @@ MiaHub/
 Current module version keys:
 
 ```properties
-miahub.version=0.2.10
+miahub.version=0.2.11
+miahub-self-updater.version=0.2.11
 miaforge.version=0.2.6
 miaskillpool.version=0.2.7
 ```

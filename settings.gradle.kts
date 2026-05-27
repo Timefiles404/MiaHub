@@ -16,5 +16,6 @@ dependencyResolutionManagement {
 rootProject.name = "MiaHub"
 
 include("miahub")
+include("miahub-self-updater")
 include("miaforge")
 include("miaskillpool")

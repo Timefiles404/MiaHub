@@ -2,6 +2,8 @@ dependencies {
     implementation("com.google.code.gson:gson:2.14.0")
 }
 
+val selfUpdaterJar = project(":miahub-self-updater").tasks.named<Jar>("jar")
+
 tasks.jar {
     archiveBaseName.set("MiaHub")
 
@@ -13,5 +15,10 @@ tasks.jar {
 }
 
 tasks.processResources {
+    dependsOn(selfUpdaterJar)
     from(rootProject.file("catalog.json"))
+    from(selfUpdaterJar.flatMap { it.archiveFile }) {
+        into("self-updater")
+        rename { "MiaHubSelfUpdater.jar" }
+    }
 }

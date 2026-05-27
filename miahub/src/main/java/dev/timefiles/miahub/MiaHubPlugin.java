@@ -6,6 +6,7 @@ import dev.timefiles.miahub.download.ArtifactDownloadService;
 import dev.timefiles.miahub.github.GitHubReleaseService;
 import dev.timefiles.miahub.plugin.MiaPluginInstaller;
 import dev.timefiles.miahub.plugin.PluginLifecycleService;
+import dev.timefiles.miahub.selfupdate.SelfUpdateService;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.nio.file.Path;
@@ -15,12 +16,15 @@ public final class MiaHubPlugin extends JavaPlugin {
     private GitHubReleaseService gitHubReleaseService;
     private ArtifactDownloadService downloadService;
     private PluginLifecycleService lifecycleService;
+    private SelfUpdateService selfUpdateService;
     private MiaPluginInstaller installer;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
-        if (!getConfig().isSet("download-site.base-url") || !getConfig().isSet("dangerous-manage-unlisted-plugins")) {
+        if (!getConfig().isSet("download-site.base-url")
+                || !getConfig().isSet("dangerous-manage-unlisted-plugins")
+                || !getConfig().isSet("self-update.enabled")) {
             getConfig().options().copyDefaults(true);
             saveConfig();
         }
@@ -30,7 +34,8 @@ public final class MiaHubPlugin extends JavaPlugin {
         gitHubReleaseService = new GitHubReleaseService(this);
         downloadService = new ArtifactDownloadService(this, gitHubReleaseService);
         lifecycleService = new PluginLifecycleService(this);
-        installer = new MiaPluginInstaller(this, catalogService, downloadService, lifecycleService);
+        selfUpdateService = new SelfUpdateService(this, lifecycleService);
+        installer = new MiaPluginInstaller(this, catalogService, downloadService, lifecycleService, selfUpdateService);
 
         var command = getCommand("miah");
         if (command != null) {
@@ -39,6 +44,7 @@ public final class MiaHubPlugin extends JavaPlugin {
             command.setTabCompleter(executor);
         }
 
+        selfUpdateService.scheduleCleanup();
         getLogger().info("MiaHub is ready. Use /miah pull to refresh the plugin catalog.");
     }
 
@@ -60,11 +66,15 @@ public final class MiaHubPlugin extends JavaPlugin {
             getLogger().warning("Could not create MiaHub data directory.");
         }
 
-        for (var child : new String[]{"downloads", "staging", "backups", "trash"}) {
-            var dir = getDataFolder().toPath().resolve(child).toFile();
-            if (!dir.exists() && !dir.mkdirs()) {
-                getLogger().warning("Could not create " + dir.getPath());
-            }
+        for (var child : new String[]{"downloads", "staging", "backups", "trash", "self-update"}) {
+            createDataDirectory(child);
+        }
+    }
+
+    private void createDataDirectory(String child) {
+        var dir = getDataFolder().toPath().resolve(child).toFile();
+        if (!dir.exists() && !dir.mkdirs()) {
+            getLogger().warning("Could not create " + dir.getPath());
         }
     }
 }

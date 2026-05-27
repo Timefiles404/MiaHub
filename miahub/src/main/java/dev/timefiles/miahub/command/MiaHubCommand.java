@@ -231,7 +231,6 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         return switch (subcommand.toLowerCase(Locale.ROOT)) {
             case "install" -> installCandidates();
             case "update" -> catalogService.getCatalog().sortedPlugins().stream()
-                    .filter(entry -> !entry.isSelf())
                     .filter(this::isInstalled)
                     .filter(lifecycle::hasUpdate)
                     .map(CatalogEntry::id)
@@ -352,7 +351,7 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
             return "前置缺失";
         }
         if (hasUpdate) {
-            return entry.isSelf() ? "待手动更新" : "待更新";
+            return entry.isSelf() ? "待自更新" : "待更新";
         }
         if (loaded) {
             return "已加载";

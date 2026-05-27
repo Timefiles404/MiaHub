@@ -5,6 +5,7 @@ import dev.timefiles.miahub.catalog.CatalogEntry;
 import dev.timefiles.miahub.catalog.CatalogService;
 import dev.timefiles.miahub.download.ArtifactDownloadService;
 import dev.timefiles.miahub.download.DependencyArtifact;
+import dev.timefiles.miahub.selfupdate.SelfUpdateService;
 import dev.timefiles.miahub.util.Hashing;
 import dev.timefiles.miahub.util.JarFiles;
 import dev.timefiles.miahub.util.OperationResult;
@@ -27,12 +28,14 @@ public final class MiaPluginInstaller {
     private final CatalogService catalogService;
     private final ArtifactDownloadService downloads;
     private final PluginLifecycleService lifecycle;
+    private final SelfUpdateService selfUpdates;
 
-    public MiaPluginInstaller(MiaHubPlugin plugin, CatalogService catalogService, ArtifactDownloadService downloads, PluginLifecycleService lifecycle) {
+    public MiaPluginInstaller(MiaHubPlugin plugin, CatalogService catalogService, ArtifactDownloadService downloads, PluginLifecycleService lifecycle, SelfUpdateService selfUpdates) {
         this.plugin = plugin;
         this.catalogService = catalogService;
         this.downloads = downloads;
         this.lifecycle = lifecycle;
+        this.selfUpdates = selfUpdates;
     }
 
     public OperationResult install(String query) {
@@ -49,7 +52,7 @@ public final class MiaPluginInstaller {
             return installUnlistedLocal(query);
         }
         if (lifecycle.isProtectedSelf(entry)) {
-            return OperationResult.fail("MiaHub 不能在运行时安装或重载自己，请手动替换 jar 后重启服务器。");
+            return OperationResult.fail("MiaHub 已经在运行；请使用 /miah update miahub 执行自更新。");
         }
         if (lifecycle.isLoaded(entry.pluginName()) || lifecycle.findPluginJar(entry).isPresent()) {
             return OperationResult.fail(entry.pluginName() + " 已经安装，请使用 /miah update " + entry.id() + "。");
@@ -90,7 +93,7 @@ public final class MiaPluginInstaller {
             return OperationResult.fail("未找到可安装的本地非 catalog 插件：" + query + "。请确认 jar 已放入 plugins/ 且当前未加载。");
         }
         if (lifecycle.isProtectedSelf(entry)) {
-            return OperationResult.fail("MiaHub 不能在运行时安装或重载自己，请手动替换 jar 后重启服务器。");
+            return OperationResult.fail("MiaHub 已经在运行；请使用 /miah update miahub 执行自更新。");
         }
 
         var jar = lifecycle.findPluginJar(entry).orElse(plugin.pluginsDirectory().resolve(entry.fileName()));
@@ -114,8 +117,11 @@ public final class MiaPluginInstaller {
         if (entry == null) {
             return OperationResult.fail("未知 Mia 插件：" + query + "。请先执行 /miah pull。");
         }
+        if (entry.isSelf()) {
+            return updateSelf(entry, autoDependencies, password);
+        }
         if (lifecycle.isProtectedSelf(entry)) {
-            return OperationResult.fail("MiaHub 不能通过自己更新自己，请手动替换 MiaHub.jar 后重启服务器。");
+            return OperationResult.fail("MiaHub 不能通过普通更新流程操作自己。");
         }
         if (!lifecycle.isLoaded(entry.pluginName()) && lifecycle.findPluginJar(entry).isEmpty()) {
             return OperationResult.fail(entry.pluginName() + " 尚未安装，请使用 /miah install " + entry.id() + "。");
@@ -165,6 +171,32 @@ public final class MiaPluginInstaller {
         } catch (Exception exception) {
             plugin.getLogger().log(Level.WARNING, "Failed to update " + query, exception);
             return OperationResult.fail("更新失败：" + exception.getMessage());
+        }
+    }
+
+    private OperationResult updateSelf(CatalogEntry entry, boolean autoDependencies, String password) {
+        if (CatalogEntry.isPresent(entry.version)) {
+            var installedVersion = lifecycle.installedVersion(entry).orElse(null);
+            if (installedVersion != null && versionsMatch(installedVersion, entry.version)) {
+                return OperationResult.ok(entry.pluginName() + " 已经是最新版 " + entry.version + "。");
+            }
+        }
+        if (entry.passwordProtected && !CatalogEntry.isPresent(password)) {
+            return OperationResult.fail(entry.displayName() + " 需要下载密码，请使用 --password <密码>。");
+        }
+
+        try {
+            var dependencies = ensureDependencies(entry, autoDependencies);
+            if (!dependencies.success()) {
+                return dependencies;
+            }
+
+            var staged = download(entry, password);
+            verify(entry, staged);
+            return selfUpdates.start(entry, staged);
+        } catch (Exception exception) {
+            plugin.getLogger().log(Level.WARNING, "Failed to self-update MiaHub", exception);
+            return OperationResult.fail("MiaHub 自更新失败：" + exception.getMessage());
         }
     }
 

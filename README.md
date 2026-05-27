@@ -49,7 +49,9 @@ MiaHub 默认按以下顺序下载 Mia 插件：
 
 ## 管理边界
 
-MiaHub 默认只管理 `catalog.json` 中注册的插件；危险托管开关开启后才会管理非 catalog 插件。MiaHub 会保护自己，不能通过 `/miah install|update|uninstall|enable|disable miahub` 在运行时操作自身。更新 MiaHub 时需要手动替换 `MiaHub.jar` 并重启服务器。
+MiaHub 默认只管理 `catalog.json` 中注册的插件；危险托管开关开启后才会管理非 catalog 插件。MiaHub 会保护自己，不能通过 `/miah install|uninstall|enable|disable miahub` 在运行时操作自身。
+
+从支持该功能的版本开始，`/miah update miahub` 会进入自更新流程：MiaHub 下载新版 jar 并释放一个短生命周期的 `MiaHubSelfUpdater` helper，helper 会卸载当前 MiaHub、备份旧 jar、替换新版 jar、尝试热加载新版 MiaHub，成功后由新版 MiaHub 自动卸载并删除 helper。若热加载失败，helper 会尝试回滚旧 jar；仍无法恢复时，需要手动重启或还原备份。
 
 传统 Bukkit/Paper `plugin.yml` 插件会尝试运行时加载、卸载、启用和禁用；带 `paper-plugin.yml` 的插件可以安装，但需要重启服务器加载。
 
@@ -72,12 +74,13 @@ MiaHub/
 ├─ settings.gradle.kts
 ├─ build.gradle.kts
 ├─ miahub/
+├─ miahub-self-updater/
 ├─ miaforge/
 ├─ miaskillpool/
 └─ plugsite/
 ```
 
-`catalog.json` 是公开分发索引，也是 MiaHub jar 内置 catalog 的来源。构建 `miahub` 时，Gradle 会把根目录的 `catalog.json` 打进 jar。
+`catalog.json` 是公开分发索引，也是 MiaHub jar 内置 catalog 的来源。构建 `miahub` 时，Gradle 会把根目录的 `catalog.json` 和 `MiaHubSelfUpdater.jar` 打进 MiaHub jar。
 
 ## 本地构建
 
@@ -94,6 +97,7 @@ gradle clean build
 
 ```text
 miahub/build/libs/MiaHub-<version>.jar
+miahub-self-updater/build/libs/MiaHubSelfUpdater-<version>.jar
 miaforge/build/libs/MiaForge-<version>.jar
 miaskillpool/build/libs/MiaSkillpool-<version>.jar
 ```

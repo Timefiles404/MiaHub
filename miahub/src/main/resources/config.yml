@@ -28,5 +28,13 @@ download-site:
   # Keep false by default; admins can opt in with /miah install <plugin> --deps.
   auto-install-dependencies: false
 
-# Protect MiaHub from disabling or uninstalling itself at runtime.
+# Self-updates are handled by a short-lived helper plugin. The helper unloads
+# MiaHub, replaces MiaHub.jar, hot-loads the new jar, then lets the new MiaHub
+# clean the helper up.
+self-update:
+  enabled: true
+  start-delay-ticks: 60
+  cleanup-delay-ticks: 100
+
+# Protect MiaHub from install/disable/uninstall paths that are not self-update.
 protect-self: true

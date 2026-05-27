@@ -1,0 +1,8 @@
+name: MiaHubSelfUpdater
+main: dev.timefiles.miahub.selfupdater.MiaHubSelfUpdaterPlugin
+version: ${version}
+api-version: "1.21"
+description: Helper plugin used by MiaHub to replace and hot-load MiaHub itself.
+author: Timefiles404
+load: STARTUP
+folia-supported: false
