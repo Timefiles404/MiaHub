@@ -17,6 +17,8 @@ Use this skill when working in the `Timefiles404/MiaHub` monorepo. The repositor
 - Use module tags for new releases: `<module>-v<version>`, for example `miaforge-v0.2.5`.
 - Avoid legacy `v*` tags unless the user explicitly wants one release containing every module.
 - MiaHub protects itself at runtime. Updating MiaHub means replacing `MiaHub.jar` and restarting the server.
+- Treat user-visible plugin updates as releasable by default. Unless the user explicitly asks to leave changes local, every code/config/catalog change that should be installable or detectable by MiaHub must include the module version bump, root `catalog.json` update, local build, jar metadata inspection, commit, module tag, push, GitHub Actions watch, and GitHub Release asset confirmation in the same workflow.
+- If the user says "update", "修改", "实现", "修复", or asks whether MiaHub can detect an update, assume a patch release is required for the touched module unless they explicitly say "do not release", "local only", or provide a different version.
 
 ## Repository Map
 
@@ -38,7 +40,7 @@ Current module version keys:
 ```properties
 miahub.version=0.2.5
 miaforge.version=0.2.5
-miaskillpool.version=0.2.4
+miaskillpool.version=0.2.5
 ```
 
 ## Local Build Setup
@@ -59,7 +61,9 @@ miaforge/build/libs/MiaForge-<version>.jar
 miaskillpool/build/libs/MiaSkillpool-<version>.jar
 ```
 
-## Changing One Plugin Version
+## Updating Or Releasing One Plugin
+
+When changing a plugin in a way that should reach servers through MiaHub, do the full release flow without waiting for a separate user prompt:
 
 1. Edit only the relevant `<module>.version` in `gradle.properties`.
 2. Update that plugin's entry in root `catalog.json`:
@@ -68,9 +72,13 @@ miaskillpool/build/libs/MiaSkillpool-<version>.jar
    - `version`: `<version>`
 3. If README examples list current versions, update them too.
 4. Run `gradle clean build`.
-5. Inspect the built jar `plugin.yml` and confirm the version changed only for the intended module.
-6. Commit the version and catalog changes.
+5. Inspect the built jar `plugin.yml` and confirm the intended module has the new version and required runtime dependencies.
+6. Commit the implementation, version, catalog, README, and skill changes together unless there is a clear reason to split commits.
 7. Create the matching module tag on the commit.
+8. Push `main` and the module tag.
+9. Watch the GitHub Actions run for the pushed tag.
+10. Confirm the GitHub Release exists and contains exactly the intended module jar plus `SHA256SUMS.txt`.
+11. If practical, validate MiaHub update detection with `/miah pull`, `/miah list`, and `/miah update <TAB>`.
 
 Example for MiaForge `0.2.6`:
 
