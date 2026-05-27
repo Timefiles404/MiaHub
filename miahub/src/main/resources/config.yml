@@ -28,6 +28,10 @@ download-site:
   # Keep false by default; admins can opt in with /miah install <plugin> --deps.
   auto-install-dependencies: false
 
+# Periodic catalog refresh. Set with /miah heartbeat <hour|day|week|off>.
+catalog-heartbeat:
+  interval: "off"
+
 # Self-updates are handled by a short-lived helper plugin. The helper unloads
 # MiaHub, replaces MiaHub.jar, hot-loads the new jar, then lets the new MiaHub
 # clean the helper up.

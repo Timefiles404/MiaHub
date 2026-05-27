@@ -9,7 +9,7 @@ folia-supported: false
 commands:
   miah:
     description: 管理 Mia 系列插件。
-    usage: /miah <help|pull|list|install|update|uninstall|enable|disable>
+    usage: /miah <help|pull|list|install|update|uninstall|enable|disable|heartbeat>
     permission: miahub.command
 permissions:
   miahub.command:

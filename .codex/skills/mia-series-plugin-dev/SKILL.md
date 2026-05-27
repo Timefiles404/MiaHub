@@ -40,8 +40,8 @@ MiaHub/
 Current module version keys:
 
 ```properties
-miahub.version=0.2.11
-miahub-self-updater.version=0.2.11
+miahub.version=0.2.12
+miahub-self-updater.version=0.2.12
 miaforge.version=0.2.6
 miaskillpool.version=0.2.7
 ```
@@ -60,6 +60,7 @@ Expected jars:
 
 ```text
 miahub/build/libs/MiaHub-<version>.jar
+miahub-self-updater/build/libs/MiaHubSelfUpdater-<version>.jar
 miaforge/build/libs/MiaForge-<version>.jar
 miaskillpool/build/libs/MiaSkillpool-<version>.jar
 ```
@@ -137,6 +138,8 @@ Every managed plugin needs a catalog entry with these fields:
 MiaHub uses `version` for update detection, `fileName` for the installed jar name, `downloadUrl` or `releaseTag + asset` for downloads, `passwordProtected` to require `/miah install|update <plugin> --password <password>`, and `dependencies` for runtime prerequisite checks in `/miah list`, `install`, and `update`. Keep `id` lowercase and put external Paper plugin dependencies there by plugin name, for example `["MythicMobs"]`.
 
 MiaHub pulls the PlugSite catalog first (`https://plug.timefiles.online/api/catalog`) so web-uploaded install plugins can enter the normal install/update flow. The GitHub raw `catalog.json` is a fallback and remains the bundled catalog source for local builds.
+
+MiaHub `install` and `update` must auto-run `pull` immediately before doing the actual install/update so stale local catalog data cannot downgrade a plugin. `/miah pull` should report currently installed plugins with available updates after a successful pull. `/miah heartbeat <hour|day|week|off>` controls persisted automatic catalog pulls.
 
 MiaHub defaults to catalog-only management. The config key `dangerous-manage-unlisted-plugins` must stay `false` by default; when an admin changes it to `true` and restarts the server, MiaHub may manage non-catalog plugins. In that mode, `/miah install` scans local unloaded jars in `plugins/`, adds non-catalog plugin ids to install tab completion, and attempts to load the selected jar; `/miah enable`, `/miah disable`, and `/miah uninstall` can also target non-catalog plugins.
 

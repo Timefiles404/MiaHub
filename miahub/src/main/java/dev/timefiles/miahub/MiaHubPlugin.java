@@ -1,6 +1,8 @@
 package dev.timefiles.miahub;
 
+import dev.timefiles.miahub.catalog.CatalogHeartbeatService;
 import dev.timefiles.miahub.catalog.CatalogService;
+import dev.timefiles.miahub.catalog.UpdateReportService;
 import dev.timefiles.miahub.command.MiaHubCommand;
 import dev.timefiles.miahub.download.ArtifactDownloadService;
 import dev.timefiles.miahub.github.GitHubReleaseService;
@@ -17,6 +19,8 @@ public final class MiaHubPlugin extends JavaPlugin {
     private ArtifactDownloadService downloadService;
     private PluginLifecycleService lifecycleService;
     private SelfUpdateService selfUpdateService;
+    private UpdateReportService updateReportService;
+    private CatalogHeartbeatService heartbeatService;
     private MiaPluginInstaller installer;
 
     @Override
@@ -24,7 +28,8 @@ public final class MiaHubPlugin extends JavaPlugin {
         saveDefaultConfig();
         if (!getConfig().isSet("download-site.base-url")
                 || !getConfig().isSet("dangerous-manage-unlisted-plugins")
-                || !getConfig().isSet("self-update.enabled")) {
+                || !getConfig().isSet("self-update.enabled")
+                || !getConfig().isSet("catalog-heartbeat.interval")) {
             getConfig().options().copyDefaults(true);
             saveConfig();
         }
@@ -35,16 +40,19 @@ public final class MiaHubPlugin extends JavaPlugin {
         downloadService = new ArtifactDownloadService(this, gitHubReleaseService);
         lifecycleService = new PluginLifecycleService(this);
         selfUpdateService = new SelfUpdateService(this, lifecycleService);
+        updateReportService = new UpdateReportService(catalogService, lifecycleService);
+        heartbeatService = new CatalogHeartbeatService(this, catalogService, updateReportService);
         installer = new MiaPluginInstaller(this, catalogService, downloadService, lifecycleService, selfUpdateService);
 
         var command = getCommand("miah");
         if (command != null) {
-            var executor = new MiaHubCommand(this, catalogService, installer, lifecycleService);
+            var executor = new MiaHubCommand(this, catalogService, installer, lifecycleService, updateReportService, heartbeatService);
             command.setExecutor(executor);
             command.setTabCompleter(executor);
         }
 
         selfUpdateService.scheduleCleanup();
+        heartbeatService.startFromConfig();
         getLogger().info("MiaHub is ready. Use /miah pull to refresh the plugin catalog.");
     }
 

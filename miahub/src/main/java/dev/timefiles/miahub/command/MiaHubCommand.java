@@ -1,8 +1,10 @@
 package dev.timefiles.miahub.command;
 
 import dev.timefiles.miahub.MiaHubPlugin;
+import dev.timefiles.miahub.catalog.CatalogHeartbeatService;
 import dev.timefiles.miahub.catalog.CatalogEntry;
 import dev.timefiles.miahub.catalog.CatalogService;
+import dev.timefiles.miahub.catalog.UpdateReportService;
 import dev.timefiles.miahub.plugin.MiaPluginInstaller;
 import dev.timefiles.miahub.plugin.PluginLifecycleService;
 import dev.timefiles.miahub.util.OperationResult;
@@ -18,18 +20,23 @@ import java.util.List;
 import java.util.Locale;
 
 public final class MiaHubCommand implements CommandExecutor, TabCompleter {
-    private static final List<String> SUBCOMMANDS = List.of("help", "pull", "list", "install", "update", "uninstall", "enable", "disable");
+    private static final List<String> SUBCOMMANDS = List.of("help", "pull", "list", "install", "update", "uninstall", "enable", "disable", "heartbeat");
+    private static final List<String> HEARTBEAT_INTERVALS = List.of("hour", "day", "week", "off");
 
     private final MiaHubPlugin plugin;
     private final CatalogService catalogService;
     private final MiaPluginInstaller installer;
     private final PluginLifecycleService lifecycle;
+    private final UpdateReportService updateReports;
+    private final CatalogHeartbeatService heartbeat;
 
-    public MiaHubCommand(MiaHubPlugin plugin, CatalogService catalogService, MiaPluginInstaller installer, PluginLifecycleService lifecycle) {
+    public MiaHubCommand(MiaHubPlugin plugin, CatalogService catalogService, MiaPluginInstaller installer, PluginLifecycleService lifecycle, UpdateReportService updateReports, CatalogHeartbeatService heartbeat) {
         this.plugin = plugin;
         this.catalogService = catalogService;
         this.installer = installer;
         this.lifecycle = lifecycle;
+        this.updateReports = updateReports;
+        this.heartbeat = heartbeat;
     }
 
     @Override
@@ -49,7 +56,7 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
             case "pull" -> {
                 if (!requireAdmin(sender)) return true;
                 replyInfo(sender, "正在拉取 Mia 插件列表...");
-                runAsync(sender, catalogService::pull);
+                runPull(sender);
             }
             case "list" -> list(sender);
             case "install" -> {
@@ -59,8 +66,14 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
                     reply(sender, OperationResult.fail(options.error()));
                     return true;
                 }
-                replyInfo(sender, "正在安装 " + args[1] + "...");
-                runAsync(sender, () -> installer.install(args[1], options.autoDependencies(), options.password()));
+                replyInfo(sender, "正在刷新插件列表并安装 " + args[1] + "...");
+                runAsync(sender, () -> {
+                    var pull = catalogService.pull();
+                    if (!pull.success()) {
+                        return OperationResult.fail("安装前自动 pull 失败：" + pull.message());
+                    }
+                    return installer.install(args[1], options.autoDependencies(), options.password());
+                });
             }
             case "update" -> {
                 if (!requireAdmin(sender) || !requireTarget(sender, label, args)) return true;
@@ -69,8 +82,14 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
                     reply(sender, OperationResult.fail(options.error()));
                     return true;
                 }
-                replyInfo(sender, "正在更新 " + args[1] + "...");
-                runAsync(sender, () -> installer.update(args[1], options.autoDependencies(), options.password()));
+                replyInfo(sender, "正在刷新插件列表并更新 " + args[1] + "...");
+                runAsync(sender, () -> {
+                    var pull = catalogService.pull();
+                    if (!pull.success()) {
+                        return OperationResult.fail("更新前自动 pull 失败：" + pull.message());
+                    }
+                    return installer.update(args[1], options.autoDependencies(), options.password());
+                });
             }
             case "uninstall" -> {
                 if (!requireAdmin(sender) || !requireTarget(sender, label, args)) return true;
@@ -83,6 +102,14 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
             case "disable" -> {
                 if (!requireAdmin(sender) || !requireTarget(sender, label, args)) return true;
                 reply(sender, installer.disable(args[1]));
+            }
+            case "heartbeat" -> {
+                if (!requireAdmin(sender)) return true;
+                if (args.length < 2 || args[1].isBlank()) {
+                    reply(sender, OperationResult.ok("当前 catalog heartbeat：" + heartbeat.currentInterval() + "。用法：/" + label + " heartbeat <hour|day|week|off>"));
+                    return true;
+                }
+                reply(sender, heartbeat.setInterval(args[1]));
             }
             default -> {
                 reply(sender, OperationResult.fail("未知子命令：" + args[0]));
@@ -98,6 +125,9 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
             return filter(SUBCOMMANDS, args[0]);
         }
         if (args.length == 2) {
+            if (args[0].equalsIgnoreCase("heartbeat")) {
+                return filter(HEARTBEAT_INTERVALS, args[1]);
+            }
             return filter(candidatesFor(args[0]), args[1]);
         }
         if (args.length >= 3 && (args[0].equalsIgnoreCase("install") || args[0].equalsIgnoreCase("update"))) {
@@ -194,6 +224,18 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         });
     }
 
+    private void runPull(CommandSender sender) {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            var result = catalogService.pull();
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                reply(sender, result);
+                if (result.success()) {
+                    sendUpdateReport(sender);
+                }
+            });
+        });
+    }
+
     private void help(CommandSender sender, String label) {
         replyInfo(sender, "MiaHub 命令：");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " pull" + ChatColor.DARK_GRAY + " - 刷新可下载插件列表");
@@ -206,7 +248,27 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(ChatColor.GRAY + "/" + label + " update <插件> --password <密码>" + ChatColor.DARK_GRAY + " - 更新需要凭据的插件");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " uninstall <插件>" + ChatColor.DARK_GRAY + " - 卸载并把 jar 移到回收目录");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " enable|disable <插件>" + ChatColor.DARK_GRAY + " - 启用或禁用已加载插件");
+        sender.sendMessage(ChatColor.GRAY + "/" + label + " heartbeat <hour|day|week|off>" + ChatColor.DARK_GRAY + " - 定时自动刷新 catalog");
         sender.sendMessage(ChatColor.DARK_GRAY + "dangerous-manage-unlisted-plugins=true 后，install/enable/disable/uninstall 可管理非 catalog 插件。");
+    }
+
+    private void sendUpdateReport(CommandSender sender) {
+        var updates = updateReports.availableUpdates();
+        if (updates.isEmpty()) {
+            replyInfo(sender, "当前已安装插件没有可更新项。");
+            return;
+        }
+
+        replyInfo(sender, "目前可更新插件：");
+        for (var update : updates) {
+            var self = update.self() ? ChatColor.GOLD + " [MiaHub 自更新]" : "";
+            sender.sendMessage(ChatColor.GRAY + "- " + ChatColor.AQUA + update.id()
+                    + ChatColor.GRAY + " (" + update.displayName() + ") "
+                    + ChatColor.WHITE + update.installedVersion()
+                    + ChatColor.YELLOW + " -> "
+                    + ChatColor.WHITE + update.targetVersion()
+                    + self);
+        }
     }
 
     private void reply(CommandSender sender, OperationResult result) {
