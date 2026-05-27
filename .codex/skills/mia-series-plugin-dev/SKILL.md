@@ -39,7 +39,7 @@ MiaHub/
 Current module version keys:
 
 ```properties
-miahub.version=0.2.7
+miahub.version=0.2.8
 miaforge.version=0.2.5
 miaskillpool.version=0.2.5
 ```

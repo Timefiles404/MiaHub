@@ -118,7 +118,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" */build/libs/*.jar SHA256SUMS.txt --generate-notes
+        shell: bash
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" */build/libs/*.jar SHA256SUMS.txt --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" */build/libs/*.jar SHA256SUMS.txt --generate-notes
+          fi
 
       - name: Publish module GitHub Release
         if: startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/tags/v')
@@ -127,7 +133,11 @@ jobs:
         shell: bash
         run: |
           module="${{ steps.release.outputs.module }}"
-          gh release create "${GITHUB_REF_NAME}" "${module}"/build/libs/*.jar SHA256SUMS.txt --generate-notes
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${module}"/build/libs/*.jar SHA256SUMS.txt --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "${module}"/build/libs/*.jar SHA256SUMS.txt --generate-notes
+          fi
 
       - name: Sync module artifact to PlugSite
         if: startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/tags/v')
