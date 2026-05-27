@@ -3,19 +3,21 @@ package dev.timefiles.miahub.plugin;
 import dev.timefiles.miahub.MiaHubPlugin;
 import dev.timefiles.miahub.catalog.CatalogEntry;
 import dev.timefiles.miahub.catalog.CatalogService;
-import dev.timefiles.miahub.github.GitHubReleaseService;
+import dev.timefiles.miahub.download.ArtifactDownloadService;
+import dev.timefiles.miahub.download.DependencyArtifact;
 import dev.timefiles.miahub.util.Hashing;
 import dev.timefiles.miahub.util.JarFiles;
 import dev.timefiles.miahub.util.OperationResult;
 
 import java.io.IOException;
-import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 import java.util.logging.Level;
 
 public final class MiaPluginInstaller {
@@ -23,17 +25,21 @@ public final class MiaPluginInstaller {
 
     private final MiaHubPlugin plugin;
     private final CatalogService catalogService;
-    private final GitHubReleaseService gitHub;
+    private final ArtifactDownloadService downloads;
     private final PluginLifecycleService lifecycle;
 
-    public MiaPluginInstaller(MiaHubPlugin plugin, CatalogService catalogService, GitHubReleaseService gitHub, PluginLifecycleService lifecycle) {
+    public MiaPluginInstaller(MiaHubPlugin plugin, CatalogService catalogService, ArtifactDownloadService downloads, PluginLifecycleService lifecycle) {
         this.plugin = plugin;
         this.catalogService = catalogService;
-        this.gitHub = gitHub;
+        this.downloads = downloads;
         this.lifecycle = lifecycle;
     }
 
     public OperationResult install(String query) {
+        return install(query, false);
+    }
+
+    public OperationResult install(String query, boolean autoDependencies) {
         var entry = catalogService.find(query).orElse(null);
         if (entry == null) {
             return OperationResult.fail("未知 Mia 插件：" + query + "。请先执行 /miah pull。");
@@ -41,15 +47,15 @@ public final class MiaPluginInstaller {
         if (lifecycle.isProtectedSelf(entry)) {
             return OperationResult.fail("MiaHub 不能在运行时安装或重载自己，请手动替换 jar 后重启服务器。");
         }
-        var dependencies = requireDependencies(entry);
-        if (!dependencies.success()) {
-            return dependencies;
-        }
         if (lifecycle.isLoaded(entry.pluginName()) || lifecycle.findPluginJar(entry).isPresent()) {
             return OperationResult.fail(entry.pluginName() + " 已经安装，请使用 /miah update " + entry.id() + "。");
         }
 
         try {
+            var dependencies = ensureDependencies(entry, autoDependencies);
+            if (!dependencies.success()) {
+                return dependencies;
+            }
             var staged = download(entry);
             verify(entry, staged);
             var target = plugin.pluginsDirectory().resolve(entry.fileName());
@@ -68,16 +74,16 @@ public final class MiaPluginInstaller {
     }
 
     public OperationResult update(String query) {
+        return update(query, false);
+    }
+
+    public OperationResult update(String query, boolean autoDependencies) {
         var entry = catalogService.find(query).orElse(null);
         if (entry == null) {
             return OperationResult.fail("未知 Mia 插件：" + query + "。请先执行 /miah pull。");
         }
         if (lifecycle.isProtectedSelf(entry)) {
             return OperationResult.fail("MiaHub 不能通过自己更新自己，请手动替换 MiaHub.jar 后重启服务器。");
-        }
-        var dependencies = requireDependencies(entry);
-        if (!dependencies.success()) {
-            return dependencies;
         }
         if (!lifecycle.isLoaded(entry.pluginName()) && lifecycle.findPluginJar(entry).isEmpty()) {
             return OperationResult.fail(entry.pluginName() + " 尚未安装，请使用 /miah install " + entry.id() + "。");
@@ -90,6 +96,10 @@ public final class MiaPluginInstaller {
         }
 
         try {
+            var dependencies = ensureDependencies(entry, autoDependencies);
+            if (!dependencies.success()) {
+                return dependencies;
+            }
             var staged = download(entry);
             verify(entry, staged);
             var target = lifecycle.findPluginJar(entry).orElse(plugin.pluginsDirectory().resolve(entry.fileName()));
@@ -192,34 +202,82 @@ public final class MiaPluginInstaller {
         return entry;
     }
 
-    private OperationResult requireDependencies(CatalogEntry entry) {
-        var missing = lifecycle.missingDependencies(entry);
-        if (missing.isEmpty()) {
-            return OperationResult.ok("前置条件已满足。");
+    private OperationResult ensureDependencies(CatalogEntry entry, boolean autoInstall) throws IOException, InterruptedException {
+        for (var dependency : entry.dependencies()) {
+            var result = ensureDependency(dependency, autoInstall, new HashSet<>());
+            if (!result.success()) {
+                return OperationResult.fail("前置条件不满足：" + entry.displayName() + " " + result.message());
+            }
         }
-        return OperationResult.fail("前置条件不满足：" + entry.displayName()
-                + " 缺少前置插件 " + String.join(", ", missing)
-                + "。请先安装并加载这些插件。");
+        return OperationResult.ok("前置条件已满足。");
+    }
+
+    private OperationResult ensureDependency(String pluginName, boolean autoInstall, Set<String> visiting) throws IOException, InterruptedException {
+        if (lifecycle.isLoaded(pluginName)) {
+            return OperationResult.ok(pluginName + " 已加载。");
+        }
+
+        var existingJar = lifecycle.findPluginJar(pluginName);
+        if (existingJar.isPresent()) {
+            if (JarFiles.hasEntry(existingJar.get(), "paper-plugin.yml")) {
+                return OperationResult.fail("前置插件 " + pluginName + " 已安装但需要重启服务器加载。");
+            }
+            var load = lifecycle.load(existingJar.get());
+            if (load.success()) {
+                return OperationResult.ok("已加载前置插件 " + pluginName + "。");
+            }
+            return OperationResult.fail("前置插件 " + pluginName + " 已安装但加载失败：" + load.message());
+        }
+
+        if (!autoInstall && !plugin.getConfig().getBoolean("download-site.auto-install-dependencies", false)) {
+            return OperationResult.fail("缺少前置插件 " + pluginName + "。请先安装并加载，或使用 --deps 从 PlugSite 自动补全。");
+        }
+        if (!downloads.plugSiteEnabled()) {
+            return OperationResult.fail("缺少前置插件 " + pluginName + "，且 PlugSite 未启用。");
+        }
+
+        var normalized = pluginName.toLowerCase(Locale.ROOT);
+        if (!visiting.add(normalized)) {
+            return OperationResult.fail("前置插件存在循环依赖：" + pluginName + "。");
+        }
+
+        var artifact = downloads.resolveDependency(pluginName).orElse(null);
+        if (artifact == null) {
+            visiting.remove(normalized);
+            return OperationResult.fail("缺少前置插件 " + pluginName + "，PlugSite 中也没有可安装的依赖 artifact。");
+        }
+
+        for (var child : artifact.dependencies()) {
+            var childResult = ensureDependency(child, true, visiting);
+            if (!childResult.success()) {
+                visiting.remove(normalized);
+                return childResult;
+            }
+        }
+
+        var install = installDependency(artifact);
+        visiting.remove(normalized);
+        return install;
+    }
+
+    private OperationResult installDependency(DependencyArtifact artifact) throws IOException, InterruptedException {
+        var staged = downloads.downloadDependency(artifact);
+        var target = plugin.pluginsDirectory().resolve(artifact.fileName());
+        Files.move(staged, target, StandardCopyOption.REPLACE_EXISTING);
+
+        if (artifact.restartRequired || JarFiles.hasEntry(target, "paper-plugin.yml")) {
+            return OperationResult.fail("已下载前置插件 " + artifact.pluginName() + "，但它需要重启服务器加载。");
+        }
+
+        var load = lifecycle.load(target);
+        if (load.success()) {
+            return OperationResult.ok("已安装并加载前置插件 " + artifact.pluginName() + "。");
+        }
+        return OperationResult.fail("前置插件 " + artifact.pluginName() + " 已下载但加载失败：" + load.message());
     }
 
     private Path download(CatalogEntry entry) throws IOException, InterruptedException {
-        var asset = gitHub.resolveAsset(entry);
-        var staging = plugin.getDataFolder().toPath().resolve("staging");
-        Files.createDirectories(staging);
-
-        var fileName = sanitize(asset.assetName() == null ? entry.fileName() : asset.assetName());
-        var target = staging.resolve(STAMP.format(LocalDateTime.now()) + "-" + fileName);
-
-        var response = gitHub.httpClient().send(
-                gitHub.requestBuilder(asset.downloadUrl()).GET().build(),
-                HttpResponse.BodyHandlers.ofFile(target));
-
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            Files.deleteIfExists(target);
-            throw new IOException("Download failed with HTTP " + response.statusCode() + ".");
-        }
-
-        return target;
+        return downloads.downloadPlugin(entry);
     }
 
     private void verify(CatalogEntry entry, Path path) throws IOException {
@@ -257,10 +315,6 @@ public final class MiaPluginInstaller {
         } catch (IOException exception) {
             plugin.getLogger().log(Level.SEVERE, "Failed to roll back " + target, exception);
         }
-    }
-
-    private String sanitize(String fileName) {
-        return fileName.replace("\\", "_").replace("/", "_").replace("..", "_");
     }
 
     private boolean versionsMatch(String installedVersion, String targetVersion) {

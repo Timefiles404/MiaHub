@@ -2,6 +2,7 @@ package dev.timefiles.miahub;
 
 import dev.timefiles.miahub.catalog.CatalogService;
 import dev.timefiles.miahub.command.MiaHubCommand;
+import dev.timefiles.miahub.download.ArtifactDownloadService;
 import dev.timefiles.miahub.github.GitHubReleaseService;
 import dev.timefiles.miahub.plugin.MiaPluginInstaller;
 import dev.timefiles.miahub.plugin.PluginLifecycleService;
@@ -12,18 +13,24 @@ import java.nio.file.Path;
 public final class MiaHubPlugin extends JavaPlugin {
     private CatalogService catalogService;
     private GitHubReleaseService gitHubReleaseService;
+    private ArtifactDownloadService downloadService;
     private PluginLifecycleService lifecycleService;
     private MiaPluginInstaller installer;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
+        if (!getConfig().isSet("download-site.base-url")) {
+            getConfig().options().copyDefaults(true);
+            saveConfig();
+        }
         createDataDirectories();
 
         catalogService = new CatalogService(this);
         gitHubReleaseService = new GitHubReleaseService(this);
+        downloadService = new ArtifactDownloadService(this, gitHubReleaseService);
         lifecycleService = new PluginLifecycleService(this);
-        installer = new MiaPluginInstaller(this, catalogService, gitHubReleaseService, lifecycleService);
+        installer = new MiaPluginInstaller(this, catalogService, downloadService, lifecycleService);
 
         var command = getCommand("miah");
         if (command != null) {

@@ -128,3 +128,33 @@ jobs:
         run: |
           module="${{ steps.release.outputs.module }}"
           gh release create "${GITHUB_REF_NAME}" "${module}"/build/libs/*.jar SHA256SUMS.txt --generate-notes
+
+      - name: Sync module artifact to PlugSite
+        if: startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          PLUG_SITE_URL: ${{ secrets.PLUG_SITE_URL }}
+          PLUG_SITE_UPLOAD_TOKEN: ${{ secrets.PLUG_SITE_UPLOAD_TOKEN }}
+        run: |
+          if [[ -z "${PLUG_SITE_URL}" || -z "${PLUG_SITE_UPLOAD_TOKEN}" ]]; then
+            echo "PLUG_SITE_URL and PLUG_SITE_UPLOAD_TOKEN repository secrets are required."
+            exit 1
+          fi
+
+          module="${{ steps.release.outputs.module }}"
+          version="${{ steps.release.outputs.tag_version }}"
+          jar="$(find "${module}/build/libs" -name "*.jar" | sort | head -n 1)"
+          if [[ -z "${jar}" ]]; then
+            echo "No jar found for ${module}."
+            exit 1
+          fi
+
+          curl --fail --silent --show-error --location --retry 3 \
+            -H "Authorization: Bearer ${PLUG_SITE_UPLOAD_TOKEN}" \
+            -F "kind=mia" \
+            -F "module=${module}" \
+            -F "version=${version}" \
+            -F "releaseTag=${GITHUB_REF_NAME}" \
+            -F "repository=${GITHUB_REPOSITORY}" \
+            -F "artifact=@${jar}" \
+            "${PLUG_SITE_URL%/}/api/upload"

@@ -1,0 +1,16 @@
+[Unit]
+Description=MiaHub Plug download site
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sshadmin
+Group=sshadmin
+WorkingDirectory=/opt/miahub-plugsite
+ExecStart=/usr/bin/python3 /opt/miahub-plugsite/app.py --host 127.0.0.1 --port 5500 --config /opt/miahub-plugsite/config.json --data-dir /opt/miahub-plugsite/data
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

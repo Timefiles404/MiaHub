@@ -9,5 +9,15 @@ manage-catalog-only: true
 # deployments if you need a token for private repositories or higher rate limits.
 github-token: ""
 
+# MiaHub tries this download site first, then falls back to GitHub Releases.
+download-site:
+  enabled: true
+  prefer: true
+  base-url: "https://plug.timefiles.online"
+  # Optional bearer token. Required only for protected dependency artifacts.
+  token: ""
+  # Keep false by default; admins can opt in with /miah install <plugin> --deps.
+  auto-install-dependencies: false
+
 # Protect MiaHub from disabling or uninstalling itself at runtime.
 protect-self: true

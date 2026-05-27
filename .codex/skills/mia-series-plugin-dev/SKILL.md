@@ -32,13 +32,14 @@ MiaHub/
 ├─ build.gradle.kts
 ├─ miahub/
 ├─ miaforge/
-└─ miaskillpool/
+├─ miaskillpool/
+└─ plugsite/
 ```
 
 Current module version keys:
 
 ```properties
-miahub.version=0.2.6
+miahub.version=0.2.7
 miaforge.version=0.2.5
 miaskillpool.version=0.2.5
 ```
@@ -78,7 +79,8 @@ When changing a plugin in a way that should reach servers through MiaHub, do the
 8. Push `main` and the module tag.
 9. Watch the GitHub Actions run for the pushed tag.
 10. Confirm the GitHub Release exists and contains exactly the intended module jar plus `SHA256SUMS.txt`.
-11. If practical, validate MiaHub update detection with `/miah pull`, `/miah list`, and `/miah update <TAB>`.
+11. Confirm the module jar has synced to PlugSite when the workflow has the required `PLUG_SITE_URL` and `PLUG_SITE_UPLOAD_TOKEN` secrets.
+12. If practical, validate MiaHub update detection with `/miah pull`, `/miah list`, and `/miah update <TAB>`.
 
 Example for MiaForge `0.2.6`:
 
@@ -164,6 +166,8 @@ For a module release, the assets should be only:
 <PluginName>-<version>.jar
 SHA256SUMS.txt
 ```
+
+The release workflow also mirrors module jars to PlugSite (`https://plug.timefiles.online`) after a successful module tag release. MiaHub downloads from PlugSite first and falls back to GitHub Releases. Never commit PlugSite upload or download tokens; keep them in GitHub Secrets or server-side config only.
 
 ## Update Detection Test
 

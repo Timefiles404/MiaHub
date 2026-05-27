@@ -6,3 +6,5 @@ out/
 run/
 server/
 *.log
+__pycache__/
+*.pyc

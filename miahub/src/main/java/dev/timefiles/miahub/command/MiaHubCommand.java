@@ -54,12 +54,12 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
             case "install" -> {
                 if (!requireAdmin(sender) || !requireTarget(sender, label, args)) return true;
                 replyInfo(sender, "正在安装 " + args[1] + "...");
-                runAsync(sender, () -> installer.install(args[1]));
+                runAsync(sender, () -> installer.install(args[1], withDependencies(args)));
             }
             case "update" -> {
                 if (!requireAdmin(sender) || !requireTarget(sender, label, args)) return true;
                 replyInfo(sender, "正在更新 " + args[1] + "...");
-                runAsync(sender, () -> installer.update(args[1]));
+                runAsync(sender, () -> installer.update(args[1], withDependencies(args)));
             }
             case "uninstall" -> {
                 if (!requireAdmin(sender) || !requireTarget(sender, label, args)) return true;
@@ -88,6 +88,9 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         }
         if (args.length == 2) {
             return filter(candidatesFor(args[0]), args[1]);
+        }
+        if (args.length == 3 && (args[0].equalsIgnoreCase("install") || args[0].equalsIgnoreCase("update"))) {
+            return filter(List.of("--deps"), args[2]);
         }
         return List.of();
     }
@@ -165,7 +168,9 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(ChatColor.GRAY + "/" + label + " pull" + ChatColor.DARK_GRAY + " - 刷新可下载插件列表");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " list" + ChatColor.DARK_GRAY + " - 查看插件列表和状态");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " install <插件>" + ChatColor.DARK_GRAY + " - 下载并加载 Mia 插件");
+        sender.sendMessage(ChatColor.GRAY + "/" + label + " install <插件> --deps" + ChatColor.DARK_GRAY + " - 从 PlugSite 自动补齐前置依赖");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " update <插件>" + ChatColor.DARK_GRAY + " - 下载、卸载、替换并重新加载");
+        sender.sendMessage(ChatColor.GRAY + "/" + label + " update <插件> --deps" + ChatColor.DARK_GRAY + " - 更新前自动补齐前置依赖");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " uninstall <插件>" + ChatColor.DARK_GRAY + " - 卸载并把 jar 移到回收目录");
         sender.sendMessage(ChatColor.GRAY + "/" + label + " enable|disable <插件>" + ChatColor.DARK_GRAY + " - 启用或禁用已加载插件");
     }
@@ -213,6 +218,15 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
                     .toList();
             default -> List.of();
         };
+    }
+
+    private boolean withDependencies(String[] args) {
+        for (var arg : args) {
+            if (arg.equalsIgnoreCase("--deps")) {
+                return true;
+            }
+        }
+        return plugin.getConfig().getBoolean("download-site.auto-install-dependencies", false);
     }
 
     private boolean isInstalled(CatalogEntry entry) {
