@@ -146,6 +146,16 @@ public final class PluginLifecycleService {
         return Bukkit.getPluginManager().getPlugin(pluginName) != null;
     }
 
+    public boolean isDependencyInstalled(String pluginName) {
+        return isLoaded(pluginName) || findPluginJar(pluginName).isPresent();
+    }
+
+    public List<String> missingDependencies(CatalogEntry entry) {
+        return entry.dependencies().stream()
+                .filter(dependency -> !isDependencyInstalled(dependency))
+                .toList();
+    }
+
     public Optional<String> installedVersion(CatalogEntry entry) {
         var plugin = Bukkit.getPluginManager().getPlugin(entry.pluginName());
         if (plugin != null) {

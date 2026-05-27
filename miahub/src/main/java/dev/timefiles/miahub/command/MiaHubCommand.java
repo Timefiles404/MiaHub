@@ -106,13 +106,34 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
             var installedVersion = lifecycle.installedVersion(entry).orElse(null);
             var targetVersion = CatalogEntry.isPresent(entry.version) ? entry.version : "latest";
             var hasUpdate = lifecycle.hasUpdate(entry);
-            var state = stateText(entry, hasUpdate, loaded, installed);
+            var hasMissingDependencies = !lifecycle.missingDependencies(entry).isEmpty();
+            var state = stateText(entry, hasUpdate, loaded, installed, hasMissingDependencies);
             var version = versionText(installedVersion, targetVersion, hasUpdate);
-            var stateColor = hasUpdate ? ChatColor.YELLOW : ChatColor.DARK_GRAY;
+            var stateColor = hasMissingDependencies ? ChatColor.RED : hasUpdate ? ChatColor.YELLOW : ChatColor.DARK_GRAY;
             sender.sendMessage(ChatColor.GRAY + "- " + ChatColor.AQUA + entry.id()
                     + ChatColor.GRAY + " (" + entry.displayName() + ") "
                     + ChatColor.WHITE + version
                     + stateColor + " [" + state + "]");
+            if (entry.hasDependencies()) {
+                dependencyLines(sender, entry);
+            }
+        }
+    }
+
+    private void dependencyLines(CommandSender sender, CatalogEntry entry) {
+        var dependencies = entry.dependencies();
+        for (var index = 0; index < dependencies.size(); index++) {
+            var dependency = dependencies.get(index);
+            var installed = lifecycle.isDependencyInstalled(dependency);
+            var branch = index + 1 == dependencies.size() ? "└─" : "├─";
+            var state = installed ? "已安装" : "缺失";
+            var stateColor = installed ? ChatColor.GREEN : ChatColor.RED;
+            sender.sendMessage(ChatColor.DARK_GRAY + "\t" + branch + " "
+                    + ChatColor.GRAY + "前置 "
+                    + ChatColor.AQUA + dependency
+                    + ChatColor.GRAY + " ["
+                    + stateColor + state
+                    + ChatColor.GRAY + "]");
         }
     }
 
@@ -198,7 +219,10 @@ public final class MiaHubCommand implements CommandExecutor, TabCompleter {
         return lifecycle.isLoaded(entry.pluginName()) || lifecycle.findPluginJar(entry).isPresent();
     }
 
-    private String stateText(CatalogEntry entry, boolean hasUpdate, boolean loaded, boolean installed) {
+    private String stateText(CatalogEntry entry, boolean hasUpdate, boolean loaded, boolean installed, boolean hasMissingDependencies) {
+        if (hasMissingDependencies) {
+            return "前置缺失";
+        }
         if (hasUpdate) {
             return entry.isSelf() ? "待手动更新" : "待更新";
         }

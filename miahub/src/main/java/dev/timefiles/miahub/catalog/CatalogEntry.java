@@ -55,6 +55,21 @@ public final class CatalogEntry {
         return isPresent(sha256);
     }
 
+    public List<String> dependencies() {
+        if (dependencies == null) {
+            return List.of();
+        }
+        return dependencies.stream()
+                .filter(CatalogEntry::isPresent)
+                .map(String::trim)
+                .distinct()
+                .toList();
+    }
+
+    public boolean hasDependencies() {
+        return !dependencies().isEmpty();
+    }
+
     public static boolean isPresent(String value) {
         return value != null && !value.isBlank();
     }

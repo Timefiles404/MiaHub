@@ -41,6 +41,10 @@ public final class MiaPluginInstaller {
         if (lifecycle.isProtectedSelf(entry)) {
             return OperationResult.fail("MiaHub 不能在运行时安装或重载自己，请手动替换 jar 后重启服务器。");
         }
+        var dependencies = requireDependencies(entry);
+        if (!dependencies.success()) {
+            return dependencies;
+        }
         if (lifecycle.isLoaded(entry.pluginName()) || lifecycle.findPluginJar(entry).isPresent()) {
             return OperationResult.fail(entry.pluginName() + " 已经安装，请使用 /miah update " + entry.id() + "。");
         }
@@ -70,6 +74,10 @@ public final class MiaPluginInstaller {
         }
         if (lifecycle.isProtectedSelf(entry)) {
             return OperationResult.fail("MiaHub 不能通过自己更新自己，请手动替换 MiaHub.jar 后重启服务器。");
+        }
+        var dependencies = requireDependencies(entry);
+        if (!dependencies.success()) {
+            return dependencies;
         }
         if (!lifecycle.isLoaded(entry.pluginName()) && lifecycle.findPluginJar(entry).isEmpty()) {
             return OperationResult.fail(entry.pluginName() + " 尚未安装，请使用 /miah install " + entry.id() + "。");
@@ -182,6 +190,16 @@ public final class MiaPluginInstaller {
         entry.pluginName = query;
         entry.fileName = query + ".jar";
         return entry;
+    }
+
+    private OperationResult requireDependencies(CatalogEntry entry) {
+        var missing = lifecycle.missingDependencies(entry);
+        if (missing.isEmpty()) {
+            return OperationResult.ok("前置条件已满足。");
+        }
+        return OperationResult.fail("前置条件不满足：" + entry.displayName()
+                + " 缺少前置插件 " + String.join(", ", missing)
+                + "。请先安装并加载这些插件。");
     }
 
     private Path download(CatalogEntry entry) throws IOException, InterruptedException {

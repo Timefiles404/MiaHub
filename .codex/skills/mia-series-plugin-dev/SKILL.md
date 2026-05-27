@@ -38,7 +38,7 @@ MiaHub/
 Current module version keys:
 
 ```properties
-miahub.version=0.2.5
+miahub.version=0.2.6
 miaforge.version=0.2.5
 miaskillpool.version=0.2.5
 ```
@@ -124,11 +124,12 @@ Every managed plugin needs a catalog entry with these fields:
   "version": "0.2.5",
   "minecraft": "1.21.x",
   "java": 21,
-  "restartRequired": false
+  "restartRequired": false,
+  "dependencies": []
 }
 ```
 
-MiaHub uses `version` for update detection, `fileName` for the installed jar name, and `releaseTag + asset` for direct GitHub Release downloads. Keep `id` lowercase.
+MiaHub uses `version` for update detection, `fileName` for the installed jar name, `releaseTag + asset` for direct GitHub Release downloads, and `dependencies` for runtime prerequisite checks in `/miah list`, `install`, and `update`. Keep `id` lowercase and put external Paper plugin dependencies there by plugin name, for example `["MythicMobs"]`.
 
 ## Release Workflow
 

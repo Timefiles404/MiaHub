@@ -7,13 +7,14 @@
       "name": "MiaHub",
       "pluginName": "MiaHub",
       "repository": "Timefiles404/MiaHub",
-      "releaseTag": "miahub-v0.2.5",
-      "asset": "MiaHub-0.2.5.jar",
+      "releaseTag": "miahub-v0.2.6",
+      "asset": "MiaHub-0.2.6.jar",
       "fileName": "MiaHub.jar",
-      "version": "0.2.5",
+      "version": "0.2.6",
       "minecraft": "1.21.x",
       "java": 21,
       "restartRequired": true,
+      "dependencies": [],
       "description": "GitHub-backed manager for Mia series Paper plugins."
     },
     {
@@ -28,6 +29,7 @@
       "minecraft": "1.21.x",
       "java": 21,
       "restartRequired": false,
+      "dependencies": [],
       "description": "MiaForge test plugin with /miaf reload."
     },
     {
@@ -42,6 +44,9 @@
       "minecraft": "1.21.x",
       "java": 21,
       "restartRequired": false,
+      "dependencies": [
+        "MythicMobs"
+      ],
       "description": "MythicMobs-backed skill pool plugin with /mias."
     }
   ]
