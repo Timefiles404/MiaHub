@@ -1,0 +1,38 @@
+name: MiaPickaxe
+version: ${version}
+main: dev.timefiles.miapickaxe.MiaPickaxe
+api-version: "1.21"
+folia-supported: false
+authors:
+  - Mia
+
+description: 镐子升级系统插件，支持主等级和属性独立升级
+
+depend: []
+softdepend:
+  - Vault
+  - PlayerPoints
+  - MythicMobs
+
+commands:
+  miapickaxe:
+    description: MiaPickaxe主命令
+    usage: /miapickaxe <give|reload|info|setlevel|setmined|bind|unbind>
+    aliases:
+      - mpickaxe
+      - mpa
+
+permissions:
+  miapickaxe.admin:
+    description: 管理员权限
+    default: op
+  miapickaxe.use:
+    description: 使用镐子权限
+    default: true
+  miapickaxe.forge:
+    description: 使用锻造台权限
+    default: true
+  miapickaxe.stone:
+    description: 使用石头界面权限
+    default: true
+

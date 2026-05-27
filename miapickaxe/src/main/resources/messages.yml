@@ -1,0 +1,72 @@
+# ==========================================
+# MiaPickaxe 消息配置
+# ==========================================
+
+prefix: "&6[MiaPickaxe] &r"
+
+messages:
+  # 通用消息
+  no-permission: "&c你没有权限执行此操作！"
+  player-only: "&c该命令只能由玩家执行！"
+  reload-success: "&a配置文件已重载！"
+  
+  # 物品相关
+  not-holding-pickaxe: "&c请手持神话镐子！"
+  pickaxe-given: "&a已给予 {player} 一把神话镐子！"
+  
+  # 挖掘相关
+  mined-update: "&7挖掘数 +1 (当前: {mined})"
+  level-up: "&6&l恭喜！&r &e你的镐子升级到了 &6{level} &e级！"
+  
+  # 升级相关
+  upgrade-success: "&a&l升级成功！&r &e{type} 提升至 &a{level} &e级！"
+  upgrade-fail: "&c升级失败！成功率: {chance}%"
+  upgrade-fail-downgrade: "&c&l升级失败！&r &e{type} 降级至 &c{level} &e级！"
+  upgrade-max-level: "&e该属性已达到最高等级！"
+  
+  # 条件不满足
+  requirement-blocks: "&c挖掘数不足！需要: {required}, 当前: {current}"
+  requirement-level: "&c镐子主等级不足！需要: {required}级, 当前: {current}级"
+  cost-money: "&c金币不足！需要: {required}, 当前: {current}"
+  cost-points: "&c点券不足！需要: {required}, 当前: {current}"
+  cost-items: "&c材料不足！需要: {item} x{amount}"
+  
+  # 绑定相关
+  bind-success: "&a镐子已绑定至 &e{player}&a！"
+  unbind-success: "&a镐子已解除绑定！"
+  already-bound: "&c该镐子已被 &e{player} &c绑定！"
+  not-bound: "&c该镐子未绑定！"
+  not-owner: "&c你不是该镐子的绑定者！"
+  binding-stone-consumed: "&e消耗了 1 个绑定石"
+  unbinding-stone-consumed: "&e消耗了 1 个解绑石"
+  
+  # GUI相关
+  gui-open: "&7打开锻造台..."
+  gui-binding-title: "&6绑定操作"
+  
+  # 安全限制
+  anvil-blocked: "&c不能在铁砧中使用神话镐子！"
+  enchant-blocked: "&c不能用附魔台附魔神话镐子！"
+  grindstone-blocked: "&c不能在砂轮中使用神话镐子！"
+  craft-blocked: "&c不能将神话镐子用于合成！"
+
+# Lore显示文本
+lore:
+  bound: "&a已绑定: &e绑定者[{player}]"
+  unbound: "&7未绑定"
+  
+  # 升级按钮Lore
+  upgrade-button:
+    - "&7当前等级: &e{current}"
+    - "&7下一等级: &a{next}"
+    - ""
+    - "&7消耗:"
+    - "{costs}"
+    - ""
+    - "&7成功率: &e{chance}%"
+    - ""
+    - "&e点击升级"
+  
+  upgrade-max:
+    - "&a已达到最高等级!"
+    - "&7当前等级: &e{current}"

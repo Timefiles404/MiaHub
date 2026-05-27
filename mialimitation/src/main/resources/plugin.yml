@@ -1,0 +1,18 @@
+name: MiaLimitation
+version: ${version}
+main: dev.timefiles.mialimitation.MiaLimitation
+api-version: "1.21"
+description: Item expiration management plugin for Minecraft
+author: AoDev
+
+commands:
+  mialimit:
+    description: Manage item expiration
+    usage: /<command> <end|duration> <time>
+    permission: mialimitation.use
+
+permissions:
+  mialimitation.use:
+    description: Allows using the mialimit command
+    default: op
+

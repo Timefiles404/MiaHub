@@ -1,0 +1,239 @@
+# ==========================================
+# MiaPickaxe 配置文件
+# ==========================================
+
+# 调试模式
+debug: false
+
+# ==========================================
+# 挖掘设置
+# ==========================================
+mining-settings:
+  # 黑名单方块 - 不增加挖掘计数
+  ignored-materials:
+    - COBBLESTONE
+    - STONE
+    - BASALT
+    - OBSIDIAN
+    - NETHERRACK
+
+# ==========================================
+# 绑定石设置
+# ==========================================
+binding-settings:
+  # MythicMobs绑定石物品ID
+  binding-stone-id: "binding_stone"
+  unbinding-stone-id: "unbinding_stone"
+  # 绑定后是否限制其他玩家使用
+  restrict-usage: true
+
+# ==========================================
+# 镐子主等级 (基于挖掘数的里程碑)
+# ==========================================
+mastery-levels:
+  1:
+    require-blocks: 0
+    display-name: "&7神话镐子 &7[Lv.1]"
+  2:
+    require-blocks: 1000
+    display-name: "&b神话镐子 &7[Lv.2]"
+  3:
+    require-blocks: 5000
+    display-name: "&d神话镐子 &7[Lv.3]"
+  4:
+    require-blocks: 15000
+    display-name: "&6神话镐子 &7[Lv.4]"
+  5:
+    require-blocks: 50000
+    display-name: "&c神话镐子 &7[Lv.5]"
+
+# ==========================================
+# 独立属性升级配置 (Attribute Upgrades)
+# 
+# 消耗配置说明：
+#   - 如果不需要某种消耗，请设置为0（如 points: 0），而不是删除该行
+#   - 删除某行会导致使用默认值
+# ==========================================
+upgrades:
+  # --- 效率 (Efficiency) 升级路线 ---
+  efficiency:
+    1:
+      requirements:
+        min-blocks: 100
+        min-pickaxe-level: 1
+      costs:
+        money: 1000.0
+      settings:
+        chance: 100.0
+
+    2:
+      requirements:
+        min-blocks: 500
+        min-pickaxe-level: 1
+      costs:
+        points: 10
+      settings:
+        chance: 80.0
+
+    3:
+      requirements:
+        min-blocks: 2000
+        min-pickaxe-level: 2
+      costs:
+        mm-items:
+          - "magic_dust:5"
+      settings:
+        chance: 50.0
+
+    4:
+      requirements:
+        min-blocks: 10000
+        min-pickaxe-level: 3
+      costs:
+        money: 5000.0
+        points: 100
+        mm-items:
+          - "void_gem:1"
+      settings:
+        chance: 30.0
+        fail-action: DOWNGRADE
+
+    5:
+      requirements:
+        min-blocks: 30000
+        min-pickaxe-level: 4
+      costs:
+        money: 20000.0
+        points: 500
+        mm-items:
+          - "void_gem:5"
+          - "mythic_core:1"
+      settings:
+        chance: 20.0
+        fail-action: DOWNGRADE
+
+  # --- 时运 (Fortune) 升级路线 ---
+  fortune:
+    1:
+      requirements:
+        min-blocks: 200
+        min-pickaxe-level: 1
+      costs:
+        points: 50
+      settings:
+        chance: 80.0
+
+    2:
+      requirements:
+        min-blocks: 1000
+        min-pickaxe-level: 2
+      costs:
+        money: 3000.0
+        points: 100
+      settings:
+        chance: 50.0
+
+    3:
+      requirements:
+        min-blocks: 5000
+        min-pickaxe-level: 3
+      costs:
+        money: 10000.0
+        mm-items:
+          - "fortune_crystal:3"
+      settings:
+        chance: 30.0
+        fail-action: DOWNGRADE
+
+  # --- 耐久 (Unbreaking) 升级路线 ---
+  unbreaking:
+    1:
+      requirements:
+        min-blocks: 50
+      costs:
+        money: 500.0
+      settings:
+        chance: 100.0
+
+    2:
+      requirements:
+        min-blocks: 300
+      costs:
+        money: 1500.0
+      settings:
+        chance: 90.0
+
+    3:
+      requirements:
+        min-blocks: 1000
+        min-pickaxe-level: 2
+      costs:
+        money: 5000.0
+        points: 50
+      settings:
+        chance: 70.0
+
+# ==========================================
+# GUI 配置
+# ==========================================
+gui:
+  forge:
+    title: "&6神话锻造台 &7- &e挖掘数: {blocks}"
+    size: 27
+    # 槽位配置 (第1行:效率3,时运4,耐久5 第2行:镐子13 第3行:关闭22)
+    slots:
+      efficiency: 3
+      fortune: 4
+      unbreaking: 5
+      pickaxe-preview: 13
+      close: 22
+
+# ==========================================
+# Lore 设置
+# ==========================================
+lore-settings:
+  # 是否显示分隔符（开启后会在MiaPickaxe的Lore前后添加分隔线）
+  show-separator: true
+  # 分隔线样式（使用&格式，用于视觉区分MiaPickaxe的Lore）
+  separator-start: "&8&m                    &r &5⛏ MiaPickaxe &8&m                    &r"
+  separator-end: "&8&m                                                          &r"
+  # 隐藏原版附魔Lore显示
+  hide-enchants: true
+
+# ==========================================
+# Lore 模板
+# 可用变量:
+#   {pickaxe_level} - 镐子主等级
+#   {mined_blocks} - 已挖掘方块数
+#   {blocks_to_next} - 距离下一级还需挖掘数
+#   {efficiency_level} - 效率等级
+#   {fortune_name} - 时运/精准采集（根据状态自动切换显示文字）
+#   {fortune_level} - 时运等级（数字）
+#   {unbreaking_level} - 耐久等级
+#   {binding_status} - 绑定状态（会被下方配置替换）
+#   {unbreakable_status} - 无法破坏状态（使用无法破坏石后显示，否则此行隐藏）
+# ==========================================
+lore-template:
+  - "&7镐子等级: &e{pickaxe_level}"
+  - "&7挖掘数量: &a{mined_blocks}"
+  - "&7距离下一级还需要: &c{blocks_to_next}"
+  - ""
+  - "&7效率: &b{efficiency_level}"
+  - "&7{fortune_name}: &d{fortune_level}"
+  - "&7耐久: &a{unbreaking_level}"
+  - ""
+  - "&7耐久度: {unbreakable_status}"
+  - ""
+  - "{binding_status}"
+
+# 绑定状态显示模板
+# 注意：如需换行显示，请使用|符号分隔多行
+# 示例: "&a已绑定|&e绑定者: {player}" 会显示为两行
+binding-lore:
+  bound: "&a已绑定: &e绑定者[{player}]"
+  unbound: "&7未绑定"
+
+# 无法破坏状态显示模板
+unbreakable-lore:
+  active: "&a无法破坏"
+

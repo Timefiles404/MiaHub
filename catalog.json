@@ -33,6 +33,56 @@
       "description": "MiaForge test plugin with /miaf reload."
     },
     {
+      "id": "mialimitation",
+      "name": "MiaLimitation",
+      "pluginName": "MiaLimitation",
+      "repository": "Timefiles404/MiaHub",
+      "releaseTag": "mialimitation-v1.0.0",
+      "asset": "MiaLimitation-1.0.0.jar",
+      "fileName": "MiaLimitation.jar",
+      "version": "1.0.0",
+      "minecraft": "1.21.x",
+      "java": 21,
+      "restartRequired": false,
+      "dependencies": [],
+      "passwordProtected": false,
+      "description": "Item expiration management plugin with /mialimit."
+    },
+    {
+      "id": "miapickaxe",
+      "name": "MiaPickaxe",
+      "pluginName": "MiaPickaxe",
+      "repository": "Timefiles404/MiaHub",
+      "releaseTag": "miapickaxe-v1.0.0",
+      "asset": "MiaPickaxe-1.0.0.jar",
+      "fileName": "MiaPickaxe.jar",
+      "version": "1.0.0",
+      "minecraft": "1.21.x",
+      "java": 21,
+      "restartRequired": false,
+      "dependencies": [
+        "MythicMobs"
+      ],
+      "passwordProtected": false,
+      "description": "Upgradeable Mythic pickaxe plugin with forge GUI and optional economy hooks."
+    },
+    {
+      "id": "miasmartgiftroll",
+      "name": "MiaSmartGiftRoll",
+      "pluginName": "MiaSmartGiftRoll",
+      "repository": "Timefiles404/MiaHub",
+      "releaseTag": "miasmartgiftroll-v1.0.0",
+      "asset": "MiaSmartGiftRoll-1.0.0.jar",
+      "fileName": "MiaSmartGiftRoll.jar",
+      "version": "1.0.0",
+      "minecraft": "1.21.x",
+      "java": 21,
+      "restartRequired": false,
+      "dependencies": [],
+      "passwordProtected": false,
+      "description": "Lottery and gift distribution plugin with kit editor and player filters."
+    },
+    {
       "id": "miaskillpool",
       "name": "MiaSkillpool",
       "pluginName": "MiaSkillpool",

@@ -1,0 +1,31 @@
+name: MiaSmartGiftRoll
+version: ${version}
+main: dev.timefiles.miasmartgiftroll.MiaSmartGiftRoll
+api-version: "1.21"
+description: Advanced lottery and gift distribution system
+author: AoDev
+website: https://aodev.io
+
+softdepend:
+  - Vault
+  - PlayerPoints
+  - PlaceholderAPI
+
+commands:
+  sg:
+    description: MiaSmartGiftRoll main command
+    usage: /<command> <gui|save|roll|claim|reload>
+    permission: miasmartgiftroll.use
+    aliases: [smartgift, giftroll]
+
+permissions:
+  miasmartgiftroll.use:
+    description: Basic command access
+    default: true
+  miasmartgiftroll.admin:
+    description: Admin access (gui, save, roll, reload)
+    default: op
+  miasmartgiftroll.claim:
+    description: Claim pending items
+    default: true
+

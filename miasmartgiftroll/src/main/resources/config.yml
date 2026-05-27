@@ -1,0 +1,52 @@
+# MiaSmartGiftRoll Configuration
+
+# Debug mode - prints extra information to console
+debug: false
+
+# Time unit for play time filter
+# Options: TICKS, SECONDS, MINUTES, HOURS
+time-unit: SECONDS
+
+# Messages - supports & color codes and MiniMessage format
+messages:
+  prefix: "&8[&6MiaSmartGiftRoll&8] "
+  no-permission: "&c你没有权限执行此命令！"
+  player-only: "&c此命令只能由玩家执行！"
+  kit-not-found: "&c找不到礼包: &e%kit%"
+  kit-created: "&a礼包 &e%kit% &a创建成功！"
+  kit-saved: "&a礼包 &e%kit% &a保存成功！"
+  kit-deleted: "&a礼包 &e%kit% &a删除成功！"
+  
+  # Roll messages
+  roll-started: "&a正在从 &e%count% &a名符合条件的玩家中抽取 &e%num% &a人..."
+  roll-no-candidates: "&c没有符合条件的玩家！"
+  roll-fewer-candidates: "&e警告: 符合条件的玩家少于抽取人数，将给所有 &6%count% &e名玩家发放奖励。"
+  roll-winner-broadcast: "&6&l%player% &e太幸运啦，在这次的抽奖中被大奖砸中！"
+  roll-complete: "&a抽奖完成！共有 &e%count% &a名玩家获得了 &6%kit% &a礼包！"
+  
+  # Item distribution
+  items-received: "&a你收到了礼包 &e%kit% &a的奖励！"
+  inventory-full: "&e你的背包已满，部分物品已暂存，请使用 &6/sg claim &e领取。"
+  pending-claimed: "&a成功领取了 &e%count% &a件物品！"
+  no-pending: "&e你没有待领取的物品。"
+  
+  # GUI
+  gui-title-list: "&0&l礼包管理"
+  gui-title-editor: "&0&l编辑礼包: %kit%"
+  gui-create-new: "&a&l创建新礼包"
+  gui-click-to-edit: "&7点击编辑"
+  gui-click-to-delete: "&c右键删除"
+  gui-save: "&a&l保存礼包"
+  gui-cancel: "&c&l取消"
+  gui-commands: "&e&l编辑指令奖励"
+  gui-input-kit-id: "&e请在聊天栏输入礼包ID:"
+  
+  # Reload
+  reload-success: "&a配置重载成功！"
+
+# GUI settings
+gui:
+  # Items per page in kit list
+  items-per-page: 45
+  # Filler item for empty slots
+  filler-material: GRAY_STAINED_GLASS_PANE

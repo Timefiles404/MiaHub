@@ -1,0 +1,24 @@
+lore:
+  marker: "§k§r"
+  prefix: "§7到期时间: §f"
+  display-format: "yyyy年MM月dd日"
+  storage-format: "yyyy-MM-dd"
+  template: "{marker}{prefix}{display-date}{marker}[{storage-date}]"
+
+messages:
+  only-players: "§c该命令只能由玩家执行！"
+  hold-item: "§c请手持一个物品！"
+  invalid-end-format: "§c无效的日期格式！使用格式: <年>y<月>m<日>d (例: 2026y1m30d)"
+  invalid-duration-format: "§c无效的时间格式！使用格式: <数字><h/d/m/y> (例: 30d, 2m, 1y, 24h)"
+  expiration-must-future: "§c到期时间必须在未来！"
+  expiration-set: "§a已为物品设置到期时间: §f{date}"
+  expiration-set-failed: "§c无法为该物品设置到期时间！"
+  item-expired-destroyed: "§c该物品已过期，已被销毁！"
+  config-reloaded: "§a配置已重载！"
+  usage:
+    - "§6=== MiaLimitation 使用说明 ==="
+    - "§e/mialimit end <年>y<月>m<日>d §7- 设置到期日期 (例: 2026y1m30d)"
+    - "§e/mialimit duration <数字><单位> §7- 设置持续时间"
+    - "§7  单位: h(小时), d(天), m(月), y(年)"
+    - "§7  例: 30d, 2m, 1y, 24h"
+    - "§e/mialimit reload §7- 重载配置文件"

@@ -18,4 +18,7 @@ rootProject.name = "MiaHub"
 include("miahub")
 include("miahub-self-updater")
 include("miaforge")
+include("mialimitation")
+include("miapickaxe")
+include("miasmartgiftroll")
 include("miaskillpool")
