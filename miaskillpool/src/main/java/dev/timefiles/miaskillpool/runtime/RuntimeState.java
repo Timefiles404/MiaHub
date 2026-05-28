@@ -31,10 +31,17 @@ public final class RuntimeState {
             if (state.combatUntilMillis > now) {
                 state.rage = Math.min(plugin.skillRegistry().maxRage(), state.rage + plugin.skillRegistry().rageRegenPerSecondCombat());
             }
-            if (plugin.skillRegistry().actionbarEnabled()) {
+            if (plugin.skillRegistry().actionbarEnabled() && state.actionbarVisibleUntilMillis > now) {
                 sendActionbar(player, data, state);
             }
         }
+    }
+
+    public void showActionbar(Player player, long durationMillis) {
+        state(player).actionbarVisibleUntilMillis = Math.max(
+                state(player).actionbarVisibleUntilMillis,
+                System.currentTimeMillis() + Math.max(0L, durationMillis)
+        );
     }
 
     public double mana(Player player) {
@@ -113,6 +120,7 @@ public final class RuntimeState {
         private double mana;
         private double rage = 0.0;
         private long combatUntilMillis = 0L;
+        private long actionbarVisibleUntilMillis = 0L;
         private final Map<Integer, Long> cooldowns = new HashMap<>();
 
         private PlayerRuntime(double mana) {

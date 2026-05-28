@@ -63,6 +63,7 @@ public final class PlayerSkillListener implements Listener {
 
     @EventHandler
     public void onInventoryClose(InventoryCloseEvent event) {
+        gui.handleClose(event);
         randomGui.handleClose(event);
     }
 
@@ -76,6 +77,7 @@ public final class PlayerSkillListener implements Listener {
         event.setCancelled(true);
         int slotIndex = player.getInventory().getHeldItemSlot();
         castService.castEquipped(player, slotIndex);
+        runtimeState.showActionbar(player, 5000L);
     }
 
     @EventHandler
