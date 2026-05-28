@@ -38,7 +38,15 @@
 /mias givebook &lt;玩家&gt; &lt;skillId&gt; [数量]
 /mias random &lt;玩家&gt; roll
 /mias mana addmax &lt;玩家&gt; &lt;数值&gt;
+/mias admingui skillpool
 /mias reload</pre>
+  </section>
+
+  <section>
+    <h2>管理员技能池面板</h2>
+    <p><code>/mias admingui skillpool</code> 打开可视化技能管理。左侧显示已收录进 MiaSkillpool 的 MythicMobs 技能，右侧显示 MythicMobs 中尚未收录的技能，左右两侧都有翻页按钮。</p>
+    <p>左键点击右侧技能会写入 <code>skills.yml</code> 并收录；左键点击左侧技能会进入删除待确认状态，再左键点击同一个技能确认删除；右键点击左侧技能进入编辑页。</p>
+    <p>编辑页会从本地 <code>skills.yml</code> 读取当前配置。基础消耗、基础冷却、基础 Power 可用左键/右键/Shift 左键/Shift 右键做小调或大调。点击保存写入，点击取消不保存。</p>
   </section>
 
   <section>

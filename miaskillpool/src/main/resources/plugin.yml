@@ -9,7 +9,7 @@ depend:
 commands:
   mias:
     description: MiaSkillpool 命令。
-    usage: /mias [open|reload|learn|givebook|upgrade|mana|mode|random]
+    usage: /mias [open|reload|learn|givebook|upgrade|mana|mode|random|admingui]
 permissions:
   miaskillpool.use:
     description: 允许使用 MiaSkillpool 技能池。

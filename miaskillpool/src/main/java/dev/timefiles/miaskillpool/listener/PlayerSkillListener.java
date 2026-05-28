@@ -5,6 +5,7 @@ import dev.timefiles.miaskillpool.config.SkillDefinition;
 import dev.timefiles.miaskillpool.config.SkillRegistry;
 import dev.timefiles.miaskillpool.data.PlayerDataStore;
 import dev.timefiles.miaskillpool.data.PlayerSkillData;
+import dev.timefiles.miaskillpool.gui.AdminSkillPoolGui;
 import dev.timefiles.miaskillpool.gui.RandomSkillRollGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolHolder;
@@ -36,8 +37,9 @@ public final class PlayerSkillListener implements Listener {
     private final SkillCastService castService;
     private final SkillPoolGui gui;
     private final RandomSkillRollGui randomGui;
+    private final AdminSkillPoolGui adminGui;
 
-    public PlayerSkillListener(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, RuntimeState runtimeState, SkillCastService castService, SkillPoolGui gui, RandomSkillRollGui randomGui) {
+    public PlayerSkillListener(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, RuntimeState runtimeState, SkillCastService castService, SkillPoolGui gui, RandomSkillRollGui randomGui, AdminSkillPoolGui adminGui) {
         this.plugin = plugin;
         this.skillRegistry = skillRegistry;
         this.dataStore = dataStore;
@@ -45,12 +47,14 @@ public final class PlayerSkillListener implements Listener {
         this.castService = castService;
         this.gui = gui;
         this.randomGui = randomGui;
+        this.adminGui = adminGui;
     }
 
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         gui.handleClick(event);
         randomGui.handleClick(event);
+        adminGui.handleClick(event);
     }
 
     @EventHandler
@@ -59,12 +63,14 @@ public final class PlayerSkillListener implements Listener {
             event.setCancelled(true);
         }
         randomGui.handleDrag(event);
+        adminGui.handleDrag(event);
     }
 
     @EventHandler
     public void onInventoryClose(InventoryCloseEvent event) {
         gui.handleClose(event);
         randomGui.handleClose(event);
+        adminGui.handleClose(event);
     }
 
     @EventHandler

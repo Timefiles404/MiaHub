@@ -8,6 +8,7 @@ import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
+import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.Collection;
 import java.util.EnumMap;
@@ -140,6 +141,74 @@ public final class SkillRegistry {
         return modeTunings.getOrDefault(mode, ModeTuning.DEFAULT);
     }
 
+    public boolean addMythicSkill(String mythicSkill) {
+        String id = normalizeId(mythicSkill);
+        if (id.isBlank()) {
+            return false;
+        }
+        YamlConfiguration yaml = skillsFile();
+        String path = "skills." + id;
+        if (yaml.isConfigurationSection(path)) {
+            return false;
+        }
+        yaml.set(path + ".display-name", "&f" + mythicSkill);
+        yaml.set(path + ".icon", "BOOK");
+        yaml.set(path + ".mythic-skill", mythicSkill);
+        yaml.set(path + ".base-cost", 20.0);
+        yaml.set(path + ".base-cooldown-seconds", 5.0);
+        yaml.set(path + ".base-power", 1.0);
+        yaml.set(path + ".book.material", "BOOK");
+        yaml.set(path + ".book.name", "&f技能书：" + mythicSkill);
+        yaml.set(path + ".book.lore", List.of("&7右键学习技能。", "&8技能 ID: " + id));
+        if (!saveSkillsFile(yaml)) {
+            return false;
+        }
+        reload();
+        return true;
+    }
+
+    public boolean deleteSkill(String skillId) {
+        String id = normalizeId(skillId);
+        YamlConfiguration yaml = skillsFile();
+        if (!yaml.isConfigurationSection("skills." + id)) {
+            return false;
+        }
+        yaml.set("skills." + id, null);
+        if (!saveSkillsFile(yaml)) {
+            return false;
+        }
+        reload();
+        return true;
+    }
+
+    public Optional<SkillDefinition> readSkillFromFile(String skillId) {
+        String id = normalizeId(skillId);
+        YamlConfiguration yaml = skillsFile();
+        if (!yaml.isConfigurationSection("skills." + id)) {
+            return Optional.empty();
+        }
+        return readSkill(yaml, id, id);
+    }
+
+    public boolean saveSkill(SkillDefinition skill) {
+        YamlConfiguration yaml = skillsFile();
+        String path = "skills." + skill.id();
+        yaml.set(path + ".display-name", stripColorPrefix(skill.displayName()));
+        yaml.set(path + ".icon", skill.icon().name());
+        yaml.set(path + ".mythic-skill", skill.mythicSkill());
+        yaml.set(path + ".base-cost", skill.baseCost());
+        yaml.set(path + ".base-cooldown-seconds", skill.baseCooldownSeconds());
+        yaml.set(path + ".base-power", (double) skill.basePower());
+        yaml.set(path + ".book.material", skill.bookMaterial().name());
+        yaml.set(path + ".book.name", stripColorPrefix(skill.bookName()));
+        yaml.set(path + ".book.lore", skill.bookLore());
+        if (!saveSkillsFile(yaml)) {
+            return false;
+        }
+        reload();
+        return true;
+    }
+
     public double costFactor(int level) {
         return Math.max(0.05, 1.0 - (Math.max(1, level) - 1) * costReductionPerLevel);
     }
@@ -206,22 +275,31 @@ public final class SkillRegistry {
                 continue;
             }
 
-            Material icon = parseMaterial(source.getString(path + ".icon", "BOOK"), Material.BOOK);
-            Material bookMaterial = parseMaterial(source.getString(path + ".book.material", "BOOK"), Material.BOOK);
-            List<String> lore = source.getStringList(path + ".book.lore");
-            skills.put(id, new SkillDefinition(
-                    id,
-                    Texts.color(source.getString(path + ".display-name", rawId)),
-                    icon,
-                    mythicSkill,
-                    Math.max(0.0, source.getDouble(path + ".base-cost", 0.0)),
-                    Math.max(0.0, source.getDouble(path + ".base-cooldown-seconds", 0.0)),
-                    (float) source.getDouble(path + ".base-power", 1.0),
-                    bookMaterial,
-                    Texts.color(source.getString(path + ".book.name", "&f技能书：" + rawId)),
-                    Texts.color(lore)
-            ));
+            readSkill(source, id, rawId).ifPresent(skill -> skills.put(id, skill));
         }
+    }
+
+    private Optional<SkillDefinition> readSkill(FileConfiguration source, String id, String rawId) {
+        String path = "skills." + rawId;
+        String mythicSkill = source.getString(path + ".mythic-skill", "");
+        if (mythicSkill.isBlank()) {
+            return Optional.empty();
+        }
+        Material icon = parseMaterial(source.getString(path + ".icon", "BOOK"), Material.BOOK);
+        Material bookMaterial = parseMaterial(source.getString(path + ".book.material", "BOOK"), Material.BOOK);
+        List<String> lore = source.getStringList(path + ".book.lore");
+        return Optional.of(new SkillDefinition(
+                id,
+                Texts.color(source.getString(path + ".display-name", rawId)),
+                icon,
+                mythicSkill,
+                Math.max(0.0, source.getDouble(path + ".base-cost", 0.0)),
+                Math.max(0.0, source.getDouble(path + ".base-cooldown-seconds", 0.0)),
+                (float) source.getDouble(path + ".base-power", 1.0),
+                bookMaterial,
+                Texts.color(source.getString(path + ".book.name", "&f技能书：" + rawId)),
+                Texts.color(lore)
+        ));
     }
 
     private void saveDefaultResource(String name) {
@@ -229,6 +307,25 @@ public final class SkillRegistry {
         if (!file.exists()) {
             plugin.saveResource(name, false);
         }
+    }
+
+    private YamlConfiguration skillsFile() {
+        saveDefaultResource("skills.yml");
+        return YamlConfiguration.loadConfiguration(new File(plugin.getDataFolder(), "skills.yml"));
+    }
+
+    private boolean saveSkillsFile(YamlConfiguration yaml) {
+        try {
+            yaml.save(new File(plugin.getDataFolder(), "skills.yml"));
+            return true;
+        } catch (IOException exception) {
+            plugin.getLogger().warning("Could not save skills.yml: " + exception.getMessage());
+            return false;
+        }
+    }
+
+    private String stripColorPrefix(String value) {
+        return value == null ? "" : value.replace('§', '&');
     }
 
     private boolean upgradeBoolean(YamlConfiguration upgradeConfig, String path, String legacyPath, boolean fallback) {

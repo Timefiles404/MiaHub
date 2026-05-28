@@ -6,6 +6,7 @@ import dev.timefiles.miaskillpool.config.SkillDefinition;
 import dev.timefiles.miaskillpool.config.SkillRegistry;
 import dev.timefiles.miaskillpool.data.PlayerDataStore;
 import dev.timefiles.miaskillpool.data.PlayerSkillData;
+import dev.timefiles.miaskillpool.gui.AdminSkillPoolGui;
 import dev.timefiles.miaskillpool.gui.RandomSkillRollGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolGui;
 import dev.timefiles.miaskillpool.runtime.MiaSkillpoolService;
@@ -33,15 +34,17 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
     private final PlayerDataStore dataStore;
     private final SkillPoolGui gui;
     private final RandomSkillRollGui randomGui;
+    private final AdminSkillPoolGui adminGui;
     private final RuntimeState runtimeState;
     private final MiaSkillpoolService api;
 
-    public MiaSkillpoolCommand(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, SkillPoolGui gui, RandomSkillRollGui randomGui, RuntimeState runtimeState, MiaSkillpoolService api) {
+    public MiaSkillpoolCommand(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, SkillPoolGui gui, RandomSkillRollGui randomGui, AdminSkillPoolGui adminGui, RuntimeState runtimeState, MiaSkillpoolService api) {
         this.plugin = plugin;
         this.skillRegistry = skillRegistry;
         this.dataStore = dataStore;
         this.gui = gui;
         this.randomGui = randomGui;
+        this.adminGui = adminGui;
         this.runtimeState = runtimeState;
         this.api = api;
     }
@@ -60,6 +63,7 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
             case "mana" -> mana(sender, args);
             case "mode" -> mode(sender, args);
             case "random" -> random(sender, args);
+            case "admingui" -> adminGui(sender, args);
             default -> {
                 sendHelp(sender, label);
                 yield true;
@@ -70,7 +74,10 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, String[] args) {
         if (args.length == 1) {
-            return filter(List.of("open", "reload", "learn", "givebook", "upgrade", "mana", "mode", "random"), args[0]);
+            return filter(List.of("open", "reload", "learn", "givebook", "upgrade", "mana", "mode", "random", "admingui"), args[0]);
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("admingui")) {
+            return filter(List.of("skillpool"), args[1]);
         }
         if (args.length == 2 && List.of("learn", "givebook", "random").contains(args[0].toLowerCase(Locale.ROOT))) {
             return filter(Bukkit.getOnlinePlayers().stream().map(Player::getName).toList(), args[1]);
@@ -271,6 +278,22 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
         return true;
     }
 
+    private boolean adminGui(CommandSender sender, String[] args) {
+        if (!requireAdmin(sender)) {
+            return true;
+        }
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(Texts.PREFIX + Texts.color("&c只有玩家可以打开管理 GUI。"));
+            return true;
+        }
+        if (args.length < 2 || !args[1].equalsIgnoreCase("skillpool")) {
+            sender.sendMessage(Texts.PREFIX + Texts.color("&7用法：/mias admingui skillpool"));
+            return true;
+        }
+        adminGui.open(player);
+        return true;
+    }
+
     private boolean requireAdmin(CommandSender sender) {
         if (!sender.hasPermission("miaskillpool.admin")) {
             sender.sendMessage(Texts.PREFIX + Texts.color("&c你没有管理 MiaSkillpool 的权限。"));
@@ -288,6 +311,7 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
             sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " givebook <player> <skillId> [amount]"));
             sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " random <player> roll"));
             sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " mana addmax <player> <amount>"));
+            sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " admingui skillpool"));
         }
     }
 
