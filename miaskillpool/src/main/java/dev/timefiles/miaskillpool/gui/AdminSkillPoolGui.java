@@ -12,6 +12,8 @@ import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
@@ -49,6 +51,7 @@ public final class AdminSkillPoolGui {
     private final SkillRegistry skillRegistry;
     private final Map<UUID, ListState> listStates = new HashMap<>();
     private final Map<UUID, EditState> editStates = new HashMap<>();
+    private final Map<UUID, AnvilSession> anvilSessions = new HashMap<>();
 
     public AdminSkillPoolGui(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry) {
         this.plugin = plugin;
@@ -64,6 +67,10 @@ public final class AdminSkillPoolGui {
     }
 
     public void handleClick(InventoryClickEvent event) {
+        if (event.getView().getTopInventory().getHolder() instanceof AdminAnvilHolder anvilHolder) {
+            handleAnvilClick(event, anvilHolder);
+            return;
+        }
         if (!(event.getView().getTopInventory().getHolder() instanceof AdminSkillPoolHolder holder)) {
             return;
         }
@@ -82,12 +89,17 @@ public final class AdminSkillPoolGui {
     }
 
     public void handleDrag(InventoryDragEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof AdminSkillPoolHolder) {
+        if (event.getView().getTopInventory().getHolder() instanceof AdminSkillPoolHolder
+                || event.getView().getTopInventory().getHolder() instanceof AdminAnvilHolder) {
             event.setCancelled(true);
         }
     }
 
     public void handleClose(InventoryCloseEvent event) {
+        if (event.getInventory().getHolder() instanceof AdminAnvilHolder anvilHolder) {
+            handleAnvilClose(anvilHolder);
+            return;
+        }
         if (event.getInventory().getHolder() instanceof AdminSkillPoolHolder holder && holder.view() == AdminSkillPoolHolder.View.EDIT) {
             editStates.remove(holder.playerId());
         }
@@ -115,6 +127,17 @@ public final class AdminSkillPoolGui {
         if (slot == 53) {
             state.rightPage++;
             refreshList(player);
+            return;
+        }
+        if (slot == 49) {
+            if (click.isRightClick()) {
+                applySearchQuery(state, null);
+                refreshList(player);
+                return;
+            }
+            if (click.isLeftClick()) {
+                openSearchAnvil(player, state);
+            }
             return;
         }
 
@@ -190,6 +213,11 @@ public final class AdminSkillPoolGui {
             return;
         }
 
+        if (slot == 13) {
+            openRenameAnvil(player, state);
+            return;
+        }
+
         double step = step(click);
         if (slot == 20) {
             state.baseCost = Math.max(0.0, state.baseCost + step);
@@ -223,6 +251,114 @@ public final class AdminSkillPoolGui {
         return 0.0;
     }
 
+    private void openSearchAnvil(Player player, ListState state) {
+        AnvilSession session = new AnvilSession(AnvilSession.Purpose.SEARCH, null);
+        // Seed the rename box with the current query (or empty) so confirming a blank box clears the filter,
+        // rather than searching for a placeholder hint.
+        String current = (state.searchQuery == null || state.searchQuery.isBlank()) ? "" : state.searchQuery;
+        openAnvil(player, session, "&4搜索技能", current, current);
+    }
+
+    private void openRenameAnvil(Player player, EditState state) {
+        AnvilSession session = new AnvilSession(AnvilSession.Purpose.RENAME, state);
+        String editable = state.displayName.replace('§', '&');
+        openAnvil(player, session, "&4修改显示名称", editable, Texts.plain(editable));
+    }
+
+    private void openAnvil(Player player, AnvilSession session, String title, String paperName, String seedText) {
+        anvilSessions.put(player.getUniqueId(), session);
+        Inventory anvil = Bukkit.createInventory(new AdminAnvilHolder(player.getUniqueId()), InventoryType.ANVIL, Texts.color(title));
+        anvil.setItem(0, named(Material.PAPER, Texts.color(paperName), List.of()));
+        session.latestText = seedText == null ? "" : seedText;
+        player.openInventory(anvil);
+    }
+
+    public void handlePrepareAnvil(PrepareAnvilEvent event) {
+        if (!(event.getInventory().getHolder() instanceof AdminAnvilHolder holder)) {
+            return;
+        }
+        AnvilSession session = anvilSessions.get(holder.playerId());
+        if (session == null) {
+            return;
+        }
+        String text = event.getInventory().getRenameText();
+        if (text == null || text.isBlank()) {
+            text = session.latestText == null ? "" : session.latestText;
+        } else {
+            session.latestText = text;
+        }
+        event.setResult(named(Material.PAPER, Texts.color(text), List.of()));
+        event.getInventory().setRepairCost(0);
+    }
+
+    private void handleAnvilClick(InventoryClickEvent event, AdminAnvilHolder holder) {
+        event.setCancelled(true);
+        if (!(event.getWhoClicked() instanceof Player player) || !player.getUniqueId().equals(holder.playerId())) {
+            return;
+        }
+        AnvilSession session = anvilSessions.get(holder.playerId());
+        if (session == null) {
+            return;
+        }
+        if (event.getRawSlot() != 2) {
+            return;
+        }
+        String text = session.latestText;
+        String renameText = event.getView().getTopInventory() instanceof org.bukkit.inventory.AnvilInventory anvil ? anvil.getRenameText() : null;
+        if (renameText != null && !renameText.isBlank()) {
+            text = renameText;
+        }
+        if (text == null) {
+            text = "";
+        }
+        session.confirmed = true;
+        anvilSessions.remove(holder.playerId());
+        if (session.purpose == AnvilSession.Purpose.SEARCH) {
+            ListState state = listStates.computeIfAbsent(player.getUniqueId(), ignored -> new ListState());
+            applySearchQuery(state, text);
+            player.closeInventory();
+            open(player);
+        } else {
+            EditState editState = session.editState;
+            if (editState != null) {
+                editState.displayName = Texts.color(text);
+                editStates.put(player.getUniqueId(), editState);
+                player.closeInventory();
+                Inventory inventory = Bukkit.createInventory(new AdminSkillPoolHolder(player.getUniqueId(), AdminSkillPoolHolder.View.EDIT), INVENTORY_SIZE, Texts.color("&4编辑技能 " + editState.id));
+                renderEdit(inventory, editState);
+                player.openInventory(inventory);
+            } else {
+                player.closeInventory();
+            }
+        }
+    }
+
+    private void handleAnvilClose(AdminAnvilHolder holder) {
+        AnvilSession session = anvilSessions.remove(holder.playerId());
+        if (session == null || session.confirmed) {
+            return;
+        }
+        Player player = Bukkit.getPlayer(holder.playerId());
+        if (player == null) {
+            return;
+        }
+        AnvilSession.Purpose purpose = session.purpose;
+        EditState editState = session.editState;
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline()) {
+                return;
+            }
+            if (purpose == AnvilSession.Purpose.SEARCH) {
+                open(player);
+            } else if (editState != null) {
+                editStates.put(player.getUniqueId(), editState);
+                Inventory inventory = Bukkit.createInventory(new AdminSkillPoolHolder(player.getUniqueId(), AdminSkillPoolHolder.View.EDIT), INVENTORY_SIZE, Texts.color("&4编辑技能 " + editState.id));
+                renderEdit(inventory, editState);
+                player.openInventory(inventory);
+            }
+        });
+    }
+
     private void renderList(Player player, Inventory inventory) {
         fill(inventory);
         ListState state = listStates.computeIfAbsent(player.getUniqueId(), ignored -> new ListState());
@@ -234,12 +370,12 @@ public final class AdminSkillPoolGui {
                 Texts.color("&7右侧：未收录 MythicMobs 技能")
         )));
 
-        List<SkillDefinition> registered = registeredSkills();
+        List<SkillDefinition> registered = registeredSkills(state.searchQuery);
         int leftMaxPage = maxPage(registered.size(), LEFT_SLOTS.length);
         state.leftPage = clampPage(state.leftPage, leftMaxPage);
         renderRegistered(inventory, state, registered);
 
-        List<String> available = unregisteredMythicSkills();
+        List<String> available = unregisteredMythicSkills(state.searchQuery);
         int rightMaxPage = maxPage(available.size(), RIGHT_SLOTS.length);
         state.rightPage = clampPage(state.rightPage, rightMaxPage);
         renderAvailable(inventory, state, available);
@@ -248,6 +384,16 @@ public final class AdminSkillPoolGui {
         inventory.setItem(46, named(Material.ARROW, Texts.color("&a左侧下一页"), List.of(Texts.color("&7第 " + (state.leftPage + 1) + "/" + (leftMaxPage + 1) + " 页"))));
         inventory.setItem(52, named(Material.ARROW, Texts.color("&b右侧上一页"), List.of(Texts.color("&7第 " + (state.rightPage + 1) + "/" + (rightMaxPage + 1) + " 页"))));
         inventory.setItem(53, named(Material.ARROW, Texts.color("&b右侧下一页"), List.of(Texts.color("&7第 " + (state.rightPage + 1) + "/" + (rightMaxPage + 1) + " 页"))));
+
+        List<String> searchLore = new ArrayList<>();
+        searchLore.add(Texts.color("&7左键：用铁砧输入关键词"));
+        searchLore.add(Texts.color("&7右键：清除筛选"));
+        if (state.searchQuery != null && !state.searchQuery.isBlank()) {
+            searchLore.add(Texts.color("&8当前筛选：&f" + state.searchQuery));
+        } else {
+            searchLore.add(Texts.color("&8当前无筛选"));
+        }
+        inventory.setItem(49, named(Material.SPYGLASS, Texts.color("&e搜索技能"), searchLore));
     }
 
     private void renderRegistered(Inventory inventory, ListState state, List<SkillDefinition> skills) {
@@ -284,6 +430,11 @@ public final class AdminSkillPoolGui {
                 Texts.color("&8左键 +1，右键 -1"),
                 Texts.color("&8Shift 左键 +10，Shift 右键 -10")
         )));
+        inventory.setItem(13, named(Material.NAME_TAG, Texts.color("&b修改显示名称"), List.of(
+                Texts.color("&7当前：&f" + Texts.plain(state.displayName)),
+                Texts.color("&7点击用铁砧重命名"),
+                Texts.color("&8重命名后点击保存(绿色)生效")
+        )));
         inventory.setItem(20, numberItem(Material.EMERALD, "&a基础消耗", state.baseCost));
         inventory.setItem(22, numberItem(Material.CLOCK, "&e基础冷却", state.baseCooldownSeconds));
         inventory.setItem(24, numberItem(Material.BLAZE_POWDER, "&c基础 Power", state.basePower));
@@ -319,13 +470,16 @@ public final class AdminSkillPoolGui {
         return left ? state.leftSlots : state.rightSlots;
     }
 
-    private List<SkillDefinition> registeredSkills() {
+    private List<SkillDefinition> registeredSkills(String query) {
+        String needle = query == null ? "" : query.toLowerCase(Locale.ROOT).trim();
         return skillRegistry.all().stream()
+                .filter(skill -> matchesQuery(needle, skill.id(), skill.mythicSkill(), Texts.plain(skill.displayName())))
                 .sorted(Comparator.comparing(SkillDefinition::mythicSkill, String.CASE_INSENSITIVE_ORDER))
                 .toList();
     }
 
-    private List<String> unregisteredMythicSkills() {
+    private List<String> unregisteredMythicSkills(String query) {
+        String needle = query == null ? "" : query.toLowerCase(Locale.ROOT).trim();
         Set<String> registered = new HashSet<>();
         for (SkillDefinition skill : skillRegistry.all()) {
             registered.add(skill.mythicSkill().toLowerCase(Locale.ROOT));
@@ -336,8 +490,29 @@ public final class AdminSkillPoolGui {
         }
         return mythic.getSkillManager().getSkillNames().stream()
                 .filter(skill -> !registered.contains(skill.toLowerCase(Locale.ROOT)))
+                .filter(skill -> matchesQuery(needle, skill, skill, skill))
                 .sorted(String.CASE_INSENSITIVE_ORDER)
                 .toList();
+    }
+
+    private boolean matchesQuery(String needle, String... haystacks) {
+        if (needle.isBlank()) {
+            return true;
+        }
+        for (String haystack : haystacks) {
+            if (haystack != null && haystack.toLowerCase(Locale.ROOT).contains(needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void applySearchQuery(ListState state, String query) {
+        String trimmed = query == null ? null : query.trim();
+        state.searchQuery = (trimmed == null || trimmed.isBlank()) ? null : trimmed;
+        state.leftPage = 0;
+        state.rightPage = 0;
+        state.pendingDeleteId = null;
     }
 
     private int maxPage(int size, int pageSize) {
@@ -378,13 +553,14 @@ public final class AdminSkillPoolGui {
         private int leftPage;
         private int rightPage;
         private String pendingDeleteId;
+        private String searchQuery;
         private final Map<Integer, String> leftSlots = new LinkedHashMap<>();
         private final Map<Integer, String> rightSlots = new LinkedHashMap<>();
     }
 
     private static final class EditState {
         private final String id;
-        private final String displayName;
+        private String displayName;
         private final Material icon;
         private final String mythicSkill;
         private final Material bookMaterial;
@@ -409,6 +585,23 @@ public final class AdminSkillPoolGui {
 
         private SkillDefinition toDefinition() {
             return new SkillDefinition(id, displayName, icon, mythicSkill, baseCost, baseCooldownSeconds, (float) basePower, bookMaterial, bookName, bookLore);
+        }
+    }
+
+    private static final class AnvilSession {
+        private enum Purpose {
+            SEARCH,
+            RENAME
+        }
+
+        private final Purpose purpose;
+        private final EditState editState;
+        private String latestText = "";
+        private boolean confirmed;
+
+        private AnvilSession(Purpose purpose, EditState editState) {
+            this.purpose = purpose;
+            this.editState = editState;
         }
     }
 }
