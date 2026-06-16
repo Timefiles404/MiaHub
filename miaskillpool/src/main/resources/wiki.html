@@ -47,9 +47,9 @@
     <h2>管理员技能池面板</h2>
     <p><code>/mias admingui skillpool</code> 打开可视化技能管理。左侧显示已收录进 MiaSkillpool 的 MythicMobs 技能，右侧显示 MythicMobs 中尚未收录的技能，左右两侧都有翻页按钮。</p>
     <p>左键点击右侧技能会写入 <code>skills.yml</code> 并收录；左键点击左侧技能会进入删除待确认状态，再左键点击同一个技能确认删除；右键点击左侧技能进入编辑页。</p>
-    <p>底部中间（槽位 49）有<strong>搜索技能</strong>按钮（望远镜图标）。左键点击会弹出铁砧文本输入框，输入关键词后点击结果格确认，会同时筛选左侧已收录技能与右侧未收录技能（对技能 ID、MythicMobs 技能名、显示名做不区分大小写的包含匹配），并把左右翻页重置到第一页。右键点击该按钮清除当前筛选。按钮 lore 会显示当前生效的筛选关键词。</p>
+    <p>底部中间（槽位 49）有<strong>搜索技能</strong>按钮（望远镜图标）。左键点击会关闭界面并提示在聊天栏输入关键词，发送后即作为输入，会同时筛选左侧已收录技能与右侧未收录技能（对技能 ID、MythicMobs 技能名、显示名做不区分大小写的包含匹配），并把左右翻页重置到第一页。留空发送可清除筛选；输入 <code>cancel</code> 或 60 秒未输入则自动取消并返回界面。右键点击该按钮直接清除当前筛选。按钮 lore 会显示当前生效的筛选关键词。</p>
     <p>编辑页会从本地 <code>skills.yml</code> 读取当前配置。基础消耗、基础冷却、基础 Power 可用左键/右键/Shift 左键/Shift 右键做小调或大调。点击保存写入，点击取消不保存。</p>
-    <p>编辑页槽位 13 有<strong>修改显示名称</strong>按钮（命名牌图标）。点击会弹出铁砧并预填当前显示名称（颜色代码以 <code>&amp;</code> 形式可编辑），输入新名称后点击结果格确认。重命名只是<strong>暂存</strong>在编辑页，需要再点击绿色的<strong>保存</strong>按钮才会写入 <code>skills.yml</code> 的 <code>display-name</code> 并重载；重载后 <code>/mias open</code> 界面与施法 actionbar 都会显示新名称。</p>
+    <p>编辑页槽位 13 有<strong>修改显示名称</strong>按钮（命名牌图标）。点击会关闭界面并提示在聊天栏输入新的显示名称（支持 <code>&amp;</code> 颜色代码），发送后即作为新名称；输入 <code>cancel</code> 或 60 秒未输入则自动取消。新名称只是<strong>暂存</strong>在编辑页，需要再点击绿色的<strong>保存</strong>按钮才会写入 <code>skills.yml</code> 的 <code>display-name</code> 并重载；重载后 <code>/mias open</code> 界面与施法 actionbar 都会显示新名称。</p>
   </section>
 
   <section>

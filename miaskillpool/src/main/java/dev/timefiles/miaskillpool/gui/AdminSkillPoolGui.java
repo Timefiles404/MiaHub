@@ -12,12 +12,11 @@ import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
-import org.bukkit.event.inventory.InventoryType;
-import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -29,6 +28,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class AdminSkillPoolGui {
     private static final int INVENTORY_SIZE = 54;
@@ -51,7 +51,8 @@ public final class AdminSkillPoolGui {
     private final SkillRegistry skillRegistry;
     private final Map<UUID, ListState> listStates = new HashMap<>();
     private final Map<UUID, EditState> editStates = new HashMap<>();
-    private final Map<UUID, AnvilSession> anvilSessions = new HashMap<>();
+    // Accessed from the async chat thread (containsKey) and the main thread, hence concurrent.
+    private final Map<UUID, ChatSession> chatSessions = new ConcurrentHashMap<>();
 
     public AdminSkillPoolGui(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry) {
         this.plugin = plugin;
@@ -67,10 +68,6 @@ public final class AdminSkillPoolGui {
     }
 
     public void handleClick(InventoryClickEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof AdminAnvilHolder anvilHolder) {
-            handleAnvilClick(event, anvilHolder);
-            return;
-        }
         if (!(event.getView().getTopInventory().getHolder() instanceof AdminSkillPoolHolder holder)) {
             return;
         }
@@ -89,17 +86,12 @@ public final class AdminSkillPoolGui {
     }
 
     public void handleDrag(InventoryDragEvent event) {
-        if (event.getView().getTopInventory().getHolder() instanceof AdminSkillPoolHolder
-                || event.getView().getTopInventory().getHolder() instanceof AdminAnvilHolder) {
+        if (event.getView().getTopInventory().getHolder() instanceof AdminSkillPoolHolder) {
             event.setCancelled(true);
         }
     }
 
     public void handleClose(InventoryCloseEvent event) {
-        if (event.getInventory().getHolder() instanceof AdminAnvilHolder anvilHolder) {
-            handleAnvilClose(anvilHolder);
-            return;
-        }
         if (event.getInventory().getHolder() instanceof AdminSkillPoolHolder holder && holder.view() == AdminSkillPoolHolder.View.EDIT) {
             editStates.remove(holder.playerId());
         }
@@ -136,7 +128,7 @@ public final class AdminSkillPoolGui {
                 return;
             }
             if (click.isLeftClick()) {
-                openSearchAnvil(player, state);
+                openSearchPrompt(player, state);
             }
             return;
         }
@@ -184,11 +176,7 @@ public final class AdminSkillPoolGui {
             player.sendMessage(Texts.PREFIX + Texts.color("&c技能配置不存在：" + skillId));
             return;
         }
-        EditState state = new EditState(skill);
-        editStates.put(player.getUniqueId(), state);
-        Inventory inventory = Bukkit.createInventory(new AdminSkillPoolHolder(player.getUniqueId(), AdminSkillPoolHolder.View.EDIT), INVENTORY_SIZE, Texts.color("&4编辑技能 " + skill.id()));
-        renderEdit(inventory, state);
-        player.openInventory(inventory);
+        openEditInventory(player, new EditState(skill));
     }
 
     private void handleEditClick(Player player, int slot, ClickType click) {
@@ -214,7 +202,7 @@ public final class AdminSkillPoolGui {
         }
 
         if (slot == 13) {
-            openRenameAnvil(player, state);
+            openRenamePrompt(player, state);
             return;
         }
 
@@ -251,128 +239,115 @@ public final class AdminSkillPoolGui {
         return 0.0;
     }
 
-    private void openSearchAnvil(Player player, ListState state) {
-        AnvilSession session = new AnvilSession(AnvilSession.Purpose.SEARCH, null);
-        // Seed the rename box with the current query (or empty) so confirming a blank box clears the filter,
-        // rather than searching for a placeholder hint.
-        String current = (state.searchQuery == null || state.searchQuery.isBlank()) ? "" : state.searchQuery;
-        openAnvil(player, session, "&4搜索技能", current, current);
+    private void openEditInventory(Player player, EditState editState) {
+        editStates.put(player.getUniqueId(), editState);
+        Inventory inventory = Bukkit.createInventory(new AdminSkillPoolHolder(player.getUniqueId(), AdminSkillPoolHolder.View.EDIT), INVENTORY_SIZE, Texts.color("&4编辑技能 " + editState.id));
+        renderEdit(inventory, editState);
+        player.openInventory(inventory);
     }
 
-    private void openRenameAnvil(Player player, EditState state) {
-        AnvilSession session = new AnvilSession(AnvilSession.Purpose.RENAME, state);
-        String editable = state.displayName.replace('§', '&');
-        openAnvil(player, session, "&4修改显示名称", editable, Texts.plain(editable));
+    private void openSearchPrompt(Player player, ListState state) {
+        String current = (state.searchQuery == null || state.searchQuery.isBlank()) ? "当前无筛选" : "当前筛选：" + state.searchQuery;
+        startPrompt(player, new ChatSession(ChatSession.Purpose.SEARCH, null),
+                "&e搜索技能：请在聊天栏输入关键词。",
+                "&7留空发送可清除筛选，输入 &fcancel&7 取消，&860 秒未输入自动取消。&8（" + current + "）");
     }
 
-    private void openAnvil(Player player, AnvilSession session, String title, String paperName, String seedText) {
-        anvilSessions.put(player.getUniqueId(), session);
-        Inventory anvil = Bukkit.createInventory(new AdminAnvilHolder(player.getUniqueId()), InventoryType.ANVIL, Texts.color(title));
-        anvil.setItem(0, named(Material.PAPER, Texts.color(paperName), List.of()));
-        session.latestText = seedText == null ? "" : seedText;
-        player.openInventory(anvil);
-    }
-
-    public void handlePrepareAnvil(PrepareAnvilEvent event) {
-        if (!(event.getInventory().getHolder() instanceof AdminAnvilHolder holder)) {
-            return;
-        }
-        AnvilSession session = anvilSessions.get(holder.playerId());
-        if (session == null) {
-            return;
-        }
-        String text = renameTextOf(event.getView());
-        if (text == null || text.isBlank()) {
-            text = session.latestText == null ? "" : session.latestText;
-        } else {
-            session.latestText = text;
-        }
-        event.setResult(named(Material.PAPER, Texts.color(text), List.of()));
-        event.getInventory().setRepairCost(0);
+    private void openRenamePrompt(Player player, EditState state) {
+        startPrompt(player, new ChatSession(ChatSession.Purpose.RENAME, state),
+                "&b修改显示名称：请在聊天栏输入新的显示名称。",
+                "&7支持 &f&&&7 颜色代码，输入 &fcancel&7 取消，&860 秒未输入自动取消。&8（当前：" + Texts.plain(state.displayName) + "）");
     }
 
     /**
-     * Reads the anvil rename text via the modern {@link org.bukkit.inventory.view.AnvilView} API,
-     * falling back to the deprecated {@code AnvilInventory#getRenameText()} only if needed. The
-     * deprecated inventory getter returns null/empty for createInventory-backed anvils on Paper 1.21,
-     * so the view API is the reliable source.
+     * Closes the GUI and waits for the next chat message as text input (see {@link #handleChatInput}).
+     * Chat input is used instead of an anvil because createInventory-backed anvils do not forward
+     * rename text on this Paper build.
      */
-    private String renameTextOf(org.bukkit.inventory.InventoryView view) {
-        if (view instanceof org.bukkit.inventory.view.AnvilView anvilView) {
-            return anvilView.getRenameText();
+    private void startPrompt(Player player, ChatSession session, String... promptLines) {
+        UUID id = player.getUniqueId();
+        cancelPrompt(id);
+        chatSessions.put(id, session);
+        player.closeInventory();
+        for (String line : promptLines) {
+            player.sendMessage(Texts.PREFIX + Texts.color(line));
         }
-        if (view.getTopInventory() instanceof org.bukkit.inventory.AnvilInventory anvil) {
-            return anvil.getRenameText();
-        }
-        return null;
+        session.timeoutTask = plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            ChatSession current = chatSessions.remove(id);
+            if (current == null) {
+                return;
+            }
+            Player online = Bukkit.getPlayer(id);
+            if (online != null) {
+                online.sendMessage(Texts.PREFIX + Texts.color("&7输入超时，已取消。"));
+                reopenAfterPrompt(online, current);
+            }
+        }, 1200L);
     }
 
-    private void handleAnvilClick(InventoryClickEvent event, AdminAnvilHolder holder) {
-        event.setCancelled(true);
-        if (!(event.getWhoClicked() instanceof Player player) || !player.getUniqueId().equals(holder.playerId())) {
-            return;
+    /**
+     * Called from the async chat listener. Returns true if the message was consumed as prompt input
+     * (the caller should cancel the chat event). Only schedules main-thread work; touches no Bukkit API.
+     */
+    public boolean handleChatInput(Player player, String text) {
+        UUID id = player.getUniqueId();
+        if (!chatSessions.containsKey(id)) {
+            return false;
         }
-        AnvilSession session = anvilSessions.get(holder.playerId());
+        plugin.getServer().getScheduler().runTask(plugin, () -> processChatInput(id, text));
+        return true;
+    }
+
+    private void processChatInput(UUID id, String rawText) {
+        ChatSession session = chatSessions.remove(id);
         if (session == null) {
             return;
         }
-        if (event.getRawSlot() != 2) {
-            return;
+        if (session.timeoutTask != null) {
+            session.timeoutTask.cancel();
         }
-        String text = session.latestText;
-        String renameText = renameTextOf(event.getView());
-        if (renameText != null && !renameText.isBlank()) {
-            text = renameText;
-        }
-        if (text == null) {
-            text = "";
-        }
-        session.confirmed = true;
-        anvilSessions.remove(holder.playerId());
-        if (session.purpose == AnvilSession.Purpose.SEARCH) {
-            ListState state = listStates.computeIfAbsent(player.getUniqueId(), ignored -> new ListState());
-            applySearchQuery(state, text);
-            player.closeInventory();
-            open(player);
-        } else {
-            EditState editState = session.editState;
-            if (editState != null) {
-                editState.displayName = Texts.color(text);
-                editStates.put(player.getUniqueId(), editState);
-                player.closeInventory();
-                Inventory inventory = Bukkit.createInventory(new AdminSkillPoolHolder(player.getUniqueId(), AdminSkillPoolHolder.View.EDIT), INVENTORY_SIZE, Texts.color("&4编辑技能 " + editState.id));
-                renderEdit(inventory, editState);
-                player.openInventory(inventory);
-            } else {
-                player.closeInventory();
-            }
-        }
-    }
-
-    private void handleAnvilClose(AdminAnvilHolder holder) {
-        AnvilSession session = anvilSessions.remove(holder.playerId());
-        if (session == null || session.confirmed) {
-            return;
-        }
-        Player player = Bukkit.getPlayer(holder.playerId());
+        Player player = Bukkit.getPlayer(id);
         if (player == null) {
             return;
         }
-        AnvilSession.Purpose purpose = session.purpose;
-        EditState editState = session.editState;
-        plugin.getServer().getScheduler().runTask(plugin, () -> {
-            if (!player.isOnline()) {
-                return;
-            }
-            if (purpose == AnvilSession.Purpose.SEARCH) {
-                open(player);
-            } else if (editState != null) {
-                editStates.put(player.getUniqueId(), editState);
-                Inventory inventory = Bukkit.createInventory(new AdminSkillPoolHolder(player.getUniqueId(), AdminSkillPoolHolder.View.EDIT), INVENTORY_SIZE, Texts.color("&4编辑技能 " + editState.id));
-                renderEdit(inventory, editState);
-                player.openInventory(inventory);
-            }
-        });
+        String text = rawText == null ? "" : rawText.trim();
+        if (text.equalsIgnoreCase("cancel")) {
+            player.sendMessage(Texts.PREFIX + Texts.color("&7已取消。"));
+            reopenAfterPrompt(player, session);
+            return;
+        }
+        if (session.purpose == ChatSession.Purpose.SEARCH) {
+            ListState state = listStates.computeIfAbsent(id, ignored -> new ListState());
+            applySearchQuery(state, text);
+            open(player);
+            player.sendMessage(Texts.PREFIX + Texts.color(state.searchQuery == null
+                    ? "&7已清除筛选。"
+                    : "&a已筛选：&f" + state.searchQuery));
+        } else if (session.editState != null) {
+            session.editState.displayName = Texts.color(text);
+            openEditInventory(player, session.editState);
+            player.sendMessage(Texts.PREFIX + Texts.color("&a显示名称已暂存为 &r" + session.editState.displayName + " &7，点击绿色保存生效。"));
+        }
+    }
+
+    private void reopenAfterPrompt(Player player, ChatSession session) {
+        if (session.purpose == ChatSession.Purpose.SEARCH) {
+            open(player);
+        } else if (session.editState != null) {
+            openEditInventory(player, session.editState);
+        }
+    }
+
+    private void cancelPrompt(UUID id) {
+        ChatSession existing = chatSessions.remove(id);
+        if (existing != null && existing.timeoutTask != null) {
+            existing.timeoutTask.cancel();
+        }
+    }
+
+    /** Clears any pending chat prompt (e.g. on quit). */
+    public void clearPrompt(Player player) {
+        cancelPrompt(player.getUniqueId());
     }
 
     private void renderList(Player player, Inventory inventory) {
@@ -402,7 +377,7 @@ public final class AdminSkillPoolGui {
         inventory.setItem(53, named(Material.ARROW, Texts.color("&b右侧下一页"), List.of(Texts.color("&7第 " + (state.rightPage + 1) + "/" + (rightMaxPage + 1) + " 页"))));
 
         List<String> searchLore = new ArrayList<>();
-        searchLore.add(Texts.color("&7左键：用铁砧输入关键词"));
+        searchLore.add(Texts.color("&7左键：在聊天栏输入关键词"));
         searchLore.add(Texts.color("&7右键：清除筛选"));
         if (state.searchQuery != null && !state.searchQuery.isBlank()) {
             searchLore.add(Texts.color("&8当前筛选：&f" + state.searchQuery));
@@ -448,7 +423,7 @@ public final class AdminSkillPoolGui {
         )));
         inventory.setItem(13, named(Material.NAME_TAG, Texts.color("&b修改显示名称"), List.of(
                 Texts.color("&7当前：&f" + Texts.plain(state.displayName)),
-                Texts.color("&7点击用铁砧重命名"),
+                Texts.color("&7点击后在聊天栏输入新名称"),
                 Texts.color("&8重命名后点击保存(绿色)生效")
         )));
         inventory.setItem(20, numberItem(Material.EMERALD, "&a基础消耗", state.baseCost));
@@ -604,7 +579,7 @@ public final class AdminSkillPoolGui {
         }
     }
 
-    private static final class AnvilSession {
+    private static final class ChatSession {
         private enum Purpose {
             SEARCH,
             RENAME
@@ -612,10 +587,9 @@ public final class AdminSkillPoolGui {
 
         private final Purpose purpose;
         private final EditState editState;
-        private String latestText = "";
-        private boolean confirmed;
+        private BukkitTask timeoutTask;
 
-        private AnvilSession(Purpose purpose, EditState editState) {
+        private ChatSession(Purpose purpose, EditState editState) {
             this.purpose = purpose;
             this.editState = editState;
         }
