@@ -281,7 +281,7 @@ public final class AdminSkillPoolGui {
         if (session == null) {
             return;
         }
-        String text = event.getInventory().getRenameText();
+        String text = renameTextOf(event.getView());
         if (text == null || text.isBlank()) {
             text = session.latestText == null ? "" : session.latestText;
         } else {
@@ -289,6 +289,22 @@ public final class AdminSkillPoolGui {
         }
         event.setResult(named(Material.PAPER, Texts.color(text), List.of()));
         event.getInventory().setRepairCost(0);
+    }
+
+    /**
+     * Reads the anvil rename text via the modern {@link org.bukkit.inventory.view.AnvilView} API,
+     * falling back to the deprecated {@code AnvilInventory#getRenameText()} only if needed. The
+     * deprecated inventory getter returns null/empty for createInventory-backed anvils on Paper 1.21,
+     * so the view API is the reliable source.
+     */
+    private String renameTextOf(org.bukkit.inventory.InventoryView view) {
+        if (view instanceof org.bukkit.inventory.view.AnvilView anvilView) {
+            return anvilView.getRenameText();
+        }
+        if (view.getTopInventory() instanceof org.bukkit.inventory.AnvilInventory anvil) {
+            return anvil.getRenameText();
+        }
+        return null;
     }
 
     private void handleAnvilClick(InventoryClickEvent event, AdminAnvilHolder holder) {
@@ -304,7 +320,7 @@ public final class AdminSkillPoolGui {
             return;
         }
         String text = session.latestText;
-        String renameText = event.getView().getTopInventory() instanceof org.bukkit.inventory.AnvilInventory anvil ? anvil.getRenameText() : null;
+        String renameText = renameTextOf(event.getView());
         if (renameText != null && !renameText.isBlank()) {
             text = renameText;
         }
