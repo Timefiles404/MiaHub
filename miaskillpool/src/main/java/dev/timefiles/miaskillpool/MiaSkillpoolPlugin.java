@@ -8,9 +8,12 @@ import dev.timefiles.miaskillpool.gui.AdminSkillPoolGui;
 import dev.timefiles.miaskillpool.gui.RandomSkillRollGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolGui;
 import dev.timefiles.miaskillpool.listener.PlayerSkillListener;
+import dev.timefiles.miaskillpool.placeholder.MiaSkillpoolExpansion;
+import dev.timefiles.miaskillpool.placeholder.PlaceholderResolver;
 import dev.timefiles.miaskillpool.runtime.MiaSkillpoolService;
 import dev.timefiles.miaskillpool.runtime.RuntimeState;
 import dev.timefiles.miaskillpool.runtime.SkillCastService;
+import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -25,6 +28,8 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
     private RandomSkillRollGui randomGui;
     private AdminSkillPoolGui adminGui;
     private MiaSkillpoolService api;
+    private PlaceholderResolver placeholderResolver;
+    private MiaSkillpoolExpansion placeholderExpansion;
 
     @Override
     public void onEnable() {
@@ -39,12 +44,14 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
         this.randomGui = new RandomSkillRollGui(this, skillRegistry, dataStore);
         this.adminGui = new AdminSkillPoolGui(this, skillRegistry);
         this.api = new MiaSkillpoolService(skillRegistry, dataStore, gui, randomGui, castService);
+        this.placeholderResolver = new PlaceholderResolver(skillRegistry, dataStore, runtimeState);
 
         reloadSkillpool();
         registerCommands();
         getServer().getPluginManager().registerEvents(new PlayerSkillListener(this, skillRegistry, dataStore, runtimeState, castService, gui, randomGui, adminGui), this);
         getServer().getServicesManager().register(MiaSkillpoolApi.class, api, this, ServicePriority.Normal);
         getServer().getScheduler().runTaskTimer(this, runtimeState::tick, 20L, 20L);
+        registerPlaceholders();
 
         getLogger().info("MiaSkillpool is ready.");
     }
@@ -54,7 +61,29 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
         if (dataStore != null) {
             dataStore.saveAll();
         }
+        if (placeholderExpansion != null) {
+            placeholderExpansion.unregister();
+            placeholderExpansion = null;
+        }
         getServer().getServicesManager().unregisterAll(this);
+    }
+
+    private void registerPlaceholders() {
+        if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") == null) {
+            getLogger().info("PlaceholderAPI not found; %manaskill_*% placeholders are disabled.");
+            return;
+        }
+        placeholderExpansion = new MiaSkillpoolExpansion(this, placeholderResolver);
+        if (placeholderExpansion.register()) {
+            getLogger().info("Registered PlaceholderAPI expansion 'manaskill'.");
+        } else {
+            getLogger().warning("Failed to register PlaceholderAPI expansion 'manaskill'.");
+            placeholderExpansion = null;
+        }
+    }
+
+    public PlaceholderResolver placeholderResolver() {
+        return placeholderResolver;
     }
 
     public void reloadSkillpool() {
@@ -102,7 +131,7 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
             return;
         }
 
-        var executor = new MiaSkillpoolCommand(this, skillRegistry, dataStore, gui, randomGui, adminGui, runtimeState, api);
+        var executor = new MiaSkillpoolCommand(this, skillRegistry, dataStore, gui, randomGui, adminGui, runtimeState, api, placeholderResolver);
         command.setExecutor(executor);
         command.setTabCompleter(executor);
     }

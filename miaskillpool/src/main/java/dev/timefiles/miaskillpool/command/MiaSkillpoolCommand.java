@@ -9,6 +9,7 @@ import dev.timefiles.miaskillpool.data.PlayerSkillData;
 import dev.timefiles.miaskillpool.gui.AdminSkillPoolGui;
 import dev.timefiles.miaskillpool.gui.RandomSkillRollGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolGui;
+import dev.timefiles.miaskillpool.placeholder.PlaceholderResolver;
 import dev.timefiles.miaskillpool.runtime.MiaSkillpoolService;
 import dev.timefiles.miaskillpool.runtime.RuntimeState;
 import dev.timefiles.miaskillpool.util.Texts;
@@ -27,6 +28,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
 
 public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter {
     private final MiaSkillpoolPlugin plugin;
@@ -37,8 +40,9 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
     private final AdminSkillPoolGui adminGui;
     private final RuntimeState runtimeState;
     private final MiaSkillpoolService api;
+    private final PlaceholderResolver placeholderResolver;
 
-    public MiaSkillpoolCommand(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, SkillPoolGui gui, RandomSkillRollGui randomGui, AdminSkillPoolGui adminGui, RuntimeState runtimeState, MiaSkillpoolService api) {
+    public MiaSkillpoolCommand(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, SkillPoolGui gui, RandomSkillRollGui randomGui, AdminSkillPoolGui adminGui, RuntimeState runtimeState, MiaSkillpoolService api, PlaceholderResolver placeholderResolver) {
         this.plugin = plugin;
         this.skillRegistry = skillRegistry;
         this.dataStore = dataStore;
@@ -47,6 +51,7 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
         this.adminGui = adminGui;
         this.runtimeState = runtimeState;
         this.api = api;
+        this.placeholderResolver = placeholderResolver;
     }
 
     @Override
@@ -64,6 +69,7 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
             case "mode" -> mode(sender, args);
             case "random" -> random(sender, args);
             case "admingui" -> adminGui(sender, args);
+            case "papi" -> papi(sender, args);
             default -> {
                 sendHelp(sender, label);
                 yield true;
@@ -74,12 +80,12 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, String[] args) {
         if (args.length == 1) {
-            return filter(List.of("open", "reload", "learn", "givebook", "upgrade", "mana", "mode", "random", "admingui"), args[0]);
+            return filter(List.of("open", "reload", "learn", "givebook", "upgrade", "mana", "mode", "random", "admingui", "papi"), args[0]);
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("admingui")) {
             return filter(List.of("skillpool"), args[1]);
         }
-        if (args.length == 2 && List.of("learn", "givebook", "random").contains(args[0].toLowerCase(Locale.ROOT))) {
+        if (args.length == 2 && List.of("learn", "givebook", "random", "papi").contains(args[0].toLowerCase(Locale.ROOT))) {
             return filter(Bukkit.getOnlinePlayers().stream().map(Player::getName).toList(), args[1]);
         }
         if (args.length == 3 && List.of("learn", "givebook").contains(args[0].toLowerCase(Locale.ROOT))) {
@@ -294,6 +300,53 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
         return true;
     }
 
+    private boolean papi(CommandSender sender, String[] args) {
+        if (!requireAdmin(sender)) {
+            return true;
+        }
+
+        Map<String, String> descriptions = placeholderResolver.describe();
+        if (args.length < 2) {
+            sender.sendMessage(Texts.PREFIX + Texts.color("&7可用占位符（标识符 &fmanaskill&7，渲染为 &f%manaskill_<param>%&7）："));
+            for (Map.Entry<String, String> entry : descriptions.entrySet()) {
+                sender.sendMessage(Texts.color("&8- &b%manaskill_" + entry.getKey() + "% &7" + entry.getValue()));
+            }
+            sender.sendMessage(Texts.PREFIX + Texts.color("&7用法：/mias papi <玩家名或UUID> 查看具体数值。"));
+            return true;
+        }
+
+        OfflinePlayer target = resolveTarget(args[1]);
+        if (target == null) {
+            sender.sendMessage(Texts.PREFIX + Texts.color("&c无法解析玩家：" + args[1]));
+            return true;
+        }
+
+        String name = target.getName() != null ? target.getName() : target.getUniqueId().toString();
+        sender.sendMessage(Texts.PREFIX + Texts.color("&7占位符数值 - &f" + name + "&7："));
+        for (String param : descriptions.keySet()) {
+            String value = placeholderResolver.resolve(target, param);
+            sender.sendMessage(Texts.color("&8- &b%manaskill_" + param + "% &7= &f" + value));
+        }
+        return true;
+    }
+
+    private OfflinePlayer resolveTarget(String input) {
+        Player online = Bukkit.getPlayerExact(input);
+        if (online != null) {
+            return online;
+        }
+        try {
+            return Bukkit.getOfflinePlayer(UUID.fromString(input));
+        } catch (IllegalArgumentException ignored) {
+            // Not a UUID; fall through to name-based lookup.
+        }
+        OfflinePlayer byName = Bukkit.getOfflinePlayer(input);
+        // getOfflinePlayer(name) never returns null, but only useful if the player has played before
+        // or is online; otherwise the UUID is a placeholder with no data. Accept it anyway so admins
+        // can inspect default values.
+        return byName;
+    }
+
     private boolean requireAdmin(CommandSender sender) {
         if (!sender.hasPermission("miaskillpool.admin")) {
             sender.sendMessage(Texts.PREFIX + Texts.color("&c你没有管理 MiaSkillpool 的权限。"));
@@ -312,6 +365,7 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
             sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " random <player> roll"));
             sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " mana addmax <player> <amount>"));
             sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " admingui skillpool"));
+            sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " papi [player|uuid]"));
         }
     }
 

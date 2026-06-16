@@ -56,6 +56,33 @@ public final class RuntimeState {
         return plugin.skillRegistry().baseMaxMana() + data.maxManaBonus();
     }
 
+    public double maxRage() {
+        return plugin.skillRegistry().maxRage();
+    }
+
+    public double manaRegenPerSecond() {
+        return plugin.skillRegistry().manaRegenPerSecond();
+    }
+
+    /**
+     * Current mana for the given player UUID, only if a live runtime state already exists
+     * (i.e. the player is/was online this session). Returns -1 when no tracked state exists,
+     * so callers can fall back to a sensible default for offline players.
+     */
+    public double currentManaOrUnknown(UUID uuid) {
+        PlayerRuntime state = states.get(uuid);
+        return state == null ? -1.0 : state.mana;
+    }
+
+    /**
+     * Current rage for the given player UUID, only if a live runtime state already exists.
+     * Returns -1 when no tracked state exists.
+     */
+    public double currentRageOrUnknown(UUID uuid) {
+        PlayerRuntime state = states.get(uuid);
+        return state == null ? -1.0 : state.rage;
+    }
+
     public boolean consumeMana(Player player, double amount) {
         PlayerRuntime state = state(player);
         if (state.mana + 0.0001 < amount) {

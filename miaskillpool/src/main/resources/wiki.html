@@ -39,6 +39,7 @@
 /mias random &lt;玩家&gt; roll
 /mias mana addmax &lt;玩家&gt; &lt;数值&gt;
 /mias admingui skillpool
+/mias papi [玩家名或UUID]
 /mias reload</pre>
   </section>
 
@@ -73,6 +74,32 @@
         <tr><td><code>health</code></td><td>消耗生命值，消耗较少，但槽位冷却更长，最低保留半颗心。</td></tr>
         <tr><td><code>rage</code></td><td>消耗怒气，默认 0，进入战斗后恢复。</td></tr>
         <tr><td><code>mana</code></td><td>消耗法力值，按配置自然缓慢恢复。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>PlaceholderAPI 占位符</h2>
+    <p>安装 <code>PlaceholderAPI</code> 后插件会自动注册标识符 <code>manaskill</code>，占位符形如 <code>%manaskill_&lt;参数&gt;%</code>。PlaceholderAPI 为可选软依赖，未安装时插件正常运行，仅占位符不可用。</p>
+    <p><code>/mias papi</code>（无参数）列出全部可用占位符；<code>/mias papi &lt;玩家名或UUID&gt;</code> 显示该玩家的实际数值，支持离线玩家，无需安装 PlaceholderAPI 即可调试。该命令需要 <code>miaskillpool.admin</code> 权限。</p>
+    <table>
+      <thead><tr><th>占位符</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>%manaskill_current_mana%</code></td><td>当前法力值（离线玩家按满值上限返回）。</td></tr>
+        <tr><td><code>%manaskill_mana_cap%</code></td><td>法力值上限（基础上限 + 加成）。</td></tr>
+        <tr><td><code>%manaskill_mana_percent%</code></td><td>法力值百分比 0-100。</td></tr>
+        <tr><td><code>%manaskill_mana_bonus%</code></td><td>额外法力上限加成。</td></tr>
+        <tr><td><code>%manaskill_mana_regen%</code></td><td>每秒法力恢复量。</td></tr>
+        <tr><td><code>%manaskill_current_rage%</code></td><td>当前怒气值（离线玩家返回 0）。</td></tr>
+        <tr><td><code>%manaskill_rage_cap%</code></td><td>怒气值上限。</td></tr>
+        <tr><td><code>%manaskill_resource_mode%</code></td><td>当前释放模式名称。</td></tr>
+        <tr><td><code>%manaskill_resource_mode_id%</code></td><td>当前释放模式 ID（health/rage/mana）。</td></tr>
+        <tr><td><code>%manaskill_learned_count%</code></td><td>已学习技能数量。</td></tr>
+        <tr><td><code>%manaskill_pool_size%</code></td><td>技能池中已配置技能总数。</td></tr>
+        <tr><td><code>%manaskill_equipped_count%</code></td><td>已装备技能的槽位数量。</td></tr>
+        <tr><td><code>%manaskill_slot_count%</code></td><td>技能槽位总数。</td></tr>
+        <tr><td><code>%manaskill_slot_&lt;1-5&gt;%</code></td><td>对应槽位装备的技能 ID（空槽返回空字符串）。</td></tr>
+        <tr><td><code>%manaskill_slot_&lt;1-5&gt;_level%</code></td><td>对应槽位等级。</td></tr>
       </tbody>
     </table>
   </section>
