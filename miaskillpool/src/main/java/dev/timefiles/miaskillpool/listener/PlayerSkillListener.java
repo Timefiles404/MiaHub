@@ -12,6 +12,7 @@ import dev.timefiles.miaskillpool.gui.SkillPoolHolder;
 import dev.timefiles.miaskillpool.runtime.RuntimeState;
 import dev.timefiles.miaskillpool.runtime.SkillCastService;
 import dev.timefiles.miaskillpool.util.Texts;
+import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
@@ -23,6 +24,7 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.inventory.EquipmentSlot;
@@ -30,6 +32,8 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.projectiles.ProjectileSource;
 
 public final class PlayerSkillListener implements Listener {
+    private static final int PARK_SLOT = 8;
+
     private final MiaSkillpoolPlugin plugin;
     private final SkillRegistry skillRegistry;
     private final PlayerDataStore dataStore;
@@ -81,9 +85,38 @@ public final class PlayerSkillListener implements Listener {
         }
 
         event.setCancelled(true);
-        int slotIndex = player.getInventory().getHeldItemSlot();
-        castService.castEquipped(player, slotIndex);
-        runtimeState.showActionbar(player, 5000L);
+        boolean casting = runtimeState.toggleCasting(player);
+        if (casting) {
+            // Park on a non-skill hotbar slot (index 8) so every 1-5 press is a real slot
+            // change and fires PlayerItemHeldEvent, even the slot the player started on.
+            runtimeState.rememberParkedSlot(player, player.getInventory().getHeldItemSlot());
+            player.getInventory().setHeldItemSlot(PARK_SLOT);
+            player.sendMessage(Texts.PREFIX + Texts.color("&a进入施法模式：&7按 &f1-5 &7释放对应槽位技能，再次按 &fF &7退出。"));
+            castService.renderCastingActionbar(player);
+        } else {
+            player.getInventory().setHeldItemSlot(runtimeState.takeParkedSlot(player));
+            player.sendMessage(Texts.PREFIX + Texts.color("&7已退出施法模式。"));
+            player.sendActionBar(Component.empty());
+        }
+    }
+
+    @EventHandler
+    public void onSlotKey(PlayerItemHeldEvent event) {
+        Player player = event.getPlayer();
+        if (!runtimeState.isCasting(player)) {
+            return;
+        }
+        if (!player.hasPermission("miaskillpool.use")) {
+            return;
+        }
+
+        // While casting the hotbar is locked; keys 1-5 cast the matching slot.
+        event.setCancelled(true);
+        int slotIndex = event.getNewSlot();
+        if (slotIndex >= 0 && slotIndex < PlayerSkillData.SLOT_COUNT) {
+            castService.castEquipped(player, slotIndex);
+            castService.renderCastingActionbar(player);
+        }
     }
 
     @EventHandler
@@ -137,6 +170,7 @@ public final class PlayerSkillListener implements Listener {
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
+        runtimeState.setCasting(event.getPlayer(), false);
         dataStore.save(dataStore.get(event.getPlayer()));
     }
 

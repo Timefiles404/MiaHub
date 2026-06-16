@@ -51,6 +51,7 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new PlayerSkillListener(this, skillRegistry, dataStore, runtimeState, castService, gui, randomGui, adminGui), this);
         getServer().getServicesManager().register(MiaSkillpoolApi.class, api, this, ServicePriority.Normal);
         getServer().getScheduler().runTaskTimer(this, runtimeState::tick, 20L, 20L);
+        getServer().getScheduler().runTaskTimer(this, castService::tickCasting, 4L, 4L);
         registerPlaceholders();
 
         getLogger().info("MiaSkillpool is ready.");

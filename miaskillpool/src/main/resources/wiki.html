@@ -56,8 +56,9 @@
   </section>
 
   <section>
-    <h2>释放方式</h2>
-    <p>玩家将客户端“交换副手”键绑定为 <code>Z</code>。服务端监听副手交换事件并取消原版交换，热键栏 <code>1-5</code> 对应五个技能槽。按键后 actionbar 显示当前资源状态，释放后约 5 秒自动隐藏，下次按键再次显示。</p>
+    <h2>释放方式（施法模式）</h2>
+    <p>按“交换副手”键（默认 <code>F</code>）进入<strong>施法模式</strong>。进入后 actionbar 实时显示一行：<code>资源 当前/上限 | ①技能 ②技能 … | 模式 X</code>，其中 <code>①-⑤</code> 对应数字键 <code>1-5</code> 与五个技能槽。在施法模式下按 <code>1-5</code> 释放对应槽位技能；此时热键栏被锁定，不会切换手持物品。再次按 <code>F</code> 退出施法模式。</p>
+    <p>actionbar 每 0.2 秒刷新一次，按状态着色：<span style="color:#2e7d32">绿色</span>=条件满足可释放，<span style="color:#c62828">黄/红</span>=冷却中并实时倒计时剩余秒数，灰色=资源不足 / 未学习 / 空槽。资源标签随当前模式显示生命值、怒气或法力值。</p>
   </section>
 
   <section>

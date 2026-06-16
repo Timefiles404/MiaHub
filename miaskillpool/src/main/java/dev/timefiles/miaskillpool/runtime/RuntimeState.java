@@ -31,10 +31,38 @@ public final class RuntimeState {
             if (state.combatUntilMillis > now) {
                 state.rage = Math.min(plugin.skillRegistry().maxRage(), state.rage + plugin.skillRegistry().rageRegenPerSecondCombat());
             }
-            if (plugin.skillRegistry().actionbarEnabled() && state.actionbarVisibleUntilMillis > now) {
+            if (!state.castingMode && plugin.skillRegistry().actionbarEnabled() && state.actionbarVisibleUntilMillis > now) {
                 sendActionbar(player, data, state);
             }
         }
+    }
+
+    public boolean isCasting(Player player) {
+        return state(player).castingMode;
+    }
+
+    /** Flips casting mode for the player and returns the new state. */
+    public boolean toggleCasting(Player player) {
+        PlayerRuntime state = state(player);
+        state.castingMode = !state.castingMode;
+        return state.castingMode;
+    }
+
+    public void setCasting(Player player, boolean value) {
+        state(player).castingMode = value;
+    }
+
+    /** Stores the hotbar slot the player was on before casting mode parked them elsewhere. */
+    public void rememberParkedSlot(Player player, int slot) {
+        state(player).parkedFromSlot = slot;
+    }
+
+    /** Returns and clears the remembered pre-casting hotbar slot (defaults to 0). */
+    public int takeParkedSlot(Player player) {
+        PlayerRuntime state = state(player);
+        int slot = state.parkedFromSlot;
+        state.parkedFromSlot = -1;
+        return slot < 0 ? 0 : slot;
     }
 
     public void showActionbar(Player player, long durationMillis) {
@@ -148,6 +176,8 @@ public final class RuntimeState {
         private double rage = 0.0;
         private long combatUntilMillis = 0L;
         private long actionbarVisibleUntilMillis = 0L;
+        private boolean castingMode = false;
+        private int parkedFromSlot = -1;
         private final Map<Integer, Long> cooldowns = new HashMap<>();
 
         private PlayerRuntime(double mana) {

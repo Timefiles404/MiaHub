@@ -9,6 +9,8 @@ import dev.timefiles.miaskillpool.data.PlayerDataStore;
 import dev.timefiles.miaskillpool.data.PlayerSkillData;
 import dev.timefiles.miaskillpool.util.Texts;
 import io.lumine.mythic.bukkit.MythicBukkit;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
 public final class SkillCastService {
@@ -134,5 +136,111 @@ public final class SkillCastService {
 
     private String formatSeconds(long millis) {
         return String.format(java.util.Locale.ROOT, "%.1f", millis / 1000.0);
+    }
+
+    // ---- Casting mode actionbar -------------------------------------------------
+
+    private static final String[] SLOT_KEYS = {"①", "②", "③", "④", "⑤"};
+
+    public enum SlotState {EMPTY, MISSING, NOT_LEARNED, COOLDOWN, INSUFFICIENT, READY}
+
+    public record SlotStatus(SlotState state, String name, long cooldownRemainingMillis) {
+    }
+
+    /** Computes the casting-mode status of one slot without consuming anything. */
+    public SlotStatus slotStatus(Player player, PlayerSkillData data, int slotIndex) {
+        String skillId = data.equippedSkill(slotIndex);
+        if (skillId == null || skillId.isBlank()) {
+            return new SlotStatus(SlotState.EMPTY, "", 0L);
+        }
+        SkillDefinition skill = skillRegistry.get(skillId).orElse(null);
+        if (skill == null) {
+            return new SlotStatus(SlotState.MISSING, skillId, 0L);
+        }
+        String name = Texts.plain(skill.displayName());
+        if (!data.hasLearned(skillId)) {
+            return new SlotStatus(SlotState.NOT_LEARNED, name, 0L);
+        }
+        long remaining = runtimeState.cooldownRemainingMillis(player, slotIndex);
+        if (remaining > 0L) {
+            return new SlotStatus(SlotState.COOLDOWN, name, remaining);
+        }
+        double cost = computeCost(skill, data.resourceMode(), data.slotLevel(slotIndex));
+        if (!canAfford(player, data, cost)) {
+            return new SlotStatus(SlotState.INSUFFICIENT, name, 0L);
+        }
+        return new SlotStatus(SlotState.READY, name, 0L);
+    }
+
+    private boolean canAfford(Player player, PlayerSkillData data, double cost) {
+        if (cost <= 0.0) {
+            return true;
+        }
+        return switch (data.resourceMode()) {
+            case HEALTH -> player.getHealth() - cost >= 1.0;
+            case RAGE -> runtimeState.rage(player) + 0.0001 >= cost;
+            case MANA -> runtimeState.mana(player) + 0.0001 >= cost;
+        };
+    }
+
+    /** Re-renders the casting actionbar for every player currently in casting mode. */
+    public void tickCasting() {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (runtimeState.isCasting(player)) {
+                renderCastingActionbar(player);
+            }
+        }
+    }
+
+    public void renderCastingActionbar(Player player) {
+        PlayerSkillData data = dataStore.get(player);
+        StringBuilder slots = new StringBuilder();
+        for (int i = 0; i < PlayerSkillData.SLOT_COUNT; i++) {
+            if (i > 0) {
+                slots.append(" ");
+            }
+            slots.append(slotToken(player, data, i));
+        }
+        String line = resourceLabel(player, data)
+                + " &8| " + slots
+                + " &8| &7模式 &f" + data.resourceMode().displayName();
+        player.sendActionBar(LegacyComponentSerializer.legacyAmpersand().deserialize(line));
+    }
+
+    private String resourceLabel(Player player, PlayerSkillData data) {
+        double current;
+        double max;
+        switch (data.resourceMode()) {
+            case HEALTH -> {
+                current = player.getHealth();
+                max = player.getMaxHealth();
+            }
+            case RAGE -> {
+                current = runtimeState.rage(player);
+                max = runtimeState.maxRage();
+            }
+            default -> {
+                current = runtimeState.mana(player);
+                max = runtimeState.maxMana(data);
+            }
+        }
+        return "&b" + data.resourceMode().displayName() + " &f" + format0(current) + "&7/&f" + format0(max);
+    }
+
+    private String slotToken(Player player, PlayerSkillData data, int slotIndex) {
+        SlotStatus status = slotStatus(player, data, slotIndex);
+        String key = SLOT_KEYS[slotIndex];
+        return switch (status.state()) {
+            case EMPTY -> "&8" + key + "空";
+            case MISSING -> "&c" + key + status.name() + "?";
+            case NOT_LEARNED -> "&8" + key + status.name() + "未学";
+            case COOLDOWN -> "&e" + key + status.name() + " &c" + formatSeconds(status.cooldownRemainingMillis()) + "s";
+            case INSUFFICIENT -> "&7" + key + status.name() + " &8缺" + data.resourceMode().displayName();
+            case READY -> "&a" + key + status.name();
+        };
+    }
+
+    private String format0(double value) {
+        return String.format(java.util.Locale.ROOT, "%.0f", value);
     }
 }
