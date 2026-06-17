@@ -3,8 +3,16 @@ skills:
     display-name: "&c火焰箭"
     icon: BLAZE_POWDER
     mythic-skill: Firebolt
-    base-cost: 20.0
-    base-cooldown-seconds: 5.0
+    # Base cost consumed in each resource mode (health costs are small to stay survivable).
+    base-cost:
+      mana: 20.0
+      rage: 18.0
+      health: 4.0
+    # Base cooldown seconds per resource mode.
+    base-cooldown-seconds:
+      mana: 5.0
+      rage: 5.0
+      health: 8.0
     base-power: 1.0
     book:
       material: BOOK
@@ -16,8 +24,14 @@ skills:
     display-name: "&b冰霜新星"
     icon: SNOWBALL
     mythic-skill: FrostNova
-    base-cost: 25.0
-    base-cooldown-seconds: 8.0
+    base-cost:
+      mana: 25.0
+      rage: 22.0
+      health: 5.0
+    base-cooldown-seconds:
+      mana: 8.0
+      rage: 8.0
+      health: 12.0
     base-power: 1.0
     book:
       material: BOOK
@@ -29,8 +43,14 @@ skills:
     display-name: "&e雷击"
     icon: LIGHTNING_ROD
     mythic-skill: ThunderStrike
-    base-cost: 35.0
-    base-cooldown-seconds: 10.0
+    base-cost:
+      mana: 35.0
+      rage: 30.0
+      health: 6.0
+    base-cooldown-seconds:
+      mana: 10.0
+      rage: 10.0
+      health: 14.0
     base-power: 1.15
     book:
       material: BOOK

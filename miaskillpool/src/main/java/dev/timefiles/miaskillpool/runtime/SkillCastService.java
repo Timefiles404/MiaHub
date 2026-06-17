@@ -82,13 +82,12 @@ public final class SkillCastService {
     }
 
     public double computeCost(SkillDefinition skill, ResourceMode mode, int slotLevel) {
-        ModeTuning tuning = skillRegistry.tuning(mode);
-        return skill.baseCost() * tuning.costMultiplier() * skillRegistry.costFactor(slotLevel);
+        // Per-mode base cost is the authoritative value; only slot-level scaling applies on top.
+        return skill.baseCost(mode) * skillRegistry.costFactor(slotLevel);
     }
 
     public long computeCooldownMillis(SkillDefinition skill, ResourceMode mode, int slotLevel) {
-        ModeTuning tuning = skillRegistry.tuning(mode);
-        double seconds = skill.baseCooldownSeconds() * tuning.cooldownMultiplier() * skillRegistry.cooldownFactor(slotLevel);
+        double seconds = skill.baseCooldownSeconds(mode) * skillRegistry.cooldownFactor(slotLevel);
         return Math.max(0L, Math.round(seconds * 1000.0));
     }
 

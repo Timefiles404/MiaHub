@@ -1,6 +1,7 @@
 package dev.timefiles.miaskillpool.gui;
 
 import dev.timefiles.miaskillpool.MiaSkillpoolPlugin;
+import dev.timefiles.miaskillpool.config.ResourceMode;
 import dev.timefiles.miaskillpool.config.SkillDefinition;
 import dev.timefiles.miaskillpool.config.SkillRegistry;
 import dev.timefiles.miaskillpool.util.Texts;
@@ -20,6 +21,7 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -46,6 +48,11 @@ public final class AdminSkillPoolGui {
             32, 33, 34, 35,
             41, 42, 43, 44
     };
+
+    // Edit view: 3x2 grid of per-resource-mode values (cost row + cooldown row) plus a single power.
+    private static final Map<Integer, ResourceMode> COST_SLOTS = Map.of(20, ResourceMode.MANA, 22, ResourceMode.RAGE, 24, ResourceMode.HEALTH);
+    private static final Map<Integer, ResourceMode> COOLDOWN_SLOTS = Map.of(29, ResourceMode.MANA, 31, ResourceMode.RAGE, 33, ResourceMode.HEALTH);
+    private static final int POWER_SLOT = 40;
 
     private final MiaSkillpoolPlugin plugin;
     private final SkillRegistry skillRegistry;
@@ -207,17 +214,19 @@ public final class AdminSkillPoolGui {
         }
 
         double step = step(click);
-        if (slot == 20) {
-            state.baseCost = Math.max(0.0, state.baseCost + step);
+        ResourceMode costMode = COST_SLOTS.get(slot);
+        if (costMode != null) {
+            state.baseCosts.put(costMode, Math.max(0.0, state.baseCosts.getOrDefault(costMode, 0.0) + step));
             refreshEdit(player);
             return;
         }
-        if (slot == 22) {
-            state.baseCooldownSeconds = Math.max(0.0, state.baseCooldownSeconds + step);
+        ResourceMode cooldownMode = COOLDOWN_SLOTS.get(slot);
+        if (cooldownMode != null) {
+            state.baseCooldowns.put(cooldownMode, Math.max(0.0, state.baseCooldowns.getOrDefault(cooldownMode, 0.0) + step));
             refreshEdit(player);
             return;
         }
-        if (slot == 24) {
+        if (slot == POWER_SLOT) {
             state.basePower = Math.max(0.0, state.basePower + step);
             refreshEdit(player);
         }
@@ -426,9 +435,13 @@ public final class AdminSkillPoolGui {
                 Texts.color("&7点击后在聊天栏输入新名称"),
                 Texts.color("&8重命名后点击保存(绿色)生效")
         )));
-        inventory.setItem(20, numberItem(Material.EMERALD, "&a基础消耗", state.baseCost));
-        inventory.setItem(22, numberItem(Material.CLOCK, "&e基础冷却", state.baseCooldownSeconds));
-        inventory.setItem(24, numberItem(Material.BLAZE_POWDER, "&c基础 Power", state.basePower));
+        inventory.setItem(20, numberItem(Material.LAPIS_LAZULI, "&b法力·消耗", state.baseCosts.getOrDefault(ResourceMode.MANA, 0.0)));
+        inventory.setItem(22, numberItem(Material.REDSTONE, "&c怒气·消耗", state.baseCosts.getOrDefault(ResourceMode.RAGE, 0.0)));
+        inventory.setItem(24, numberItem(Material.GHAST_TEAR, "&a生命·消耗", state.baseCosts.getOrDefault(ResourceMode.HEALTH, 0.0)));
+        inventory.setItem(29, numberItem(Material.CLOCK, "&b法力·冷却", state.baseCooldowns.getOrDefault(ResourceMode.MANA, 0.0)));
+        inventory.setItem(31, numberItem(Material.CLOCK, "&c怒气·冷却", state.baseCooldowns.getOrDefault(ResourceMode.RAGE, 0.0)));
+        inventory.setItem(33, numberItem(Material.CLOCK, "&a生命·冷却", state.baseCooldowns.getOrDefault(ResourceMode.HEALTH, 0.0)));
+        inventory.setItem(POWER_SLOT, numberItem(Material.BLAZE_POWDER, "&e基础 Power", state.basePower));
         inventory.setItem(45, named(Material.BARRIER, Texts.color("&c取消"), List.of(Texts.color("&7不保存并返回。"))));
         inventory.setItem(53, named(Material.LIME_DYE, Texts.color("&a保存"), List.of(Texts.color("&7写入 skills.yml 并重载。"))));
     }
@@ -557,8 +570,8 @@ public final class AdminSkillPoolGui {
         private final Material bookMaterial;
         private final String bookName;
         private final List<String> bookLore;
-        private double baseCost;
-        private double baseCooldownSeconds;
+        private final EnumMap<ResourceMode, Double> baseCosts = new EnumMap<>(ResourceMode.class);
+        private final EnumMap<ResourceMode, Double> baseCooldowns = new EnumMap<>(ResourceMode.class);
         private double basePower;
 
         private EditState(SkillDefinition skill) {
@@ -569,13 +582,15 @@ public final class AdminSkillPoolGui {
             this.bookMaterial = skill.bookMaterial();
             this.bookName = skill.bookName();
             this.bookLore = skill.bookLore();
-            this.baseCost = skill.baseCost();
-            this.baseCooldownSeconds = skill.baseCooldownSeconds();
+            for (ResourceMode mode : ResourceMode.values()) {
+                baseCosts.put(mode, skill.baseCost(mode));
+                baseCooldowns.put(mode, skill.baseCooldownSeconds(mode));
+            }
             this.basePower = skill.basePower();
         }
 
         private SkillDefinition toDefinition() {
-            return new SkillDefinition(id, displayName, icon, mythicSkill, baseCost, baseCooldownSeconds, (float) basePower, bookMaterial, bookName, bookLore);
+            return new SkillDefinition(id, displayName, icon, mythicSkill, new EnumMap<>(baseCosts), new EnumMap<>(baseCooldowns), (float) basePower, bookMaterial, bookName, bookLore);
         }
     }
 

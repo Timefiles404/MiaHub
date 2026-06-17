@@ -154,8 +154,10 @@ public final class SkillRegistry {
         yaml.set(path + ".display-name", "&f" + mythicSkill);
         yaml.set(path + ".icon", "BOOK");
         yaml.set(path + ".mythic-skill", mythicSkill);
-        yaml.set(path + ".base-cost", 20.0);
-        yaml.set(path + ".base-cooldown-seconds", 5.0);
+        for (ResourceMode mode : ResourceMode.values()) {
+            yaml.set(path + ".base-cost." + mode.id(), 20.0);
+            yaml.set(path + ".base-cooldown-seconds." + mode.id(), 5.0);
+        }
         yaml.set(path + ".base-power", 1.0);
         yaml.set(path + ".book.material", "BOOK");
         yaml.set(path + ".book.name", "&f技能书：" + mythicSkill);
@@ -196,8 +198,13 @@ public final class SkillRegistry {
         yaml.set(path + ".display-name", stripColorPrefix(skill.displayName()));
         yaml.set(path + ".icon", skill.icon().name());
         yaml.set(path + ".mythic-skill", skill.mythicSkill());
-        yaml.set(path + ".base-cost", skill.baseCost());
-        yaml.set(path + ".base-cooldown-seconds", skill.baseCooldownSeconds());
+        // Clear any legacy single-value form before writing the per-mode sections.
+        yaml.set(path + ".base-cost", null);
+        yaml.set(path + ".base-cooldown-seconds", null);
+        for (ResourceMode mode : ResourceMode.values()) {
+            yaml.set(path + ".base-cost." + mode.id(), skill.baseCost(mode));
+            yaml.set(path + ".base-cooldown-seconds." + mode.id(), skill.baseCooldownSeconds(mode));
+        }
         yaml.set(path + ".base-power", (double) skill.basePower());
         yaml.set(path + ".book.material", skill.bookMaterial().name());
         yaml.set(path + ".book.name", stripColorPrefix(skill.bookName()));
@@ -293,13 +300,41 @@ public final class SkillRegistry {
                 Texts.color(source.getString(path + ".display-name", rawId)),
                 icon,
                 mythicSkill,
-                Math.max(0.0, source.getDouble(path + ".base-cost", 0.0)),
-                Math.max(0.0, source.getDouble(path + ".base-cooldown-seconds", 0.0)),
+                readPerMode(source, path + ".base-cost", 0.0),
+                readPerMode(source, path + ".base-cooldown-seconds", 0.0),
                 (float) source.getDouble(path + ".base-power", 1.0),
                 bookMaterial,
                 Texts.color(source.getString(path + ".book.name", "&f技能书：" + rawId)),
                 Texts.color(lore)
         ));
+    }
+
+    /**
+     * Reads a per-resource-mode numeric block at {@code path}. Supports the new section form
+     * ({@code path.mana}, {@code path.rage}, {@code path.health}) and migrates the legacy single
+     * scalar at {@code path} by applying it to every mode. Modes missing from a section inherit the
+     * first present mode's value (or the global default).
+     */
+    private Map<ResourceMode, Double> readPerMode(FileConfiguration source, String path, double globalDefault) {
+        EnumMap<ResourceMode, Double> values = new EnumMap<>(ResourceMode.class);
+        if (source.isConfigurationSection(path)) {
+            double fallback = globalDefault;
+            for (ResourceMode mode : ResourceMode.values()) {
+                if (source.isSet(path + "." + mode.id())) {
+                    fallback = Math.max(0.0, source.getDouble(path + "." + mode.id()));
+                    break;
+                }
+            }
+            for (ResourceMode mode : ResourceMode.values()) {
+                values.put(mode, Math.max(0.0, source.getDouble(path + "." + mode.id(), fallback)));
+            }
+        } else {
+            double single = Math.max(0.0, source.getDouble(path, globalDefault));
+            for (ResourceMode mode : ResourceMode.values()) {
+                values.put(mode, single);
+            }
+        }
+        return values;
     }
 
     private void saveDefaultResource(String name) {
