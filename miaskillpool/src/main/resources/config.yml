@@ -13,9 +13,14 @@ settings:
   rage:
     max: 100.0
     regen-per-second-combat: 8.0
+    # 注意：怒气获取现在改为按造成/受到的最终伤害 1:1 获取，
+    # 下面两个旧字段保留以兼容配置，但不再用于怒气获取计算。
     gain-on-deal-damage: 8.0
     gain-on-take-damage: 5.0
     combat-seconds: 8
+  health:
+    # 生命值模式释放技能时，每消耗 1 点生命值额外提供的 MythicMobs power（近似“每消耗 1 点生命 +1 伤害”）。
+    power-per-cost: 0.1
   modes:
     health:
       cost-multiplier: 0.45

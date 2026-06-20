@@ -66,8 +66,15 @@ public final class SkillCastService {
         long cooldownMillis = computeCooldownMillis(skill, data.resourceMode(), slotLevel);
         float power = computePower(skill, data.resourceMode(), slotLevel);
 
-        if (!consumeResource(player, data, cost)) {
+        ResourceSpend spend = spendResource(player, data, cost);
+        if (!spend.success()) {
             return false;
+        }
+
+        // In HEALTH mode the HP actually spent is converted into extra MythicMobs power,
+        // approximating "+1 damage per HP spent". A no-cost proc spends 0, so adds nothing.
+        if (data.resourceMode() == ResourceMode.HEALTH) {
+            power += (float) (spend.amount() * skillRegistry.healthPowerPerCost());
         }
 
         boolean cast = mythic.getAPIHelper().castSkill(player, skill.mythicSkill(), player.getLocation(), power);
@@ -96,41 +103,50 @@ public final class SkillCastService {
         return (float) (skill.basePower() * tuning.powerMultiplier() * skillRegistry.powerFactor(slotLevel));
     }
 
-    private boolean consumeResource(Player player, PlayerSkillData data, double cost) {
+    /** Result of attempting to pay a skill's resource cost: whether it succeeded and how much was actually spent. */
+    private record ResourceSpend(boolean success, double amount) {
+    }
+
+    private ResourceSpend spendResource(Player player, PlayerSkillData data, double cost) {
         if (cost <= 0.0) {
-            return true;
+            return new ResourceSpend(true, 0.0);
         }
 
         return switch (data.resourceMode()) {
-            case HEALTH -> consumeHealth(player, cost);
-            case RAGE -> consumeRage(player, cost);
-            case MANA -> consumeMana(player, cost);
+            case HEALTH -> spendHealth(player, data, cost);
+            case RAGE -> spendRage(player, cost);
+            case MANA -> spendMana(player, cost);
         };
     }
 
-    private boolean consumeHealth(Player player, double cost) {
+    private ResourceSpend spendHealth(Player player, PlayerSkillData data, double cost) {
+        double chance = Math.min(1.0, data.enhanceLevel(ResourceMode.HEALTH) * skillRegistry.healthNoCostChancePerEnhanceLevel());
+        if (chance > 0.0 && skillRegistry.random().nextDouble() < chance) {
+            player.sendMessage(Texts.PREFIX + Texts.color("&b生命强化触发：本次无消耗！"));
+            return new ResourceSpend(true, 0.0);
+        }
         if (player.getHealth() - cost < 1.0) {
             player.sendMessage(Texts.PREFIX + Texts.color("&c生命值不足，至少需要保留半颗心。"));
-            return false;
+            return new ResourceSpend(false, 0.0);
         }
         player.setHealth(Math.max(1.0, player.getHealth() - cost));
-        return true;
+        return new ResourceSpend(true, cost);
     }
 
-    private boolean consumeRage(Player player, double cost) {
+    private ResourceSpend spendRage(Player player, double cost) {
         if (!runtimeState.consumeRage(player, cost)) {
             player.sendMessage(Texts.PREFIX + Texts.color("&c怒气不足。"));
-            return false;
+            return new ResourceSpend(false, 0.0);
         }
-        return true;
+        return new ResourceSpend(true, cost);
     }
 
-    private boolean consumeMana(Player player, double cost) {
+    private ResourceSpend spendMana(Player player, double cost) {
         if (!runtimeState.consumeMana(player, cost)) {
             player.sendMessage(Texts.PREFIX + Texts.color("&c法力值不足。"));
-            return false;
+            return new ResourceSpend(false, 0.0);
         }
-        return true;
+        return new ResourceSpend(true, cost);
     }
 
     private String formatSeconds(long millis) {

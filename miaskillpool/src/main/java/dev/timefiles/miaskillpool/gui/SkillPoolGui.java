@@ -257,6 +257,18 @@ public final class SkillPoolGui {
             lore.add(Texts.color("&7消耗: &f" + format(plugin.castService().computeCost(skill, data.resourceMode(), slotLevel))));
             lore.add(Texts.color("&7冷却: &f" + format(plugin.castService().computeCooldownMillis(skill, data.resourceMode(), slotLevel) / 1000.0) + "s"));
             lore.add(Texts.color("&7Power: &f" + format(plugin.castService().computePower(skill, data.resourceMode(), slotLevel))));
+            if (equipped) {
+                int maxLevel = skillRegistry.maxSlotLevel();
+                lore.add(Texts.color("&7槽位 &fLv." + slotLevel + "&7/&f" + maxLevel));
+                if (slotLevel >= maxLevel) {
+                    lore.add(Texts.color("&8下一级: 已满级"));
+                } else {
+                    lore.add(Texts.color("&8下一级: 消耗 -" + percent(skillRegistry.costReductionPerLevel())
+                            + " / 冷却 -" + percent(skillRegistry.cooldownReductionPerLevel())
+                            + " / Power +" + percent(skillRegistry.powerBonusPerLevel())));
+                    lore.add(Texts.color("&8使用 /mias upgrade slot " + (slotIndex + 1) + " 升级。"));
+                }
+            }
             lore.add(Texts.color(equipped ? "&8点击另一个左侧槽位可交换。" : "&8先点击左侧槽位，再点击此技能装配。"));
         }
         if (selectedSlot) {
@@ -295,5 +307,9 @@ public final class SkillPoolGui {
 
     private String format(double value) {
         return String.format(java.util.Locale.ROOT, "%.1f", value);
+    }
+
+    private String percent(double fraction) {
+        return String.format(java.util.Locale.ROOT, "%.0f%%", fraction * 100.0);
     }
 }

@@ -6,6 +6,7 @@ import dev.timefiles.miaskillpool.config.SkillRegistry;
 import dev.timefiles.miaskillpool.data.PlayerDataStore;
 import dev.timefiles.miaskillpool.gui.AdminSkillPoolGui;
 import dev.timefiles.miaskillpool.gui.RandomSkillRollGui;
+import dev.timefiles.miaskillpool.gui.ResourceGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolGui;
 import dev.timefiles.miaskillpool.listener.PlayerSkillListener;
 import dev.timefiles.miaskillpool.placeholder.MiaSkillpoolExpansion;
@@ -27,6 +28,7 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
     private SkillPoolGui gui;
     private RandomSkillRollGui randomGui;
     private AdminSkillPoolGui adminGui;
+    private ResourceGui resourceGui;
     private MiaSkillpoolService api;
     private PlaceholderResolver placeholderResolver;
     private MiaSkillpoolExpansion placeholderExpansion;
@@ -43,12 +45,13 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
         this.gui = new SkillPoolGui(this, skillRegistry, dataStore);
         this.randomGui = new RandomSkillRollGui(this, skillRegistry, dataStore);
         this.adminGui = new AdminSkillPoolGui(this, skillRegistry);
+        this.resourceGui = new ResourceGui(this, skillRegistry, dataStore);
         this.api = new MiaSkillpoolService(skillRegistry, dataStore, gui, randomGui, castService);
         this.placeholderResolver = new PlaceholderResolver(skillRegistry, dataStore, runtimeState);
 
         reloadSkillpool();
         registerCommands();
-        getServer().getPluginManager().registerEvents(new PlayerSkillListener(this, skillRegistry, dataStore, runtimeState, castService, gui, randomGui, adminGui), this);
+        getServer().getPluginManager().registerEvents(new PlayerSkillListener(this, skillRegistry, dataStore, runtimeState, castService, gui, randomGui, adminGui, resourceGui), this);
         getServer().getServicesManager().register(MiaSkillpoolApi.class, api, this, ServicePriority.Normal);
         getServer().getScheduler().runTaskTimer(this, runtimeState::tick, 20L, 20L);
         getServer().getScheduler().runTaskTimer(this, castService::tickCasting, 4L, 4L);
@@ -125,6 +128,10 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
         return adminGui;
     }
 
+    public ResourceGui resourceGui() {
+        return resourceGui;
+    }
+
     private void registerCommands() {
         var command = getCommand("mias");
         if (command == null) {
@@ -132,7 +139,7 @@ public final class MiaSkillpoolPlugin extends JavaPlugin {
             return;
         }
 
-        var executor = new MiaSkillpoolCommand(this, skillRegistry, dataStore, gui, randomGui, adminGui, runtimeState, api, placeholderResolver);
+        var executor = new MiaSkillpoolCommand(this, skillRegistry, dataStore, gui, randomGui, adminGui, resourceGui, runtimeState, api, placeholderResolver);
         command.setExecutor(executor);
         command.setTabCompleter(executor);
     }

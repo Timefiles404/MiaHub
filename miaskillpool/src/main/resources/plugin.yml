@@ -11,7 +11,7 @@ softdepend:
 commands:
   mias:
     description: MiaSkillpool 命令。
-    usage: /mias [open|reload|learn|givebook|upgrade|mana|mode|random|admingui|papi]
+    usage: /mias [open|reload|learn|givebook|upgrade|mana|mode|resource|enhance|random|admingui|papi]
 permissions:
   miaskillpool.use:
     description: 允许使用 MiaSkillpool 技能池。

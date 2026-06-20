@@ -1,12 +1,14 @@
 package dev.timefiles.miaskillpool.listener;
 
 import dev.timefiles.miaskillpool.MiaSkillpoolPlugin;
+import dev.timefiles.miaskillpool.config.ResourceMode;
 import dev.timefiles.miaskillpool.config.SkillDefinition;
 import dev.timefiles.miaskillpool.config.SkillRegistry;
 import dev.timefiles.miaskillpool.data.PlayerDataStore;
 import dev.timefiles.miaskillpool.data.PlayerSkillData;
 import dev.timefiles.miaskillpool.gui.AdminSkillPoolGui;
 import dev.timefiles.miaskillpool.gui.RandomSkillRollGui;
+import dev.timefiles.miaskillpool.gui.ResourceGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolHolder;
 import dev.timefiles.miaskillpool.runtime.RuntimeState;
@@ -44,8 +46,9 @@ public final class PlayerSkillListener implements Listener {
     private final SkillPoolGui gui;
     private final RandomSkillRollGui randomGui;
     private final AdminSkillPoolGui adminGui;
+    private final ResourceGui resourceGui;
 
-    public PlayerSkillListener(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, RuntimeState runtimeState, SkillCastService castService, SkillPoolGui gui, RandomSkillRollGui randomGui, AdminSkillPoolGui adminGui) {
+    public PlayerSkillListener(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, RuntimeState runtimeState, SkillCastService castService, SkillPoolGui gui, RandomSkillRollGui randomGui, AdminSkillPoolGui adminGui, ResourceGui resourceGui) {
         this.plugin = plugin;
         this.skillRegistry = skillRegistry;
         this.dataStore = dataStore;
@@ -54,6 +57,7 @@ public final class PlayerSkillListener implements Listener {
         this.gui = gui;
         this.randomGui = randomGui;
         this.adminGui = adminGui;
+        this.resourceGui = resourceGui;
     }
 
     @EventHandler
@@ -61,6 +65,7 @@ public final class PlayerSkillListener implements Listener {
         gui.handleClick(event);
         randomGui.handleClick(event);
         adminGui.handleClick(event);
+        resourceGui.handleClick(event);
     }
 
     @EventHandler
@@ -86,6 +91,7 @@ public final class PlayerSkillListener implements Listener {
         gui.handleClose(event);
         randomGui.handleClose(event);
         adminGui.handleClose(event);
+        resourceGui.handleClose(event);
     }
 
     @EventHandler
@@ -167,16 +173,25 @@ public final class PlayerSkillListener implements Listener {
 
     @EventHandler
     public void onCombat(EntityDamageByEntityEvent event) {
+        // Rage gained equals the final damage (1:1), scaled by the player's own rage enhancement level.
+        double finalDamage = event.getFinalDamage();
         if (event.getEntity() instanceof Player defender) {
-            runtimeState.addRage(defender, skillRegistry.rageGainOnTakeDamage());
+            runtimeState.addRage(defender, rageGain(defender, finalDamage));
             runtimeState.enterCombat(defender);
         }
 
         Player attacker = attacker(event.getDamager());
         if (attacker != null) {
-            runtimeState.addRage(attacker, skillRegistry.rageGainOnDealDamage());
+            runtimeState.addRage(attacker, rageGain(attacker, finalDamage));
             runtimeState.enterCombat(attacker);
         }
+    }
+
+    private double rageGain(Player player, double finalDamage) {
+        PlayerSkillData data = dataStore.get(player);
+        double bonus = 1.0 + data.enhanceLevel(ResourceMode.RAGE)
+                * skillRegistry.rageGainBonusPerEnhanceLevel();
+        return Math.max(0.0, finalDamage) * bonus;
     }
 
     @EventHandler

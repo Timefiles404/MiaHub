@@ -4,3 +4,18 @@ upgrade:
   cost-reduction-per-level: 0.08
   cooldown-reduction-per-level: 0.06
   power-bonus-per-level: 0.10
+
+# 资源强化：每种释放资源模式各有独立的强化等级（0..max-level），
+# 通过 /mias enhance <player> <mana|rage|health> <level> 设置（管理工具，玩家升级流程暂未开放）。
+enhance:
+  # 各资源模式强化的最大等级。
+  max-level: 5
+  mana:
+    # 法力强化每级额外提供的每秒法力恢复量。
+    regen-per-level: 0.5
+  rage:
+    # 怒气强化每级提供的怒气获取加成（0.10 = +10%/级）。
+    gain-bonus-per-level: 0.10
+  health:
+    # 生命强化每级提供的“本次无消耗”触发概率（0.05 = +5%/级）。
+    no-cost-chance-per-level: 0.05

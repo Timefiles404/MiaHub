@@ -38,6 +38,11 @@ public final class SkillRegistry {
     private double rageGainOnDealDamage = 8.0;
     private double rageGainOnTakeDamage = 5.0;
     private long combatMillis = 8000L;
+    private double healthPowerPerCost = 0.1;
+    private int enhanceMaxLevel = 5;
+    private double manaRegenPerEnhanceLevel = 0.5;
+    private double rageGainBonusPerEnhanceLevel = 0.10;
+    private double healthNoCostChancePerEnhanceLevel = 0.05;
     private String randomRollTitle = Texts.color("&5随机技能装配");
     private int randomRollAnimationTicks = 40;
     private int randomRollAnimationIntervalTicks = 4;
@@ -91,6 +96,38 @@ public final class SkillRegistry {
 
     public int maxSlotLevel() {
         return maxSlotLevel;
+    }
+
+    public double costReductionPerLevel() {
+        return costReductionPerLevel;
+    }
+
+    public double cooldownReductionPerLevel() {
+        return cooldownReductionPerLevel;
+    }
+
+    public double powerBonusPerLevel() {
+        return powerBonusPerLevel;
+    }
+
+    public int enhanceMaxLevel() {
+        return enhanceMaxLevel;
+    }
+
+    public double manaRegenPerEnhanceLevel() {
+        return manaRegenPerEnhanceLevel;
+    }
+
+    public double rageGainBonusPerEnhanceLevel() {
+        return rageGainBonusPerEnhanceLevel;
+    }
+
+    public double healthNoCostChancePerEnhanceLevel() {
+        return healthNoCostChancePerEnhanceLevel;
+    }
+
+    public double healthPowerPerCost() {
+        return healthPowerPerCost;
     }
 
     public double baseMaxMana() {
@@ -247,6 +284,11 @@ public final class SkillRegistry {
         rageGainOnDealDamage = Math.max(0.0, plugin.getConfig().getDouble("settings.rage.gain-on-deal-damage", 8.0));
         rageGainOnTakeDamage = Math.max(0.0, plugin.getConfig().getDouble("settings.rage.gain-on-take-damage", 5.0));
         combatMillis = Math.max(1L, plugin.getConfig().getLong("settings.rage.combat-seconds", 8L)) * 1000L;
+        healthPowerPerCost = Math.max(0.0, plugin.getConfig().getDouble("settings.health.power-per-cost", 0.1));
+        enhanceMaxLevel = Math.max(0, upgradeInt(upgradeConfig, "enhance.max-level", "settings.enhance.max-level", 5));
+        manaRegenPerEnhanceLevel = Math.max(0.0, upgradeDouble(upgradeConfig, "enhance.mana.regen-per-level", "settings.enhance.mana.regen-per-level", 0.5));
+        rageGainBonusPerEnhanceLevel = Math.max(0.0, upgradeDouble(upgradeConfig, "enhance.rage.gain-bonus-per-level", "settings.enhance.rage.gain-bonus-per-level", 0.10));
+        healthNoCostChancePerEnhanceLevel = Math.max(0.0, upgradeDouble(upgradeConfig, "enhance.health.no-cost-chance-per-level", "settings.enhance.health.no-cost-chance-per-level", 0.05));
         random = plugin.getConfig().getBoolean("settings.random-seed-secure", false) ? new SecureRandom() : new Random();
 
         modeTunings.clear();

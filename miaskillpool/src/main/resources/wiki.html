@@ -29,12 +29,14 @@
     <pre>/mias
 /mias open
 /mias mode &lt;health|rage|mana&gt;
+/mias resource
 /mias upgrade slot &lt;1-5&gt;</pre>
   </section>
 
   <section>
     <h2>管理命令</h2>
-    <pre>/mias learn &lt;玩家&gt; &lt;skillId&gt;
+    <pre>/mias enhance &lt;玩家&gt; &lt;mana|rage|health&gt; &lt;等级&gt;
+/mias learn &lt;玩家&gt; &lt;skillId&gt;
 /mias givebook &lt;玩家&gt; &lt;skillId&gt; [数量]
 /mias random &lt;玩家&gt; roll
 /mias mana addmax &lt;玩家&gt; &lt;数值&gt;
@@ -68,6 +70,7 @@
     <h2>技能池界面</h2>
     <p>左侧第一列是五个装备槽，右侧五列是技能池。技能池显示全部已配置技能；未学习的技能会显示未解锁提示。玩家拥有对应技能书时，右键技能书或在技能池界面点击该技能都会学习并消耗 1 本技能书。</p>
     <p>装配时先点击左侧装备槽，再点击右侧已解锁技能。先点击一个装备槽，再点击另一个装备槽，会交换两个槽位的技能顺序。</p>
+    <p>已装备槽位的物品 lore 会显示<strong>槽位等级</strong>（<code>槽位 Lv.x/上限</code>）以及<strong>下一级升级属性</strong>：消耗 -X% / 冷却 -Y% / Power +Z%（数值来自 upgrade.yml 的 <code>cost-reduction-per-level</code> / <code>cooldown-reduction-per-level</code> / <code>power-bonus-per-level</code>），满级时显示“已满级”。这是<strong>展示与预留</strong>，升级仍使用 <code>/mias upgrade slot &lt;n&gt;</code> 命令，未在该界面新增升级操作。</p>
   </section>
 
   <section>
@@ -80,6 +83,29 @@
         <tr><td><code>mana</code></td><td>消耗法力值，按配置自然缓慢恢复。</td></tr>
       </tbody>
     </table>
+  </section>
+
+  <section>
+    <h2>施法资源界面（/mias resource）</h2>
+    <p><code>/mias resource</code> 打开 27 格的<strong>施法资源</strong>界面，用于切换释放模式并查看各模式的资源强化。</p>
+    <p>上排三个模式按钮：槽位 10 <code>法力值</code>（青金石）、槽位 13 <code>怒气</code>（红石）、槽位 16 <code>生命值</code>（恶魂之泪）。点击任意按钮即把当前释放模式切换为该模式并立即保存；当前选中的模式会带附魔光效并在 lore 显示 <code>✔ 当前模式</code>。</p>
+    <p>每个模式按钮下方（槽位 19/22/25）是对应资源强化的<strong>升级按钮（预留位）</strong>，显示当前强化等级与效果文本。目前点击只会提示“资源强化升级暂未开放，敬请期待。”，玩家升级流程与经济结算暂未实现，仅预留位置。</p>
+  </section>
+
+  <section>
+    <h2>资源强化</h2>
+    <p>每种释放资源模式各有一条独立的<strong>强化等级</strong>（0 到 <code>enhance.max-level</code>，默认上限 5），效果如下：</p>
+    <table>
+      <thead><tr><th>模式</th><th>强化效果</th></tr></thead>
+      <tbody>
+        <tr><td><code>mana</code></td><td>每级额外提供 <code>enhance.mana.regen-per-level</code>（默认 0.5）点/秒的法力恢复。每秒恢复 = 基础恢复 + 等级 × 每级恢复。</td></tr>
+        <tr><td><code>rage</code></td><td>每级提升 <code>enhance.rage.gain-bonus-per-level</code>（默认 0.10＝+10%）的怒气获取。怒气获取 = 最终伤害 ×（1 + 等级 × 每级加成）。</td></tr>
+        <tr><td><code>health</code></td><td>每级提供 <code>enhance.health.no-cost-chance-per-level</code>（默认 0.05＝5%）的“本次无消耗”触发概率（上限 100%）。触发时不扣血并提示“生命强化触发：本次无消耗！”。</td></tr>
+      </tbody>
+    </table>
+    <p><strong>怒气 1:1 规则：</strong>无论是造成伤害还是受到伤害，获得的怒气都<strong>等于该次的最终伤害</strong>（<code>getFinalDamage()</code>），再乘以该玩家自己的怒气强化加成。旧的固定值字段 <code>settings.rage.gain-on-deal-damage</code> / <code>gain-on-take-damage</code> 保留但不再用于怒气获取。</p>
+    <p><strong>生命消耗→Power 近似：</strong>生命值模式释放技能成功后，本次实际扣除的生命值会按 <code>settings.health.power-per-cost</code>（默认 0.1）折算成额外的 MythicMobs power 加到技能上（近似“每消耗 1 点生命 +1 伤害”，具体倍率取决于该 MythicMobs 技能如何使用 power）。若触发“本次无消耗”则实际扣血为 0，不提供额外 power。</p>
+    <p><strong>管理工具：</strong><code>/mias enhance &lt;玩家&gt; &lt;mana|rage|health&gt; &lt;等级&gt;</code> 用于测试，需要 <code>miaskillpool.admin</code> 权限。等级会被夹在 0 到 <code>enhance.max-level</code> 之间，设置后立即保存。这是管理测试工具，<strong>不是</strong>玩家升级流程。</p>
   </section>
 
   <section>

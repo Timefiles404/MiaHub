@@ -8,6 +8,7 @@ import dev.timefiles.miaskillpool.data.PlayerDataStore;
 import dev.timefiles.miaskillpool.data.PlayerSkillData;
 import dev.timefiles.miaskillpool.gui.AdminSkillPoolGui;
 import dev.timefiles.miaskillpool.gui.RandomSkillRollGui;
+import dev.timefiles.miaskillpool.gui.ResourceGui;
 import dev.timefiles.miaskillpool.gui.SkillPoolGui;
 import dev.timefiles.miaskillpool.placeholder.PlaceholderResolver;
 import dev.timefiles.miaskillpool.runtime.MiaSkillpoolService;
@@ -38,17 +39,19 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
     private final SkillPoolGui gui;
     private final RandomSkillRollGui randomGui;
     private final AdminSkillPoolGui adminGui;
+    private final ResourceGui resourceGui;
     private final RuntimeState runtimeState;
     private final MiaSkillpoolService api;
     private final PlaceholderResolver placeholderResolver;
 
-    public MiaSkillpoolCommand(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, SkillPoolGui gui, RandomSkillRollGui randomGui, AdminSkillPoolGui adminGui, RuntimeState runtimeState, MiaSkillpoolService api, PlaceholderResolver placeholderResolver) {
+    public MiaSkillpoolCommand(MiaSkillpoolPlugin plugin, SkillRegistry skillRegistry, PlayerDataStore dataStore, SkillPoolGui gui, RandomSkillRollGui randomGui, AdminSkillPoolGui adminGui, ResourceGui resourceGui, RuntimeState runtimeState, MiaSkillpoolService api, PlaceholderResolver placeholderResolver) {
         this.plugin = plugin;
         this.skillRegistry = skillRegistry;
         this.dataStore = dataStore;
         this.gui = gui;
         this.randomGui = randomGui;
         this.adminGui = adminGui;
+        this.resourceGui = resourceGui;
         this.runtimeState = runtimeState;
         this.api = api;
         this.placeholderResolver = placeholderResolver;
@@ -67,6 +70,8 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
             case "upgrade" -> upgrade(sender, args);
             case "mana" -> mana(sender, args);
             case "mode" -> mode(sender, args);
+            case "resource" -> resource(sender);
+            case "enhance" -> enhance(sender, args);
             case "random" -> random(sender, args);
             case "admingui" -> adminGui(sender, args);
             case "papi" -> papi(sender, args);
@@ -80,7 +85,7 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, String[] args) {
         if (args.length == 1) {
-            return filter(List.of("open", "reload", "learn", "givebook", "upgrade", "mana", "mode", "random", "admingui", "papi"), args[0]);
+            return filter(List.of("open", "reload", "learn", "givebook", "upgrade", "mana", "mode", "resource", "enhance", "random", "admingui", "papi"), args[0]);
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("admingui")) {
             return filter(List.of("skillpool"), args[1]);
@@ -105,6 +110,12 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("mode")) {
             return filter(Arrays.stream(ResourceMode.values()).map(ResourceMode::id).toList(), args[1]);
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("enhance")) {
+            return filter(Bukkit.getOnlinePlayers().stream().map(Player::getName).toList(), args[1]);
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("enhance")) {
+            return filter(Arrays.stream(ResourceMode.values()).map(ResourceMode::id).toList(), args[2]);
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("random")) {
             return filter(List.of("roll"), args[2]);
@@ -260,6 +271,45 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
         return true;
     }
 
+    private boolean resource(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(Texts.PREFIX + "只有玩家可以打开施法资源界面。");
+            return true;
+        }
+        if (!player.hasPermission("miaskillpool.use")) {
+            player.sendMessage(Texts.PREFIX + Texts.color("&c你没有使用技能池的权限。"));
+            return true;
+        }
+        resourceGui.open(player);
+        return true;
+    }
+
+    private boolean enhance(CommandSender sender, String[] args) {
+        if (!requireAdmin(sender)) {
+            return true;
+        }
+        if (args.length < 4) {
+            sender.sendMessage(Texts.PREFIX + Texts.color("&7用法：/mias enhance <player> <mana|rage|health> <level>"));
+            return true;
+        }
+
+        OfflinePlayer target = Bukkit.getOfflinePlayer(args[1]);
+        ResourceMode mode = ResourceMode.parse(args[2]).orElse(null);
+        if (mode == null) {
+            sender.sendMessage(Texts.PREFIX + Texts.color("&c未知资源模式。可选：mana, rage, health"));
+            return true;
+        }
+
+        int max = skillRegistry.enhanceMaxLevel();
+        int level = Math.max(0, Math.min(parseInt(args[3], 0), max));
+        PlayerSkillData data = dataStore.get(target);
+        data.setEnhanceLevel(mode, level);
+        dataStore.save(data);
+        sender.sendMessage(Texts.PREFIX + Texts.color("&a已将 " + (target.getName() == null ? args[1] : target.getName())
+                + " 的 " + mode.displayName() + "强化设置为 Lv." + level + "/" + max + "。"));
+        return true;
+    }
+
     private boolean random(CommandSender sender, String[] args) {
         if (!requireAdmin(sender)) {
             return true;
@@ -358,8 +408,10 @@ public final class MiaSkillpoolCommand implements CommandExecutor, TabCompleter 
     private void sendHelp(CommandSender sender, String label) {
         sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " open"));
         sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " mode <health|rage|mana>"));
+        sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " resource"));
         sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " upgrade slot <1-5>"));
         if (sender.hasPermission("miaskillpool.admin")) {
+            sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " enhance <player> <mana|rage|health> <level>"));
             sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " learn <player> <skillId>"));
             sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " givebook <player> <skillId> [amount]"));
             sender.sendMessage(Texts.PREFIX + Texts.color("&7/" + label + " random <player> roll"));

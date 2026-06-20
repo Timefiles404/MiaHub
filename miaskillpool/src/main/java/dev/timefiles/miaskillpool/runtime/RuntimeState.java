@@ -27,7 +27,9 @@ public final class RuntimeState {
         for (Player player : Bukkit.getOnlinePlayers()) {
             PlayerSkillData data = dataStore.get(player);
             PlayerRuntime state = state(player);
-            state.mana = Math.min(maxMana(data), state.mana + plugin.skillRegistry().manaRegenPerSecond());
+            double manaRegen = plugin.skillRegistry().manaRegenPerSecond()
+                    + data.enhanceLevel(ResourceMode.MANA) * plugin.skillRegistry().manaRegenPerEnhanceLevel();
+            state.mana = Math.min(maxMana(data), state.mana + manaRegen);
             if (state.combatUntilMillis > now) {
                 state.rage = Math.min(plugin.skillRegistry().maxRage(), state.rage + plugin.skillRegistry().rageRegenPerSecondCombat());
             }

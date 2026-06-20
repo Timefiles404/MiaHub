@@ -4,6 +4,7 @@ import dev.timefiles.miaskillpool.config.ResourceMode;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -18,11 +19,15 @@ public final class PlayerSkillData {
     private final int[] slotLevels = new int[SLOT_COUNT];
     private ResourceMode resourceMode = ResourceMode.MANA;
     private double maxManaBonus = 0.0;
+    private final EnumMap<ResourceMode, Integer> enhanceLevels = new EnumMap<>(ResourceMode.class);
 
     public PlayerSkillData(UUID uuid) {
         this.uuid = uuid;
         for (int i = 0; i < SLOT_COUNT; i++) {
             slotLevels[i] = 1;
+        }
+        for (ResourceMode mode : ResourceMode.values()) {
+            enhanceLevels.put(mode, 0);
         }
     }
 
@@ -89,12 +94,30 @@ public final class PlayerSkillData {
         maxManaBonus = Math.max(0.0, maxManaBonus + amount);
     }
 
+    public int enhanceLevel(ResourceMode mode) {
+        if (mode == null) {
+            return 0;
+        }
+        return enhanceLevels.getOrDefault(mode, 0);
+    }
+
+    /** Sets the enhancement level for a mode, clamped to >= 0. Callers clamp to the configured max. */
+    public void setEnhanceLevel(ResourceMode mode, int level) {
+        if (mode == null) {
+            return;
+        }
+        enhanceLevels.put(mode, Math.max(0, level));
+    }
+
     public void saveTo(YamlConfiguration yaml) {
         yaml.set("learned", new ArrayList<>(learnedSkills));
         yaml.set("equipped", equippedList());
         yaml.set("slot-levels", slotLevelList());
         yaml.set("resource-mode", resourceMode.id());
         yaml.set("max-mana-bonus", maxManaBonus);
+        yaml.set("enhance.mana", enhanceLevel(ResourceMode.MANA));
+        yaml.set("enhance.rage", enhanceLevel(ResourceMode.RAGE));
+        yaml.set("enhance.health", enhanceLevel(ResourceMode.HEALTH));
     }
 
     public static PlayerSkillData load(UUID uuid, YamlConfiguration yaml) {
@@ -114,6 +137,9 @@ public final class PlayerSkillData {
 
         ResourceMode.parse(yaml.getString("resource-mode")).ifPresent(data::resourceMode);
         data.maxManaBonus = Math.max(0.0, yaml.getDouble("max-mana-bonus", 0.0));
+        data.setEnhanceLevel(ResourceMode.MANA, Math.max(0, yaml.getInt("enhance.mana", 0)));
+        data.setEnhanceLevel(ResourceMode.RAGE, Math.max(0, yaml.getInt("enhance.rage", 0)));
+        data.setEnhanceLevel(ResourceMode.HEALTH, Math.max(0, yaml.getInt("enhance.health", 0)));
         return data;
     }
 
