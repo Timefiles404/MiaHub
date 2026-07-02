@@ -119,6 +119,9 @@ public final class EcoManager {
             }
             if (!set.isEmpty()) s.surfaceWhitelist(set);
         }
+
+        // 按树种名套用形态个性预设（材质 + 形态档案；未知名字只补齐 wood 材质）
+        dev.timefiles.miaeco.model.TreeArchetype.applyTo(s);
         return s;
     }
 

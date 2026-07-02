@@ -130,10 +130,10 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         // 用 1 格“伪森林”承载单棵树，直接复用生长/演替服务
         Forest tf = new Forest("test:" + p.getName(), new Region(world.getName(), bx, by, bz, bx, by, bz));
         TreeSpecies sp = eco.newSpeciesFromDefaults(speciesId);
-        // 若树种名能匹配到原版木头（oak/spruce/birch...），就用对应材质，否则保留默认
+        // 已知树种由 archetype 预设材质/形态；对任意其它名字尝试按名匹配原版木头
         org.bukkit.Material log = org.bukkit.Material.matchMaterial(speciesId.toUpperCase(Locale.ROOT) + "_LOG");
         org.bukkit.Material leaf = org.bukkit.Material.matchMaterial(speciesId.toUpperCase(Locale.ROOT) + "_LEAVES");
-        if (log != null) sp.logMaterial(log);
+        if (log != null) { sp.logMaterial(log); sp.woodMaterial(TreeSpecies.woodFor(log)); }
         if (leaf != null) sp.leafMaterial(leaf);
         tf.addSpecies(sp);
 

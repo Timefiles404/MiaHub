@@ -103,6 +103,7 @@ public final class ForestStore {
     // ---- species ----
     private void writeSpecies(YamlConfiguration yml, String p, TreeSpecies s) {
         yml.set(p + "log", s.logMaterial().name());
+        yml.set(p + "wood", s.woodMaterial().name());
         yml.set(p + "leaf", s.leafMaterial().name());
         yml.set(p + "spacing", s.spacing());
         yml.set(p + "density", s.density());
@@ -115,6 +116,14 @@ public final class ForestStore {
         yml.set(p + "canopyRadius", s.canopyRadius());
         yml.set(p + "branchiness", s.branchiness());
         yml.set(p + "monthsPerStage", s.monthsPerStage());
+        yml.set(p + "trunkRadius", s.trunkRadius());
+        yml.set(p + "trunkTaper", s.trunkTaper());
+        yml.set(p + "bareTrunkFraction", s.bareTrunkFraction());
+        yml.set(p + "branchLengthFactor", s.branchLengthFactor());
+        yml.set(p + "droop", s.droop());
+        yml.set(p + "canopyShape", s.canopyShape().name());
+        yml.set(p + "vines", s.vines());
+        yml.set(p + "rootSpread", s.rootSpread());
         List<String> wl = new ArrayList<>();
         for (Material m : s.surfaceWhitelist()) wl.add(m.name());
         yml.set(p + "surfaceWhitelist", wl);
@@ -124,6 +133,7 @@ public final class ForestStore {
         TreeSpecies s = manager.newSpeciesFromDefaults(id);
         if (c == null) return s;
         s.logMaterial(mat(c.getString("log"), s.logMaterial()));
+        s.woodMaterial(mat(c.getString("wood"), s.woodMaterial()));
         s.leafMaterial(mat(c.getString("leaf"), s.leafMaterial()));
         s.spacing(c.getDouble("spacing", s.spacing()));
         s.density(c.getDouble("density", s.density()));
@@ -136,6 +146,18 @@ public final class ForestStore {
         s.canopyRadius(c.getInt("canopyRadius", s.canopyRadius()));
         s.branchiness(c.getDouble("branchiness", s.branchiness()));
         s.monthsPerStage(c.getInt("monthsPerStage", s.monthsPerStage()));
+        s.trunkRadius(c.getInt("trunkRadius", s.trunkRadius()));
+        s.trunkTaper(c.getDouble("trunkTaper", s.trunkTaper()));
+        s.bareTrunkFraction(c.getDouble("bareTrunkFraction", s.bareTrunkFraction()));
+        s.branchLengthFactor(c.getDouble("branchLengthFactor", s.branchLengthFactor()));
+        s.droop(c.getDouble("droop", s.droop()));
+        s.vines(c.getBoolean("vines", s.vines()));
+        s.rootSpread(c.getInt("rootSpread", s.rootSpread()));
+        String shape = c.getString("canopyShape");
+        if (shape != null) {
+            try { s.canopyShape(dev.timefiles.miaeco.model.CanopyShape.valueOf(shape)); }
+            catch (IllegalArgumentException ignored) { }
+        }
         List<String> wl = c.getStringList("surfaceWhitelist");
         if (!wl.isEmpty()) {
             Set<Material> set = EnumSet.noneOf(Material.class);

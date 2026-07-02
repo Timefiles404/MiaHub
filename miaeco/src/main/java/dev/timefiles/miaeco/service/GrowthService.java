@@ -10,7 +10,6 @@ import dev.timefiles.miaeco.model.GrowthStage;
 import dev.timefiles.miaeco.model.TreeInstance;
 import dev.timefiles.miaeco.model.TreeSpecies;
 import org.bukkit.Bukkit;
-import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.plugin.Plugin;
 
@@ -88,12 +87,10 @@ public final class GrowthService {
 
         if (built != null && built != target) {
             TreeStructure old = model.generate(sp, built, t.seed());
-            for (BlockEdit be : old.toEdits(t.x(), t.y(), t.z())) {
-                edits.add(new BlockEdit(be.x(), be.y(), be.z(), Material.AIR));
-            }
+            edits.addAll(old.toClearEdits(t.x(), t.y(), t.z()));
         }
         TreeStructure now = model.generate(sp, target, t.seed());
-        edits.addAll(now.toEdits(t.x(), t.y(), t.z()));
+        edits.addAll(now.toEdits(t.x(), t.y(), t.z(), sp));
         return edits;
     }
 
@@ -109,9 +106,7 @@ public final class GrowthService {
                 GrowthStage built = t.builtStage();
                 if (sp == null || built == null) return e;
                 TreeStructure s = model.generate(sp, built, t.seed());
-                for (BlockEdit be : s.toEdits(t.x(), t.y(), t.z())) {
-                    e.add(new BlockEdit(be.x(), be.y(), be.z(), Material.AIR));
-                }
+                e.addAll(s.toClearEdits(t.x(), t.y(), t.z()));
                 return e;
             }, executor);
         }
