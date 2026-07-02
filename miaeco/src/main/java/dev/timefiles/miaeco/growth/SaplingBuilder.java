@@ -30,12 +30,13 @@ public final class SaplingBuilder {
         s.put(-dx, 1, -dz, Part.LEAF);
     }
 
-    /** SAPLING：按树种个性的小树苗（高 3~6）。 */
-    public static void sapling(TreeStructure s, TreeSpecies sp, Random rng) {
+    /** SAPLING：按树种个性的小树苗（高 3~6，随阶段内进度再长高 0~2 格）。 */
+    public static void sapling(TreeStructure s, TreeSpecies sp, Random rng, double progress) {
+        int extra = (int) Math.floor(Math.max(0, Math.min(1, progress)) * 2);
         switch (sp.form()) {
             case CONIFER -> {
                 // 迷你尖锥：矮杆 + 两层小裙 + 尖顶
-                int h = 2 + rng.nextInt(2);
+                int h = 2 + rng.nextInt(2) + extra;
                 Trees.column(s, 0, 0, h, 0);
                 s.put(0, h + 2, 0, Part.LEAF);
                 s.put(0, h + 1, 0, Part.LEAF);
@@ -44,7 +45,7 @@ public final class SaplingBuilder {
             }
             case JUNGLE -> {
                 // 细高杆 + 交错大单叶 + 顶端小簇
-                int h = 4 + rng.nextInt(2);
+                int h = 4 + rng.nextInt(2) + extra;
                 Trees.column(s, 0, 0, h, 0);
                 Trees.leafDisk(s, h + 1, 1, 1);
                 s.put(0, h + 2, 0, Part.LEAF);
@@ -62,7 +63,7 @@ public final class SaplingBuilder {
             }
             case ACACIA -> {
                 // 细杆 + 顶部小平冠（羽叶感）
-                int h = 3 + rng.nextInt(2);
+                int h = 3 + rng.nextInt(2) + extra;
                 Trees.column(s, 0, 0, h, 0);
                 Trees.leafDisk(s, h + 1, 1, 1);
                 s.put(2, h + 1, 0, Part.LEAF);
@@ -72,7 +73,7 @@ public final class SaplingBuilder {
             }
             case BIRCH -> {
                 // 白色细杆 + 紧凑小冠
-                int h = 3 + rng.nextInt(2);
+                int h = 3 + rng.nextInt(2) + extra;
                 Trees.column(s, 0, 0, h, 0);
                 Trees.leafDisk(s, h, 1, 1);
                 Trees.leafDisk(s, h + 1, 1, 1);
@@ -80,13 +81,13 @@ public final class SaplingBuilder {
             }
             case DARK_OAK -> {
                 // 矮胖浓密
-                int h = 2 + rng.nextInt(2);
+                int h = 2 + rng.nextInt(2) + extra;
                 Trees.column(s, 0, 0, h, 0);
                 Trees.leafBlob(s, 0, h + 1, 0, 2, 1, rng);
             }
             default -> {
                 // 通用阔叶小苗：细杆 + 顶叶簇 + 零星侧叶
-                int h = 3 + rng.nextInt(2);
+                int h = 3 + rng.nextInt(2) + extra;
                 Trees.column(s, 0, 0, h, 0);
                 Trees.leafBlob(s, 0, h + 1, 0, 1, 1, rng);
                 for (int y = h - 1; y >= Math.max(1, h - 2); y--) {

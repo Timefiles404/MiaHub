@@ -287,47 +287,65 @@ public final class Trees {
 
     // ============================ 藤蔓 ============================
 
-    /** 从末端点向下垂挂藤蔓链。 */
-    public static void vines(TreeStructure s, List<int[]> tips, Random rng, double chance) {
+    /**
+     * 在实体方块 (anchorX,anchorY,anchorZ) 的侧面 (dx,dz) 挂一条藤蔓链。
+     * 链顶与实体同高、侧向依附，向下垂挂 len 格——原版合法，绝不平铺/悬空。
+     */
+    public static void hangVine(TreeStructure s, int anchorX, int anchorY, int anchorZ,
+                                int dx, int dz, int len) {
+        if (dx == 0 && dz == 0) return;
+        int vx = anchorX + dx, vz = anchorZ + dz;
+        for (int i = 0; i < len; i++) s.put(vx, anchorY - i, vz, Part.VINE);
+    }
+
+    /** 从枝条末端（原木格）的随机侧面垂挂藤蔓。 */
+    public static void tipVines(TreeStructure s, List<int[]> tips, Random rng, double chance) {
+        int[][] sides = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
         for (int[] t : tips) {
             if (rng.nextDouble() >= chance) continue;
-            vineChain(s, t[0], t[1] - 1, t[2], 2 + rng.nextInt(6));
+            int[] d = sides[rng.nextInt(4)];
+            hangVine(s, t[0], t[1], t[2], d[0], d[1], 2 + rng.nextInt(5));
         }
     }
 
-    public static void vineChain(TreeStructure s, int x, int topY, int z, int len) {
-        for (int i = 0; i < len; i++) s.put(x, topY - i, z, Part.VINE);
-    }
+    // ============================ 倒伏木 ============================
 
-    // ============================ 枯木 ============================
+    /**
+     * 倒伏木重做：原地留下<b>树桩 + 根领 + 埋根</b>（根不会消失），
+     * 旁边是随体型加粗加长的倒干（大树 2 格宽、巨木再叠一层）、
+     * 沿干的残枝突起与朝天短枝、末端树冠处残留几团枯叶。
+     */
+    public static void fallen(TreeStructure s, TreeSpecies sp,
+                              TreeVariants.SizeVariant var, Random rng) {
+        double scale = var.scale();
+        boolean thick = var.large();
+        boolean giant = var.giant();
+        int len = Math.max(4, (int) Math.round(sp.maxHeight() * 0.7 * scale));
 
-    /** 枯立木：折断主干（thick=2x2 巨木断干）+ 断枝残桩 + 根。 */
-    public static void snag(TreeStructure s, TreeSpecies sp, double scale, Random rng, boolean thick) {
-        int height = Math.max(2, (int) Math.round(sp.maxHeight() * scale * (0.4 + rng.nextDouble() * 0.3)));
-        if (thick) {
-            thickTrunk(s, height, 2);
-            rootNubs(s, 2, 4, rng);
-        } else {
-            trunk(s, height, Math.max(0, (int) Math.round(sp.trunkRadius() * scale)), sp.trunkTaper());
-        }
-        roots(s, 0, (int) Math.round(sp.rootSpread() * Math.max(0.5, scale)), rng);
-        int n = 1 + rng.nextInt(2);
-        for (int i = 0; i < n; i++) {
-            int y = 1 + rng.nextInt(Math.max(1, height));
-            Stamps.DEAD_STUB.place(s, thick ? 1 : 0, y, 0, rng.nextInt(4));
-        }
-    }
+        // 树桩：短干 + 参差断口 + 根领 + 埋根
+        int stumpH = 1 + rng.nextInt(2) + (thick ? 1 : 0);
+        int fp = thick ? 2 : 1;
+        thickTrunk(s, stumpH, fp);
+        for (int a = 0; a < fp; a++)
+            for (int b = 0; b < fp; b++)
+                if (rng.nextDouble() < 0.5) s.put(a, stumpH + 1, b, Part.WOOD);
+        rootCollar(s, fp);
+        roots(s, 0, Math.max(2, sp.rootSpread()), rng);
 
-    /** 倒伏木：地面横干（朝向原木 + 断口木头），thick 时更长且带残枝。 */
-    public static void fallen(TreeStructure s, TreeSpecies sp, double scale, Random rng, boolean thick) {
-        int len = Math.max(3, (int) Math.round(sp.maxHeight() * (thick ? 0.75 : 0.55) * scale));
+        // 倒干：从树桩旁开始沿随机方向躺平
         double ang = rng.nextDouble() * Math.PI * 2;
         double dx = Math.cos(ang), dz = Math.sin(ang);
-        s.put(0, 0, 0, Part.WOOD);
-        if (thick) s.put(0, 1, 0, Part.WOOD);   // 根球高一点
-        int cx = 0, cz = 0, lx = 0, lz = 0, placed = 0;
+        // 垂直于倒向的第二排偏移（粗倒干用）
+        int px = Math.abs(dx) >= Math.abs(dz) ? 0 : 1;
+        int pz = 1 - px;
+
+        int cx = (int) Math.round(dx * (fp + 1));
+        int cz = (int) Math.round(dz * (fp + 1));
+        s.put(cx, 0, cz, Part.WOOD);                       // 断口根球
+        if (thick) s.put(cx + px, 0, cz + pz, Part.WOOD);
+        int lx = cx, lz = cz, placed = 0;
         Axis prev = null;
-        double fx = 0, fz = 0;
+        double fx = cx, fz = cz;
         while (placed < len) {
             fx += dx * 0.5;
             fz += dz * 0.5;
@@ -340,13 +358,25 @@ public final class Trees {
                 else break;
                 if (prev != null && ax != prev) s.put(lx, 0, lz, Part.WOOD);
                 s.put(cx, 0, cz, Part.LOG, ax);
-                if (thick && rng.nextDouble() < 0.3) s.put(cx, 1, cz, Part.WOOD); // 残枝突起
+                if (thick) s.put(cx + px, 0, cz + pz, Part.LOG, ax);         // 第二排 → 2 宽
+                if (giant) s.put(cx, 1, cz, Part.LOG, ax);                   // 巨木再叠一层
+                double f = placed / (double) len;
+                if (rng.nextDouble() < 0.18) {                               // 残枝突起
+                    s.put(cx, 1 + (giant ? 1 : 0), cz, Part.WOOD);
+                    if (rng.nextDouble() < 0.4) {
+                        s.put(cx + pz, 0, cz + px, Part.LOG, px == 0 ? Axis.X : Axis.Z); // 侧向断枝
+                    }
+                }
+                if (f > 0.55 && rng.nextDouble() < 0.25) {                   // 冠端残叶
+                    leafBlob(s, cx + (rng.nextInt(3) - 1), 1, cz + (rng.nextInt(3) - 1),
+                            1, 1, rng);
+                }
                 prev = ax;
                 lx = cx; lz = cz;
                 placed++;
                 if (placed >= len) break;
             }
         }
-        s.put(lx, 0, lz, Part.WOOD);
+        s.put(lx, 0, lz, Part.WOOD);                        // 梢端断口
     }
 }

@@ -20,11 +20,11 @@ import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 
 /**
- * 把树实例的“逻辑阶段”落实为世界方块：<b>并行</b>生成每棵树的体素结构，
+ * 把树实例的“逻辑阶段+进度”落实为世界方块：<b>并行</b>生成每棵树的体素结构，
  * 汇总后交给 {@link AsyncWorldEditor} 分 tick 写回主线程。
  *
- * <p>重生长（阶段变化）时先用“上一个已写阶段”的确定性结构清除旧方块，再写新形态，
- * 从而无需记录每棵树占用的方块。
+ * <p>重生长（阶段或月度进度变化）时先用“已建阶段+已建进度”的确定性结构清除旧方块，
+ * 再写新形态，从而无需记录每棵树占用的方块。
  */
 public final class GrowthService {
 
@@ -36,6 +36,13 @@ public final class GrowthService {
         this.plugin = plugin;
         this.executor = executor;
         this.editor = editor;
+    }
+
+    /** 阶段内进度（0..1）：由年龄与阶段起始年龄推出，驱动月度补间。 */
+    public static double progressOf(TreeSpecies sp, TreeInstance t) {
+        int mps = Math.max(1, sp.monthsPerStage());
+        double p = (t.ageMonths() - t.stageStartAge()) / (double) mps;
+        return Math.max(0, Math.min(1, p));
     }
 
     /**
@@ -53,31 +60,31 @@ public final class GrowthService {
             return;
         }
 
-        // 并行：每棵树独立生成体素 -> BlockEdit 列表
         @SuppressWarnings("unchecked")
         CompletableFuture<List<BlockEdit>>[] futures = new CompletableFuture[dirty.size()];
+        double[] progress = new double[dirty.size()];
         for (int i = 0; i < dirty.size(); i++) {
             TreeInstance t = dirty.get(i);
             TreeSpecies sp = forest.species(t.speciesId());
-            futures[i] = CompletableFuture.supplyAsync(() -> editsFor(sp, t), executor);
+            progress[i] = sp == null ? 0 : progressOf(sp, t);
+            double p = progress[i];
+            futures[i] = CompletableFuture.supplyAsync(() -> editsFor(sp, t, p), executor);
         }
 
-        CompletableFuture.allOf(futures).whenComplete((v, err) -> {
-            // 回主线程汇总 + 写入
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                List<BlockEdit> all = new ArrayList<>();
-                for (int i = 0; i < dirty.size(); i++) {
-                    List<BlockEdit> e = futures[i].getNow(List.of());
-                    if (e != null) all.addAll(e);
-                    dirty.get(i).markBuilt(dirty.get(i).stage());
-                }
-                editor.apply(world, all, onComplete);
-            });
-        });
+        CompletableFuture.allOf(futures).whenComplete((v, err) ->
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    List<BlockEdit> all = new ArrayList<>();
+                    for (int i = 0; i < dirty.size(); i++) {
+                        List<BlockEdit> e = futures[i].getNow(List.of());
+                        if (e != null) all.addAll(e);
+                        dirty.get(i).markBuilt(dirty.get(i).stage(), progress[i]);
+                    }
+                    editor.apply(world, all, onComplete);
+                }));
     }
 
     /** 生成一棵树的写入：先清旧形态（若有且不同），再写新形态。 */
-    private List<BlockEdit> editsFor(TreeSpecies sp, TreeInstance t) {
+    private List<BlockEdit> editsFor(TreeSpecies sp, TreeInstance t, double progress) {
         List<BlockEdit> edits = new ArrayList<>();
         if (sp == null) return edits;
 
@@ -85,16 +92,16 @@ public final class GrowthService {
         GrowthStage target = t.stage();
         GrowthModel model = GrowthModels.forSpecies(sp);
 
-        if (built != null && built != target) {
-            TreeStructure old = model.generate(sp, built, t.seed());
+        if (built != null && (built != target || t.builtProgress() != progress)) {
+            TreeStructure old = model.generate(sp, built, t.seed(), t.builtProgress());
             edits.addAll(old.toClearEdits(t.x(), t.y(), t.z()));
         }
-        TreeStructure now = model.generate(sp, target, t.seed());
+        TreeStructure now = model.generate(sp, target, t.seed(), progress);
         edits.addAll(now.toEdits(t.x(), t.y(), t.z(), sp));
         return edits;
     }
 
-    /** 仅清除树在世界中的方块（用于 /miaeco clear）。 */
+    /** 仅清除树在世界中的方块（用于 /miaeco clear 或树死亡移除）。 */
     public void clear(Forest forest, World world, List<TreeInstance> targets, Consumer<Integer> onComplete) {
         @SuppressWarnings("unchecked")
         CompletableFuture<List<BlockEdit>>[] futures = new CompletableFuture[targets.size()];
@@ -105,7 +112,8 @@ public final class GrowthService {
                 List<BlockEdit> e = new ArrayList<>();
                 GrowthStage built = t.builtStage();
                 if (sp == null || built == null) return e;
-                TreeStructure s = GrowthModels.forSpecies(sp).generate(sp, built, t.seed());
+                TreeStructure s = GrowthModels.forSpecies(sp)
+                        .generate(sp, built, t.seed(), t.builtProgress());
                 e.addAll(s.toClearEdits(t.x(), t.y(), t.z()));
                 return e;
             }, executor);
@@ -116,7 +124,7 @@ public final class GrowthService {
                     for (int i = 0; i < targets.size(); i++) {
                         List<BlockEdit> e = futures[i].getNow(List.of());
                         if (e != null) all.addAll(e);
-                        targets.get(i).markBuilt(null);
+                        targets.get(i).clearBuilt();
                     }
                     editor.apply(world, all, onComplete);
                 }));

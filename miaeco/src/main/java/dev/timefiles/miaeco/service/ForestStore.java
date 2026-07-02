@@ -51,6 +51,7 @@ public final class ForestStore {
                     fs.getInt("region.x2"), fs.getInt("region.y2"), fs.getInt("region.z2"));
             Forest forest = new Forest(name, region);
             forest.ageMonths(fs.getInt("ageMonths", 0));
+            forest.densityScale(fs.getDouble("densityScale", 1.0));
 
             ConfigurationSection spSec = fs.getConfigurationSection("species");
             if (spSec != null) {
@@ -81,6 +82,7 @@ public final class ForestStore {
             yml.set(p + "region.y2", r.maxY());
             yml.set(p + "region.z2", r.maxZ());
             yml.set(p + "ageMonths", forest.ageMonths());
+            yml.set(p + "densityScale", forest.densityScale());
 
             for (TreeSpecies s : forest.species().values()) {
                 writeSpecies(yml, p + "species." + s.id() + ".", s);
@@ -183,8 +185,11 @@ public final class ForestStore {
         m.put("z", t.z());
         m.put("seed", t.seed());
         m.put("age", t.ageMonths());
+        m.put("stageStart", t.stageStartAge());
+        m.put("vigor", t.vigor());
         m.put("stage", t.stage().name());
         m.put("built", t.builtStage() == null ? "" : t.builtStage().name());
+        m.put("builtProgress", t.builtProgress());
         return m;
     }
 
@@ -199,14 +204,20 @@ public final class ForestStore {
             int age = ((Number) m.get("age")).intValue();
             TreeInstance t = new TreeInstance(id, species, world, x, y, z, seed);
             t.ageMonths(age);
+            Object ss = m.get("stageStart");
+            t.stageStartAge(ss instanceof Number num ? num.intValue() : 0);
+            Object vg = m.get("vigor");
+            if (vg instanceof Number num) t.vigor(num.doubleValue());
             GrowthStage stage = GrowthStage.valueOf(String.valueOf(m.get("stage")));
             t.stage(stage);
             Object builtObj = m.get("built");
             String built = builtObj == null ? "" : String.valueOf(builtObj);
             if (!built.isEmpty()) {
                 GrowthStage builtStage = GrowthStage.valueOf(built);
-                t.markBuilt(builtStage);          // 设 builtStage 并清 dirty
-                if (builtStage != stage) t.markDirty(); // 阶段已推进但尚未重建 -> 保持 dirty
+                Object bp = m.get("builtProgress");
+                double builtProgress = bp instanceof Number num ? num.doubleValue() : 0;
+                t.markBuilt(builtStage, builtProgress);   // 设已建状态并清 dirty
+                if (builtStage != stage) t.markDirty();   // 阶段已推进但尚未重建 -> 保持 dirty
             }
             return t;
         } catch (Exception e) {

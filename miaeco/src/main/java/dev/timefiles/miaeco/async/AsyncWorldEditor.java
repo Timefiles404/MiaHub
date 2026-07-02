@@ -7,6 +7,7 @@ import org.bukkit.block.BlockFace;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.MultipleFacing;
 import org.bukkit.block.data.Orientable;
+import org.bukkit.block.data.type.Leaves;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
@@ -54,10 +55,13 @@ public final class AsyncWorldEditor {
         }.runTaskTimer(plugin, 1L, 1L);
     }
 
-    /** 在主线程把 BlockSpec 具体化为 BlockData。 */
+    /** 在主线程把 BlockSpec 具体化为 BlockData。树叶置 persistent，冻结自然凋零。 */
     private static BlockData toData(BlockSpec spec) {
         Material m = spec.material;
         BlockData data = m.createBlockData();
+        if (data instanceof Leaves leaves) {
+            leaves.setPersistent(true);
+        }
         if (spec.axis != null && data instanceof Orientable o) {
             o.setAxis(spec.axis);
         } else if (m == Material.VINE && spec.faces != null && data instanceof MultipleFacing mf) {

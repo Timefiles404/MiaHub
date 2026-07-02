@@ -7,6 +7,7 @@ import dev.timefiles.miaeco.model.Region;
 import dev.timefiles.miaeco.model.TreeInstance;
 import dev.timefiles.miaeco.model.TreeSpecies;
 import dev.timefiles.miaeco.service.EcoManager;
+import dev.timefiles.miaeco.service.SuccessionService;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -74,8 +75,9 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         msg(s, "/miaeco test <树种> advance <月>", "推进这棵测试树的形态");
         msg(s, "/miaeco test <树种> clear", "移除测试树");
         msg(s, "/miaeco pos1 | pos2", "把脚下方块设为选区角点");
-        msg(s, "/miaeco forest create <名称>", "用当前选区新建森林");
+        msg(s, "/miaeco forest create <名称>", "用当前选区新建森林（只取 XZ，自动找地表）");
         msg(s, "/miaeco forest list | info <名称> | remove <名称>", "森林管理");
+        msg(s, "/miaeco forest density <名称> [倍率]", "查看/设置相对密度倍率");
         msg(s, "/miaeco species add <森林> <树种id>", "为森林添加默认参数树种");
         msg(s, "/miaeco species list <森林>", "查看树种");
         msg(s, "/miaeco plant <森林>", "异步选点并种下树苗");
@@ -142,6 +144,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 ? dev.timefiles.miaeco.growth.TreeVariants.giantSeed(System.nanoTime())
                 : dev.timefiles.miaeco.growth.TreeVariants.normalSeed(System.nanoTime());
         TreeInstance t = new TreeInstance(UUID.randomUUID(), sp.id(), world.getName(), bx, by, bz, seed);
+        t.vigor(1.0);   // 测试树满活力，advance 即长
         tf.addTree(t);
         testTrees.put(p.getUniqueId(), tf);
 
@@ -159,13 +162,15 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         World world = org.bukkit.Bukkit.getWorld(tf.region().world());
         if (world == null) { p.sendMessage(P + ChatColor.RED + "世界未加载。"); return; }
 
-        int changed = eco.succession().advance(tf, months);
+        SuccessionService.Result result = eco.succession().advance(tf, months);
         String stageInfo = tf.trees().isEmpty()
                 ? "（已腐朽移除）"
                 : "阶段=" + tf.trees().get(0).stage() + " 树龄=" + tf.trees().get(0).ageMonths() + "月";
-        p.sendMessage(P + ChatColor.GREEN + "推进 " + months + " 月，" + changed + " 处变化，" + stageInfo);
-        eco.growth().grow(tf, world, new ArrayList<>(tf.trees()), n ->
-                p.sendMessage(P + ChatColor.GREEN + "重建完成，写入 " + n + " 个方块。"));
+        p.sendMessage(P + ChatColor.GREEN + "推进 " + months + " 月，" + result.changed() + " 处变化，" + stageInfo);
+        // 先清除被移除的树（腐朽），再重建剩余
+        eco.growth().clear(tf, world, result.removed(), cleared ->
+                eco.growth().grow(tf, world, new ArrayList<>(tf.trees()), n ->
+                        p.sendMessage(P + ChatColor.GREEN + "重建完成，写入 " + n + " 个方块。")));
     }
 
     private void testClear(Player p) {
@@ -232,6 +237,21 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 if (f == null) return;
                 eco.forests().remove(f.name());
                 sender.sendMessage(P + ChatColor.GREEN + "已删除森林 " + f.name() + "（未清除已放置的方块，可先 clear）。");
+            }
+            case "density" -> {
+                Forest f = require(sender, args, 2);
+                if (f == null) return;
+                if (args.length < 4) {
+                    sender.sendMessage(P + ChatColor.GRAY + f.name() + " 当前密度倍率: " + f.densityScale());
+                    return;
+                }
+                try {
+                    f.densityScale(Double.parseDouble(args[3]));
+                    sender.sendMessage(P + ChatColor.GREEN + f.name() + " 密度倍率 = " + f.densityScale()
+                            + ChatColor.GRAY + "（下次 plant 生效，叠加在自动疏密噪声之上）");
+                } catch (NumberFormatException e) {
+                    sender.sendMessage(P + ChatColor.RED + "倍率必须是数字。");
+                }
             }
             default -> help(sender);
         }
@@ -324,11 +344,13 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         catch (NumberFormatException e) { sender.sendMessage(P + ChatColor.RED + "月数必须是整数。"); return; }
         World world = worldOf(sender, f);
         if (world == null) return;
-        int changed = eco.succession().advance(f, months);
+        SuccessionService.Result result = eco.succession().advance(f, months);
         sender.sendMessage(P + ChatColor.GREEN + "推进 " + months + " 月，林龄 "
-                + f.ageMonths() + " 月，" + changed + " 棵树形态变化，重建中…");
-        eco.growth().grow(f, world, new ArrayList<>(f.trees()), n ->
-                sender.sendMessage(P + ChatColor.GREEN + "演替重建完成，写入 " + n + " 个方块。"));
+                + f.ageMonths() + " 月，" + result.changed() + " 棵树形态变化，"
+                + result.removed().size() + " 棵消亡，重建中…");
+        eco.growth().clear(f, world, result.removed(), cleared ->
+                eco.growth().grow(f, world, new ArrayList<>(f.trees()), n ->
+                        sender.sendMessage(P + ChatColor.GREEN + "演替重建完成，写入 " + n + " 个方块。")));
     }
 
     // ---- clear ----
@@ -370,7 +392,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         } else if (args.length == 2) {
             switch (args[0].toLowerCase(Locale.ROOT)) {
                 case "test" -> addMatches(out, args[1], "oak", "spruce", "birch", "jungle", "acacia", "dark_oak");
-                case "forest" -> addMatches(out, args[1], "create", "list", "info", "remove");
+                case "forest" -> addMatches(out, args[1], "create", "list", "info", "remove", "density");
                 case "species" -> addMatches(out, args[1], "add", "list");
                 case "plant", "grow", "advance", "clear" -> addForests(out, args[1]);
                 default -> { }
@@ -379,13 +401,14 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             String a0 = args[0].toLowerCase(Locale.ROOT);
             String a1 = args[1].toLowerCase(Locale.ROOT);
             if (a0.equals("test")) addMatches(out, args[2], "plant", "advance", "clear");
-            else if (a0.equals("forest") && (a1.equals("info") || a1.equals("remove"))) addForests(out, args[2]);
+            else if (a0.equals("forest") && (a1.equals("info") || a1.equals("remove") || a1.equals("density"))) addForests(out, args[2]);
             else if (a0.equals("species")) addForests(out, args[2]);
             else if (a0.equals("advance")) addMatches(out, args[2], "1", "3", "6", "12");
         } else if (args.length == 4) {
             String a0 = args[0].toLowerCase(Locale.ROOT);
             if (a0.equals("test") && args[2].equalsIgnoreCase("advance")) addMatches(out, args[3], "1", "3", "6", "12", "24");
             else if (a0.equals("test") && args[2].equalsIgnoreCase("plant")) addMatches(out, args[3], "giant");
+            else if (a0.equals("forest") && args[1].equalsIgnoreCase("density")) addMatches(out, args[3], "0.5", "1.0", "1.5", "2.0");
         }
         return out;
     }

@@ -15,6 +15,7 @@ public final class Forest {
     private final Map<String, TreeSpecies> species = new LinkedHashMap<>();
     private final List<TreeInstance> trees = new ArrayList<>();
     private int ageMonths;
+    private double densityScale = 1.0;   // 相对密度倍率（叠加在自动密度噪声之上）
 
     public Forest(String name, Region region) {
         this.name = name;
@@ -26,6 +27,9 @@ public final class Forest {
     public int ageMonths() { return ageMonths; }
     public void addMonths(int m) { this.ageMonths += m; }
     public void ageMonths(int m) { this.ageMonths = m; }
+
+    public double densityScale() { return densityScale; }
+    public void densityScale(double v) { this.densityScale = Math.max(0.1, Math.min(5.0, v)); }
 
     public Map<String, TreeSpecies> species() { return species; }
     public TreeSpecies species(String id) { return species.get(id); }

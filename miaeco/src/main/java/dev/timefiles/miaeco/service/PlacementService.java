@@ -68,16 +68,21 @@ public final class PlacementService {
             }
             if (best == null) continue;
 
-            // 概率接受：适宜度 * 该树种密度
-            if (rng.nextDouble() > bestScore * best.density()) continue;
-
             int wx = region.minX() + lx;
             int wz = region.minZ() + lz;
+
+            // 概率接受：适宜度 × 树种密度 × 密度噪声场（疏密不均） × 森林密度倍率
+            double noise = valueNoise(forestSeed, wx, wz);              // 0..1
+            double accept = bestScore * best.density() * (0.55 + 0.9 * noise) * forest.densityScale();
+            if (rng.nextDouble() > accept) continue;
+
             int wy = snap.surfaceYLocal(lx, lz) + 1; // 种在表面之上一格
             long treeSeed = mix(forestSeed, wx, wz);
-            planted.add(new TreeInstance(
+            TreeInstance t = new TreeInstance(
                     UUID.nameUUIDFromBytes((forest.name() + ":" + wx + ":" + wz).getBytes()),
-                    best.id(), region.world(), wx, wy, wz, treeSeed));
+                    best.id(), region.world(), wx, wy, wz, treeSeed);
+            t.vigor(bestScore);   // 地形适宜度 → 生长活力（好地长得快）
+            planted.add(t);
         }
         return planted;
     }
@@ -87,5 +92,31 @@ public final class PlacementService {
         h = h * 0x100000001B3L ^ x;
         h = h * 0x100000001B3L ^ z;
         return h;
+    }
+
+    // ---- 确定性 2D 值噪声（12 格晶格 + 平滑插值），驱动森林疏密 ----
+
+    private static double valueNoise(long seed, int x, int z) {
+        final double cell = 12.0;
+        double fx = x / cell, fz = z / cell;
+        int x0 = (int) Math.floor(fx), z0 = (int) Math.floor(fz);
+        double tx = smooth(fx - x0), tz = smooth(fz - z0);
+        double v00 = hash01(seed, x0, z0), v10 = hash01(seed, x0 + 1, z0);
+        double v01 = hash01(seed, x0, z0 + 1), v11 = hash01(seed, x0 + 1, z0 + 1);
+        double a = v00 + (v10 - v00) * tx;
+        double b = v01 + (v11 - v01) * tx;
+        return a + (b - a) * tz;
+    }
+
+    private static double smooth(double t) {
+        return t * t * (3 - 2 * t);
+    }
+
+    private static double hash01(long seed, int x, int z) {
+        long h = seed ^ (x * 0x9E3779B97F4A7C15L) ^ (z * 0xC2B2AE3D27D4EB4FL);
+        h = (h ^ (h >>> 30)) * 0xBF58476D1CE4E5B9L;
+        h = (h ^ (h >>> 27)) * 0x94D049BB133111EBL;
+        h ^= h >>> 31;
+        return (h >>> 11) / (double) (1L << 53);
     }
 }
