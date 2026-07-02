@@ -70,7 +70,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
 
     private void help(CommandSender s) {
         s.sendMessage(P + ChatColor.AQUA + "参数化程序化森林");
-        msg(s, "/miaeco test <树种> plant", "在脚下种一棵测试树");
+        msg(s, "/miaeco test <树种> plant [giant]", "在脚下种一棵测试树（giant=巨木变异）");
         msg(s, "/miaeco test <树种> advance <月>", "推进这棵测试树的形态");
         msg(s, "/miaeco test <树种> clear", "移除测试树");
         msg(s, "/miaeco pos1 | pos2", "把脚下方块设为选区角点");
@@ -103,7 +103,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         String action = args[2].toLowerCase(Locale.ROOT);
 
         switch (action) {
-            case "plant" -> testPlant(p, speciesId);
+            case "plant" -> testPlant(p, speciesId, args.length >= 4 && args[3].equalsIgnoreCase("giant"));
             case "advance" -> {
                 if (args.length < 4) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco test <树种> advance <月>"); return; }
                 int months;
@@ -116,7 +116,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         }
     }
 
-    private void testPlant(Player p, String speciesId) {
+    private void testPlant(Player p, String speciesId, boolean giant) {
         World world = p.getWorld();
         Location base = p.getLocation().getBlock().getLocation();
         int bx = base.getBlockX(), by = base.getBlockY(), bz = base.getBlockZ();
@@ -137,12 +137,16 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         if (leaf != null) sp.leafMaterial(leaf);
         tf.addSpecies(sp);
 
-        long seed = System.nanoTime();   // 每次种下换一个形态；种子存入实例后仍确定
+        // 每次种下换一个形态；测试树默认排除巨木变异（可用 plant giant 强制巨木）
+        long seed = giant
+                ? dev.timefiles.miaeco.growth.TreeVariants.giantSeed(System.nanoTime())
+                : dev.timefiles.miaeco.growth.TreeVariants.normalSeed(System.nanoTime());
         TreeInstance t = new TreeInstance(UUID.randomUUID(), sp.id(), world.getName(), bx, by, bz, seed);
         tf.addTree(t);
         testTrees.put(p.getUniqueId(), tf);
 
-        p.sendMessage(P + ChatColor.GREEN + "种下测试树 " + speciesId + " @ " + bx + "," + by + "," + bz
+        p.sendMessage(P + ChatColor.GREEN + "种下测试树 " + speciesId + (giant ? ChatColor.GOLD + "（巨木变异）" : "")
+                + ChatColor.GREEN + " @ " + bx + "," + by + "," + bz
                 + ChatColor.GRAY + "（seed=" + seed + " 阶段=" + t.stage() + "）");
         eco.growth().grow(tf, world, new ArrayList<>(tf.trees()), n ->
                 p.sendMessage(P + ChatColor.GREEN + "已写入 " + n + " 个方块。用 /miaeco test "
@@ -381,6 +385,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         } else if (args.length == 4) {
             String a0 = args[0].toLowerCase(Locale.ROOT);
             if (a0.equals("test") && args[2].equalsIgnoreCase("advance")) addMatches(out, args[3], "1", "3", "6", "12", "24");
+            else if (a0.equals("test") && args[2].equalsIgnoreCase("plant")) addMatches(out, args[3], "giant");
         }
         return out;
     }

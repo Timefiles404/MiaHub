@@ -27,14 +27,14 @@ public final class TreeArchetype {
             }
             case "dark_oak", "darkoak" -> {
                 materials(sp, Material.DARK_OAK_LOG, Material.DARK_OAK_LEAVES);
-                sp.form(TreeForm.BROADLEAF).canopyShape(CanopyShape.ROUND)
-                  .maxHeight(12).canopyRadius(4).branchiness(0.7)
-                  .trunkRadius(1).trunkTaper(0.3).bareTrunkFraction(0.35)
+                sp.form(TreeForm.DARK_OAK).canopyShape(CanopyShape.SPREADING)
+                  .maxHeight(9).canopyRadius(5).branchiness(0.7)
+                  .trunkRadius(1).trunkTaper(0.2).bareTrunkFraction(0.35)
                   .branchLengthFactor(0.55).droop(0.05).rootSpread(3).vines(false);
             }
             case "birch" -> {
                 materials(sp, Material.BIRCH_LOG, Material.BIRCH_LEAVES);
-                sp.form(TreeForm.BROADLEAF).canopyShape(CanopyShape.COLUMNAR)
+                sp.form(TreeForm.BIRCH).canopyShape(CanopyShape.COLUMNAR)
                   .maxHeight(13).canopyRadius(2).branchiness(0.45)
                   .trunkRadius(0).trunkTaper(0.45).bareTrunkFraction(0.5)
                   .branchLengthFactor(0.4).droop(0.08).rootSpread(1).vines(false);

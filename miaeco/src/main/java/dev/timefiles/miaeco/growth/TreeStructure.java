@@ -85,14 +85,23 @@ public final class TreeStructure {
         };
     }
 
-    /** 藤蔓贴面：朝向四周与上方的木质/叶方块（vanilla 需要支撑面）。 */
+    /**
+     * 藤蔓贴面。垂挂链的下段自身没有横向支撑，按原版规则应继承<b>链顶</b>那格的贴面
+     * （下方藤蔓由上方同面藤蔓支撑），所以先向上爬过连续藤蔓再取支撑面。
+     */
     private Set<BlockFace> vineFaces(int dx, int dy, int dz) {
+        int ay = dy;
+        for (int guard = 0; guard < 64; guard++) {
+            Voxel above = voxels.get(key(dx, ay + 1, dz));
+            if (above == null || above.part != Part.VINE) break;
+            ay++;
+        }
         Set<BlockFace> faces = EnumSet.noneOf(BlockFace.class);
-        if (isSupport(dx, dy, dz + 1)) faces.add(BlockFace.SOUTH);
-        if (isSupport(dx, dy, dz - 1)) faces.add(BlockFace.NORTH);
-        if (isSupport(dx + 1, dy, dz)) faces.add(BlockFace.EAST);
-        if (isSupport(dx - 1, dy, dz)) faces.add(BlockFace.WEST);
-        if (faces.isEmpty() && isSupport(dx, dy + 1, dz)) faces.add(BlockFace.UP);
+        if (isSupport(dx, ay, dz + 1)) faces.add(BlockFace.SOUTH);
+        if (isSupport(dx, ay, dz - 1)) faces.add(BlockFace.NORTH);
+        if (isSupport(dx + 1, ay, dz)) faces.add(BlockFace.EAST);
+        if (isSupport(dx - 1, ay, dz)) faces.add(BlockFace.WEST);
+        if (faces.isEmpty() && isSupport(dx, ay + 1, dz)) faces.add(BlockFace.UP);
         return faces;
     }
 

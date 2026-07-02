@@ -17,6 +17,8 @@ public final class GrowthModels {
 
     static {
         MODELS.put(TreeForm.BROADLEAF, DEFAULT);
+        MODELS.put(TreeForm.BIRCH, new BirchModel());
+        MODELS.put(TreeForm.DARK_OAK, new DarkOakModel());
         MODELS.put(TreeForm.JUNGLE, new JungleModel());
         MODELS.put(TreeForm.CONIFER, new ConiferModel());
         MODELS.put(TreeForm.ACACIA, new AcaciaModel());
