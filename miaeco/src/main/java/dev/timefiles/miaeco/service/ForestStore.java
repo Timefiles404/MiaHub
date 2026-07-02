@@ -122,6 +122,7 @@ public final class ForestStore {
         yml.set(p + "branchLengthFactor", s.branchLengthFactor());
         yml.set(p + "droop", s.droop());
         yml.set(p + "canopyShape", s.canopyShape().name());
+        yml.set(p + "form", s.form().name());
         yml.set(p + "vines", s.vines());
         yml.set(p + "rootSpread", s.rootSpread());
         List<String> wl = new ArrayList<>();
@@ -156,6 +157,11 @@ public final class ForestStore {
         String shape = c.getString("canopyShape");
         if (shape != null) {
             try { s.canopyShape(dev.timefiles.miaeco.model.CanopyShape.valueOf(shape)); }
+            catch (IllegalArgumentException ignored) { }
+        }
+        String form = c.getString("form");
+        if (form != null) {
+            try { s.form(dev.timefiles.miaeco.model.TreeForm.valueOf(form)); }
             catch (IllegalArgumentException ignored) { }
         }
         List<String> wl = c.getStringList("surfaceWhitelist");

@@ -2,8 +2,8 @@ package dev.timefiles.miaeco.service;
 
 import dev.timefiles.miaeco.async.AsyncWorldEditor;
 import dev.timefiles.miaeco.async.BlockEdit;
-import dev.timefiles.miaeco.growth.CellularTreeGrowth;
 import dev.timefiles.miaeco.growth.GrowthModel;
+import dev.timefiles.miaeco.growth.GrowthModels;
 import dev.timefiles.miaeco.growth.TreeStructure;
 import dev.timefiles.miaeco.model.Forest;
 import dev.timefiles.miaeco.model.GrowthStage;
@@ -31,7 +31,6 @@ public final class GrowthService {
     private final Plugin plugin;
     private final Executor executor;
     private final AsyncWorldEditor editor;
-    private final GrowthModel model = new CellularTreeGrowth();
 
     public GrowthService(Plugin plugin, Executor executor, AsyncWorldEditor editor) {
         this.plugin = plugin;
@@ -84,6 +83,7 @@ public final class GrowthService {
 
         GrowthStage built = t.builtStage();
         GrowthStage target = t.stage();
+        GrowthModel model = GrowthModels.forSpecies(sp);
 
         if (built != null && built != target) {
             TreeStructure old = model.generate(sp, built, t.seed());
@@ -105,7 +105,7 @@ public final class GrowthService {
                 List<BlockEdit> e = new ArrayList<>();
                 GrowthStage built = t.builtStage();
                 if (sp == null || built == null) return e;
-                TreeStructure s = model.generate(sp, built, t.seed());
+                TreeStructure s = GrowthModels.forSpecies(sp).generate(sp, built, t.seed());
                 e.addAll(s.toClearEdits(t.x(), t.y(), t.z()));
                 return e;
             }, executor);

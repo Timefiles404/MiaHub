@@ -46,6 +46,7 @@ public final class TreeSpecies {
     private double branchLengthFactor = 0.5;// 侧枝长度相对树高的比例
     private double droop = 0.12;           // 侧枝随距离下垂强度(针叶大、金合欢可为负=上扬)
     private CanopyShape canopyShape = CanopyShape.ROUND;
+    private TreeForm form = TreeForm.BROADLEAF; // 决定成年阶段用哪个生成模型
     private boolean vines = false;         // 是否垂挂藤蔓(丛林)
     private int rootSpread = 2;            // 根系向外扩展格数
 
@@ -81,6 +82,9 @@ public final class TreeSpecies {
 
     public CanopyShape canopyShape() { return canopyShape; }
     public TreeSpecies canopyShape(CanopyShape s) { this.canopyShape = s; return this; }
+
+    public TreeForm form() { return form; }
+    public TreeSpecies form(TreeForm f) { this.form = f; return this; }
 
     public boolean vines() { return vines; }
     public TreeSpecies vines(boolean v) { this.vines = v; return this; }
