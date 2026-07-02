@@ -1,0 +1,30 @@
+# MiaEco 配置
+# 生长/放置为异步计算，方块写入回主线程分批执行。
+
+engine:
+  # 并行计算线程数；<=0 表示自动 (CPU 核数 - 1)
+  worker-threads: 0
+  # 每 tick 最多写入的方块数（越大越快，但主线程压力越大）
+  blocks-per-tick: 400
+
+placement:
+  # Poisson 采样最大候选点尝试次数上限（防止超大区域卡死）
+  max-candidates: 20000
+
+# 树种默认模板；/miaeco species add 使用这些默认值，可在 forests.yml 中逐森林覆盖。
+species-defaults:
+  spacing: 5.0            # 树间最小间距（方块）
+  density: 0.7            # 通过适宜度后的接受概率 0..1
+  log-material: OAK_LOG
+  leaf-material: OAK_LEAVES
+  surface-whitelist: [GRASS_BLOCK, DIRT, PODZOL, COARSE_DIRT, ROOTED_DIRT, MOSS_BLOCK]
+  min-y: 60
+  max-y: 140
+  max-slope-degrees: 35.0
+  water-affinity: 0.0    # -1 喜旱, 0 无所谓, +1 喜湿
+  max-water-distance: 8  # 计算 water-affinity 的有效半径（格）
+  # 生长参数
+  max-height: 18
+  canopy-radius: 4
+  branchiness: 0.6       # 0..1 分枝密度
+  months-per-stage: 3    # 每个生长阶段推进所需的模拟“月数”

@@ -98,6 +98,22 @@
         "MythicMobs"
       ],
       "description": "MythicMobs-backed skill pool plugin with /mias."
+    },
+    {
+      "id": "miaeco",
+      "name": "MiaEco",
+      "pluginName": "MiaEco",
+      "repository": "Timefiles404/MiaHub",
+      "releaseTag": "miaeco-v0.1.0",
+      "asset": "MiaEco-0.1.0.jar",
+      "fileName": "MiaEco.jar",
+      "version": "0.1.0",
+      "minecraft": "1.21.x",
+      "java": 21,
+      "restartRequired": false,
+      "dependencies": [],
+      "passwordProtected": false,
+      "description": "Parametric procedural forest plugin: terrain-driven tree placement, async cellular tree growth, and succession."
     }
   ]
 }

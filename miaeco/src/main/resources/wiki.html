@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MiaEco 手册</title>
+<style>
+  body { font-family: system-ui, "Microsoft YaHei", sans-serif; max-width: 820px; margin: 2rem auto; padding: 0 1rem; line-height: 1.7; color: #1b2b20; background: #f6faf6; }
+  h1 { color: #1f6b3a; } h2 { color: #2e7d46; border-bottom: 1px solid #cfe6d5; padding-bottom: .3rem; margin-top: 2rem; }
+  code { background: #e7f2ea; padding: .1rem .35rem; border-radius: 4px; }
+  pre { background: #12281a; color: #d6f5df; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+  .tag { display:inline-block; background:#2e7d46; color:#fff; border-radius:4px; padding:.05rem .4rem; font-size:.8rem; }
+  table { border-collapse: collapse; width: 100%; } td, th { border: 1px solid #cfe6d5; padding: .4rem .6rem; text-align: left; }
+</style>
+</head>
+<body>
+<h1>MiaEco — 参数化程序化森林</h1>
+<p><span class="tag">框架版本</span> 通过规定区域与树种，自动依地形/坡度/方块/水参数选点，并异步并行地把每棵树程序化生长为形态各异、大小不一的树；可随时间推进森林演替。</p>
+
+<h2>快速上手</h2>
+<pre>
+# 1. 站在一角，设置选区两个对角点
+/miaeco pos1
+（走到对角）/miaeco pos2
+
+# 2. 用选区建立一片森林
+/miaeco forest create 云杉林
+
+# 3. 添加树种（使用 config.yml 的默认参数，可在 forests.yml 细调）
+/miaeco species add 云杉林 spruce
+
+# 4. 参数化选点 + 种下树苗（异步）
+/miaeco plant 云杉林
+
+# 5. 推进时间，观察长大 / 枯死 / 倒伏
+/miaeco advance 云杉林 3
+/miaeco advance 云杉林 12
+</pre>
+
+<h2>命令一览</h2>
+<table>
+<tr><th>命令</th><th>说明</th></tr>
+<tr><td><code>/miaeco pos1 | pos2</code></td><td>把脚下方块设为选区角点</td></tr>
+<tr><td><code>/miaeco forest create/list/info/remove</code></td><td>森林管理</td></tr>
+<tr><td><code>/miaeco species add/list</code></td><td>树种管理（参数取自 config 默认，可在 forests.yml 覆盖）</td></tr>
+<tr><td><code>/miaeco plant &lt;森林&gt;</code></td><td>异步选点 + 种植</td></tr>
+<tr><td><code>/miaeco grow &lt;森林&gt;</code></td><td>并行生成并写入待更新的树</td></tr>
+<tr><td><code>/miaeco advance &lt;森林&gt; &lt;月&gt;</code></td><td>推进演替</td></tr>
+<tr><td><code>/miaeco clear &lt;森林&gt;</code></td><td>清除该森林所有树方块</td></tr>
+</table>
+
+<h2>参数模型</h2>
+<p><b>选点适宜度：</b>表面方块白名单、海拔区间、坡度上限、与水的距离（配合 <code>water-affinity</code> 喜湿/喜旱）。</p>
+<p><b>生长形态：</b>基于“生长尖端 + 生长势(vigor) 元胞自动机”，vigor 随高度衰减、分枝时按重力偏置分配，形成竖直主干与外展下垂的侧枝。阶段 <code>SEED→SAPLING→YOUNG→MATURE→OLD→SNAG→FALLEN</code> 决定尺寸缩放与是否有树叶。</p>
+<p><b>演替：</b><code>advance</code> 按月推进年龄，活体树随年龄长大，老树随机枯死成枯立木，枯立木随机倒伏，倒木久置后回归林窗。所有随机性由树种子决定，可复现。</p>
+
+<h2>性能</h2>
+<p>选点、形态生成均在工作线程并行完成；方块写入分 tick 回主线程（<code>engine.blocks-per-tick</code>）。区域超过 50 万格会被拒绝以保护主线程。线程数见 <code>engine.worker-threads</code>。</p>
+
+<h2>路线图（框架待扩展）</h2>
+<ul>
+<li>邻域元胞规则：竞争、林窗更新、火灾/病害传播。</li>
+<li>更真实的物理：分支承重断裂、根系随坡度、光照遮蔽影响生长势。</li>
+<li>多树种混交演替（阳性先锋 → 阴性顶极）。</li>
+<li>更丰富的方块调色板（不同 log/leaf、真菌、灌木层）。</li>
+</ul>
+</body>
+</html>

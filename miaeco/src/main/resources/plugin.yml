@@ -1,0 +1,16 @@
+name: MiaEco
+main: dev.timefiles.miaeco.MiaEcoPlugin
+version: ${version}
+api-version: "1.21"
+description: 参数化程序化森林插件：区域定义、地形驱动选点、异步程序化树木生长与演替。
+author: Timefiles404
+commands:
+  miaeco:
+    description: MiaEco 森林管理命令。
+    usage: /miaeco help
+    aliases: [meco]
+    permission: miaeco.use
+permissions:
+  miaeco.use:
+    description: 允许使用 MiaEco 命令。
+    default: op
