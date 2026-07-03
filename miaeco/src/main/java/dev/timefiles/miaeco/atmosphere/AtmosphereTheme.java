@@ -107,7 +107,7 @@ public record AtmosphereTheme(
                         Material.STONE, Material.COBBLESTONE}, 0.7, true,
                 new Material[]{Material.MOSSY_STONE_BRICKS, Material.MOSSY_STONE_BRICKS,
                         Material.CRACKED_STONE_BRICKS}, true,
-                0.55, 0.55, 0.25, 0.4, 0.30, 0.45, false, 0.18, 0.7));
+                0.55, 0.55, 0.25, 0.4, 0.30, 0.45, false, 0.18, 0.85));
 
         reg(new AtmosphereTheme("savanna", "稀树草原",
                 List.of(pe("short_grass", 3.5), pe("tall_grass", 1.6),
@@ -147,7 +147,7 @@ public record AtmosphereTheme(
                         Material.COBBLESTONE}, 0.8, true,
                 new Material[]{Material.MOSSY_STONE_BRICKS, Material.MOSSY_STONE_BRICKS,
                         Material.CRACKED_STONE_BRICKS}, true,
-                0.45, 0.80, 0.15, 0.25, 0.35, 0.55, false, 0.25, 0.65));
+                0.45, 0.80, 0.15, 0.25, 0.35, 0.55, false, 0.25, 0.9));
 
         reg(new AtmosphereTheme("snowy", "雪原针叶",
                 List.of(pe("snow_patch", 3.0), pe("fern", 0.5), dry("dead_bush", 0.10, 0.4),

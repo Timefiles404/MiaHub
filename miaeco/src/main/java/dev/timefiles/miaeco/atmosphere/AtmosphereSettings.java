@@ -22,13 +22,13 @@ public final class AtmosphereSettings {
     public void theme(String t) { this.theme = t == null ? "" : t; }
     public boolean hasTheme() { return !theme.isEmpty(); }
 
-    /** 特征强度倍率（0..3，未设置 = 1.0）。 */
+    /** 特征强度倍率（0..5，未设置 = 1.0；≥4.5 视为"尤其强烈"档）。 */
     public double densityOf(String feature) {
         return density.getOrDefault(feature, 1.0);
     }
 
     public void density(String feature, double v) {
-        density.put(feature, Math.max(0, Math.min(3, v)));
+        density.put(feature, Math.max(0, Math.min(5, v)));
     }
 
     public Map<String, Double> densities() { return density; }

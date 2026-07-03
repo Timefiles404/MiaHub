@@ -48,10 +48,16 @@
 <tr><td><code>/miaeco advance &lt;森林&gt; &lt;月&gt;</code></td><td>推进演替</td></tr>
 <tr><td><code>/miaeco atmo set &lt;森林&gt; &lt;主题&gt;</code></td><td>设置氛围主题（<code>atmo themes</code> 列出全部 8 种）</td></tr>
 <tr><td><code>/miaeco atmo apply | clear | info &lt;森林&gt;</code></td><td>铺开氛围 / 精确恢复原地形 / 查看设置</td></tr>
-<tr><td><code>/miaeco atmo feature &lt;森林&gt; &lt;特征&gt; &lt;0~3&gt;</code></td><td>单项强度：river/groundcover/water/paths/soil/rocks/ruins（0=关）</td></tr>
+<tr><td><code>/miaeco atmo feature &lt;森林&gt; &lt;特征&gt; &lt;0~5&gt;</code></td><td>单项强度：river/groundcover/water/paths/soil/rocks/ruins（0=关，river 5 档水系尤其强烈）</td></tr>
 <tr><td><code>/miaeco clear &lt;森林&gt;</code></td><td>清除该森林所有树方块</td></tr>
 <tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（147 棵建筑师设计树）</td></tr>
 </table>
+
+<h2>0.9.0 盆地湖 · 月牙塘 · 5 档水系</h2>
+<p><b>盆地湖（封闭洼地整体灌水）：</b>河流特征最先做 <b>Priority-Flood 洼地分析</b>——找出"水恰好填满而不会流到外面"的封闭山谷/洼地，整体灌水到<b>溢出位-1</b>：不破坏地形、天然不外流，正是堰塞湖/谷中湖的意象。湖底铺淤泥/黏土/砂砾，浅水水草、深水海带、湖缘苔石岸线与睡莲；被淹没的既有小水面自动融合抬升。巨型浅洼地有水面预算保护，水位自动回落只淹谷底（不会一片汪洋）。</p>
+<p><b>山侧月牙塘：</b>从山体侧面"突出来"的天然平台水塘——选址要求外向 3 格骤降 ≥4 且背靠山体，内部挖 1~2 格灌水；水面是<b>双圆交集之补集的一半</b>（月牙形，凸弧朝崖外，类似无边泳池），池缘硬石+苔石、靠山侧回填草土，崖壁挂藤。找不到合格山肩就不硬放。</p>
+<p><b>河流意愿大幅增强：</b>走廊接受阈值随强度放宽（雨林 riverStrength 0.7→0.85、沼泽 0.65→0.9——这两个主题现在非常容易出河）；强度高时生成<b>多条河道</b>（最多 3 条，共享雕刻集自然汇流）、河槽随强度加宽。湖与河全不成立才退化为小水潭。</p>
+<p><b>density 上限 5、5 档尤其强烈：</b>全部氛围特征强度上限 3→5；river 的 density ≥4.5 触发 <b>fierce 档</b>——盆地湖必然灌注且数量+1、河道数+1、河槽更宽、中线深挖到 3 层、月牙塘+1。<code>/miaeco atmo feature 森林 river 5</code> 即水系全开。</p>
 
 <h2>0.8.0 河流与大型地物</h2>
 <p><b>河流（氛围最优先特征）：</b>A* 沿低谷走廊自动择线——对两组对边低点各搜一条走廊，取<b>逆流爬升率</b>更低者；没有真正的谷地（率超阈值）就退化为 2~3 个雕刻小水潭，绝不硬穿山。沿线雕出宽 2~4、中线深 2 的河槽（最多动 3~4 层地表），水位单调下行、被迫深挖超限自动截断并以水湾收尾（不突兀截流）；<b>淤泥/黏土/砂砾河床 + 深槽水草 + 苔石岸线</b>，两端椭圆水湾，雪原整面结冰。河水并入湿度场：垂滴叶、苔毯、芦苇会自发聚向河岸。</p>

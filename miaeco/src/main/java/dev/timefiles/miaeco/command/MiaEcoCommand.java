@@ -92,7 +92,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         msg(s, "/miaeco advance <森林> <月数>", "推进演替（长大/枯死/倒伏）");
         msg(s, "/miaeco atmo set <森林> <主题>", "设置氛围主题（atmo themes 看全部）");
         msg(s, "/miaeco atmo apply|clear|info <森林>", "铺开/恢复/查看森林氛围");
-        msg(s, "/miaeco atmo feature <森林> <特征> <0~3>", "调单项强度（0=关）");
+        msg(s, "/miaeco atmo feature <森林> <特征> <0~5>", "调单项强度（0=关，5=尤其强烈）");
         msg(s, "/miaeco clear <森林>", "清除该森林所有树方块");
     }
 
@@ -471,7 +471,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 if (args.length < 5) {
                     sender.sendMessage(P + ChatColor.RED + "用法: /miaeco atmo feature <森林> <"
                             + String.join("|", dev.timefiles.miaeco.atmosphere.AtmosphereSettings.FEATURES)
-                            + "> <0~3>");
+                            + "> <0~5>");
                     return;
                 }
                 String feat = args[3].toLowerCase(Locale.ROOT);
@@ -661,7 +661,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         } else if (args.length == 5) {
             String a0 = args[0].toLowerCase(Locale.ROOT);
             String a1 = args[1].toLowerCase(Locale.ROOT);
-            if (a0.equals("atmo") && a1.equals("feature")) addMatches(out, args[4], "0", "0.5", "1", "1.5", "2");
+            if (a0.equals("atmo") && a1.equals("feature")) addMatches(out, args[4], "0", "0.5", "1", "1.5", "2", "3", "4", "5");
             else if (a0.equals("species") && a1.equals("density")) addMatches(out, args[4], "0.3", "0.7", "1.0", "1.5", "2", "3", "4");
             else if (a0.equals("species") && a1.equals("replace")) addMatches(out, args[4],
                     dev.timefiles.miaeco.model.TreeArchetype.KNOWN.toArray(new String[0]));

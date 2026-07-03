@@ -53,6 +53,12 @@ public final class AtmoDumpTool {
                 double valleyZ = 92 + 20 * Math.sin(x / 34.0);
                 double vd = Math.abs(z - valleyZ);
                 h -= 5.0 * Math.exp(-(vd * vd) / (2 * 9.0 * 9.0));
+                // 封闭盆地（验证盆地湖）：碗形凹陷，四周丘陵合拢、水填满不外流
+                double bd = Math.hypot(x - 44, z - 40);
+                h -= 5.5 * Math.exp(-(bd * bd) / (2 * 6.0 * 6.0));
+                // 两座平顶山（验证山侧月牙塘）：顶缘外向 3 格骤降 ≥4
+                h += mesa(x, z, 128, 122, 7, 10, 10);
+                h += mesa(x, z, 36, 130, 7, 10, 10);
                 groundY[i] = BASE + (int) Math.round(h);
                 ground[i] = hash01(13, x, z) < 0.12 ? Material.DIRT : Material.GRASS_BLOCK;
                 valid[i] = true;
@@ -124,20 +130,25 @@ public final class AtmoDumpTool {
             w.write('\n');
 
             List<String> runs = new ArrayList<>(AtmosphereTheme.ids());
-            runs.add("temperate!boost");   // 小测试区里放大岩石/遗迹强度做外观验证
+            runs.add("temperate!boost");     // 小测试区里放大岩石/遗迹强度做外观验证
+            runs.add("rainforest!river5");   // 河流 density=5 的 fierce 档验证
+            runs.add("swamp!river5");
             for (String run : runs) {
-                boolean boost = run.endsWith("!boost");
-                String id = boost ? run.substring(0, run.indexOf('!')) : run;
+                int bang = run.indexOf('!');
+                String id = bang < 0 ? run : run.substring(0, bang);
+                String mode = bang < 0 ? "" : run.substring(bang + 1);
                 AtmosphereTheme th = AtmosphereTheme.get(id);
                 AtmosphereSettings st = new AtmosphereSettings();
                 st.theme(id);
-                if (boost) {
+                if (mode.equals("boost")) {
                     st.density("rocks", 3);
                     st.density("ruins", 3);
                     st.density("paths", 2);
+                } else if (mode.equals("river5")) {
+                    st.density("river", 5);
                 }
                 List<BlockEdit> edits = AtmosphereGenerator.generate(snap, th, st, 987654321L, bases);
-                String label = boost ? id + "_boost" : id;
+                String label = mode.isEmpty() ? id : id + "_" + mode;
                 StringBuilder b = new StringBuilder(edits.size() * 24 + 64);
                 b.append("{\"type\":\"atmo\",\"theme\":\"").append(label).append("\",\"blocks\":[");
                 boolean first = true;
@@ -155,6 +166,14 @@ public final class AtmoDumpTool {
             }
         }
         System.out.println("dumped -> " + file.toAbsolutePath());
+    }
+
+    /** 平顶山：顶半径 topR 内 +height，topR..footR 线性衰减到 0（顶缘即陡崖）。 */
+    private static double mesa(int x, int z, int cx, int cz, int topR, int footR, int height) {
+        double dist = Math.hypot(x - cx, z - cz);
+        if (dist <= topR) return height;
+        if (dist >= footR) return 0;
+        return height * (footR - dist) / (footR - topR);
     }
 
     private static double hash01(long seed, int x, int z) {
