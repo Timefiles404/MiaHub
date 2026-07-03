@@ -59,6 +59,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             case "pos1", "pos2" -> setPos(sender, sub);
             case "forest" -> forest(sender, args);
             case "species" -> species(sender, args);
+            case "atmo" -> atmo(sender, args);
             case "plant" -> plant(sender, args);
             case "grow" -> grow(sender, args);
             case "advance" -> advance(sender, args);
@@ -82,11 +83,16 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         msg(s, "/miaeco forest create <名称>", "用当前选区新建森林（只取 XZ，自动找地表）");
         msg(s, "/miaeco forest list | info <名称> | remove <名称>", "森林管理");
         msg(s, "/miaeco forest density <名称> [倍率]", "查看/设置相对密度倍率");
-        msg(s, "/miaeco species add <森林> <树种id>", "为森林添加默认参数树种");
+        msg(s, "/miaeco species add|remove <森林> <树种id>", "添加/移除树种（remove 连树一起清）");
+        msg(s, "/miaeco species replace <森林> <旧id> <新id>", "原位替换树种（保留每棵树位置/年龄）");
+        msg(s, "/miaeco species density <森林> <id> [0~2]", "查看/设置单个树种密度");
         msg(s, "/miaeco species list <森林>", "查看树种");
-        msg(s, "/miaeco plant <森林>", "异步选点并种下树苗");
+        msg(s, "/miaeco plant <森林> [instant]", "异步选点种植；instant=直接生成混龄成熟森林");
         msg(s, "/miaeco grow <森林>", "异步生长/重建待更新的树");
         msg(s, "/miaeco advance <森林> <月数>", "推进演替（长大/枯死/倒伏）");
+        msg(s, "/miaeco atmo set <森林> <主题>", "设置氛围主题（atmo themes 看全部）");
+        msg(s, "/miaeco atmo apply|clear|info <森林>", "铺开/恢复/查看森林氛围");
+        msg(s, "/miaeco atmo feature <森林> <特征> <0~3>", "调单项强度（0=关）");
         msg(s, "/miaeco clear <森林>", "清除该森林所有树方块");
     }
 
@@ -285,7 +291,13 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage(ChatColor.GRAY + " 区域: " + f.region());
                 sender.sendMessage(ChatColor.GRAY + " 林龄: " + f.ageMonths() + " 月");
                 sender.sendMessage(ChatColor.GRAY + " 树种: " + String.join(", ", f.species().keySet()));
-                sender.sendMessage(ChatColor.GRAY + " 树数: " + f.trees().size());
+                long lm = f.trees().stream().filter(TreeInstance::isPrefab).count();
+                sender.sendMessage(ChatColor.GRAY + " 树数: " + f.trees().size()
+                        + (lm > 0 ? "（地标古树 " + lm + "）" : ""));
+                if (f.atmosphere().hasTheme()) {
+                    sender.sendMessage(ChatColor.GRAY + " 氛围: " + f.atmosphere().theme()
+                            + (f.atmosphere().applied() ? "（已铺开）" : "（未铺开）"));
+                }
                 summarizeStages(sender, f);
             }
             case "remove" -> {
@@ -327,29 +339,180 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
     private void species(CommandSender sender, String[] args) {
         if (args.length < 2) { help(sender); return; }
         String op = args[1].toLowerCase(Locale.ROOT);
-        if (op.equals("add")) {
-            if (args.length < 4) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco species add <森林> <树种id>"); return; }
-            Forest f = eco.forest(args[2]);
-            if (f == null) { sender.sendMessage(P + ChatColor.RED + "森林不存在。"); return; }
-            String id = args[3].toLowerCase(Locale.ROOT);
-            if (f.species(id) != null) { sender.sendMessage(P + ChatColor.RED + "该森林已有此树种。"); return; }
-            TreeSpecies sp = eco.newSpeciesFromDefaults(id);
-            f.addSpecies(sp);
-            sender.sendMessage(P + ChatColor.GREEN + "已添加树种 " + id + "（默认参数：log="
-                    + sp.logMaterial() + " leaf=" + sp.leafMaterial() + " spacing=" + sp.spacing() + "）");
-            sender.sendMessage(ChatColor.GRAY + "可在 forests.yml 中细调该树种的地形/生长参数。");
-        } else if (op.equals("list")) {
-            Forest f = require(sender, args, 2);
-            if (f == null) return;
-            if (f.species().isEmpty()) { sender.sendMessage(P + ChatColor.GRAY + "该森林尚无树种。"); return; }
-            sender.sendMessage(P + ChatColor.AQUA + f.name() + " 的树种：");
-            for (TreeSpecies s : f.species().values()) {
-                sender.sendMessage(ChatColor.YELLOW + " " + s.id() + ChatColor.GRAY
-                        + " log=" + s.logMaterial() + " spacing=" + s.spacing()
-                        + " maxH=" + s.maxHeight() + " water=" + s.waterAffinity());
+        switch (op) {
+            case "add" -> {
+                if (args.length < 4) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco species add <森林> <树种id>"); return; }
+                Forest f = eco.forest(args[2]);
+                if (f == null) { sender.sendMessage(P + ChatColor.RED + "森林不存在。"); return; }
+                String id = args[3].toLowerCase(Locale.ROOT);
+                if (f.species(id) != null) { sender.sendMessage(P + ChatColor.RED + "该森林已有此树种。"); return; }
+                TreeSpecies sp = eco.newSpeciesFromDefaults(id);
+                f.addSpecies(sp);
+                sender.sendMessage(P + ChatColor.GREEN + "已添加树种 " + id + "（默认参数：log="
+                        + sp.logMaterial() + " leaf=" + sp.leafMaterial() + " spacing=" + sp.spacing() + "）");
+                sender.sendMessage(ChatColor.GRAY + "可在 forests.yml 中细调该树种的地形/生长参数。");
             }
-        } else {
-            help(sender);
+            case "list" -> {
+                Forest f = require(sender, args, 2);
+                if (f == null) return;
+                if (f.species().isEmpty()) { sender.sendMessage(P + ChatColor.GRAY + "该森林尚无树种。"); return; }
+                sender.sendMessage(P + ChatColor.AQUA + f.name() + " 的树种：");
+                for (TreeSpecies s : f.species().values()) {
+                    long cnt = f.trees().stream().filter(t -> t.speciesId().equals(s.id())).count();
+                    sender.sendMessage(ChatColor.YELLOW + " " + s.id() + ChatColor.GRAY
+                            + " 树=" + cnt + " density=" + s.density() + " spacing=" + s.spacing()
+                            + " maxH=" + s.maxHeight() + " water=" + s.waterAffinity());
+                }
+            }
+            case "remove" -> {
+                if (args.length < 4) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco species remove <森林> <树种id>"); return; }
+                Forest f = eco.forest(args[2]);
+                if (f == null) { sender.sendMessage(P + ChatColor.RED + "森林不存在。"); return; }
+                String id = args[3].toLowerCase(Locale.ROOT);
+                if (f.species(id) == null) { sender.sendMessage(P + ChatColor.RED + "该森林没有树种 " + id + "。"); return; }
+                World w = worldOf(sender, f);
+                if (w == null) return;
+                List<TreeInstance> victims = new ArrayList<>();
+                for (TreeInstance t : f.trees()) if (t.speciesId().equals(id)) victims.add(t);
+                eco.growth().clear(f, w, victims, n -> {
+                    f.trees().removeAll(victims);
+                    f.species().remove(id);
+                    sender.sendMessage(P + ChatColor.GREEN + "已移除树种 " + id + "：清掉 "
+                            + victims.size() + " 棵树（" + n + " 方块）。");
+                });
+            }
+            case "replace" -> {
+                if (args.length < 5) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco species replace <森林> <旧id> <新id>"); return; }
+                Forest f = eco.forest(args[2]);
+                if (f == null) { sender.sendMessage(P + ChatColor.RED + "森林不存在。"); return; }
+                String oldId = args[3].toLowerCase(Locale.ROOT);
+                String newId = args[4].toLowerCase(Locale.ROOT);
+                if (f.species(oldId) == null) { sender.sendMessage(P + ChatColor.RED + "该森林没有树种 " + oldId + "。"); return; }
+                if (f.species(newId) != null) { sender.sendMessage(P + ChatColor.RED + "该森林已有树种 " + newId + "，请先移除。"); return; }
+                World w = worldOf(sender, f);
+                if (w == null) return;
+                List<TreeInstance> victims = new ArrayList<>();
+                for (TreeInstance t : f.trees()) if (t.speciesId().equals(oldId)) victims.add(t);
+                TreeSpecies newSp = eco.newSpeciesFromDefaults(newId);
+                eco.growth().clear(f, w, victims, n -> {
+                    f.trees().removeAll(victims);
+                    f.species().remove(oldId);
+                    f.addSpecies(newSp);
+                    // 原位重建：同座标同种子同年龄，新树种形态（地标预制退回普通树）
+                    List<TreeInstance> reborn = new ArrayList<>(victims.size());
+                    for (TreeInstance v : victims) {
+                        TreeInstance nt = new TreeInstance(
+                                UUID.nameUUIDFromBytes((f.name() + ":" + v.x() + ":" + v.z() + ":" + newId).getBytes()),
+                                newId, v.world(), v.x(), v.y(), v.z(), v.seed());
+                        nt.vigor(v.vigor());
+                        nt.ageMonths(v.ageMonths());
+                        nt.stageStartAge(v.stageStartAge());
+                        nt.stage(v.stage());
+                        f.addTree(nt);
+                        reborn.add(nt);
+                    }
+                    sender.sendMessage(P + ChatColor.GREEN + "已替换 " + oldId + " → " + newId
+                            + "（" + reborn.size() + " 棵原位重建中…）");
+                    eco.growth().grow(f, w, reborn, cnt ->
+                            sender.sendMessage(P + ChatColor.GREEN + "替换完成，写入 " + cnt + " 个方块。"));
+                });
+            }
+            case "density" -> {
+                if (args.length < 4) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco species density <森林> <树种id> [0~2]"); return; }
+                Forest f = eco.forest(args[2]);
+                if (f == null) { sender.sendMessage(P + ChatColor.RED + "森林不存在。"); return; }
+                TreeSpecies sp = f.species(args[3].toLowerCase(Locale.ROOT));
+                if (sp == null) { sender.sendMessage(P + ChatColor.RED + "该森林没有此树种。"); return; }
+                if (args.length < 5) {
+                    sender.sendMessage(P + ChatColor.GRAY + sp.id() + " 当前密度: " + sp.density());
+                    return;
+                }
+                try {
+                    double v = Math.max(0, Math.min(2, Double.parseDouble(args[4])));
+                    sp.density(v);
+                    sender.sendMessage(P + ChatColor.GREEN + sp.id() + " 密度 = " + v
+                            + ChatColor.GRAY + "（下次 plant 生效；bush/palm 配高密度可成小片林）");
+                } catch (NumberFormatException e) {
+                    sender.sendMessage(P + ChatColor.RED + "密度必须是数字。");
+                }
+            }
+            default -> help(sender);
+        }
+    }
+
+    // ---- atmo（森林氛围） ----
+    private void atmo(CommandSender sender, String[] args) {
+        if (args.length < 2) { help(sender); return; }
+        String op = args[1].toLowerCase(Locale.ROOT);
+        if (op.equals("themes")) {
+            sender.sendMessage(P + ChatColor.AQUA + "氛围主题：");
+            for (String id : dev.timefiles.miaeco.atmosphere.AtmosphereTheme.ids()) {
+                var t = dev.timefiles.miaeco.atmosphere.AtmosphereTheme.get(id);
+                sender.sendMessage(ChatColor.YELLOW + " " + id + ChatColor.GRAY + " - " + t.label());
+            }
+            return;
+        }
+        Forest f = require(sender, args, 2);
+        if (f == null) return;
+        var st = f.atmosphere();
+        switch (op) {
+            case "set" -> {
+                if (args.length < 4) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco atmo set <森林> <主题>"); return; }
+                String theme = args[3].toLowerCase(Locale.ROOT);
+                if (dev.timefiles.miaeco.atmosphere.AtmosphereTheme.get(theme) == null) {
+                    sender.sendMessage(P + ChatColor.RED + "未知主题 " + theme + "（/miaeco atmo themes 查看）");
+                    return;
+                }
+                st.theme(theme);
+                sender.sendMessage(P + ChatColor.GREEN + f.name() + " 氛围主题 = " + theme
+                        + ChatColor.GRAY + "（/miaeco atmo apply " + f.name() + " 铺开）");
+            }
+            case "feature" -> {
+                if (args.length < 5) {
+                    sender.sendMessage(P + ChatColor.RED + "用法: /miaeco atmo feature <森林> <"
+                            + String.join("|", dev.timefiles.miaeco.atmosphere.AtmosphereSettings.FEATURES)
+                            + "> <0~3>");
+                    return;
+                }
+                String feat = args[3].toLowerCase(Locale.ROOT);
+                if (!dev.timefiles.miaeco.atmosphere.AtmosphereSettings.FEATURES.contains(feat)) {
+                    sender.sendMessage(P + ChatColor.RED + "未知特征 " + feat + "。");
+                    return;
+                }
+                try {
+                    double v = Double.parseDouble(args[4]);
+                    st.density(feat, v);
+                    sender.sendMessage(P + ChatColor.GREEN + f.name() + " 特征 " + feat + " 强度 = "
+                            + st.densityOf(feat) + ChatColor.GRAY + "（重新 apply 生效）");
+                } catch (NumberFormatException e) {
+                    sender.sendMessage(P + ChatColor.RED + "强度必须是数字。");
+                }
+            }
+            case "apply" -> {
+                World w = worldOf(sender, f);
+                if (w == null) return;
+                if (f.region().footprint() > MAX_SNAPSHOT) {
+                    sender.sendMessage(P + ChatColor.RED + "区域过大（>" + MAX_SNAPSHOT + " 格）。");
+                    return;
+                }
+                eco.atmosphere().apply(f, w, m -> sender.sendMessage(P + ChatColor.GREEN + m));
+            }
+            case "clear" -> {
+                World w = worldOf(sender, f);
+                if (w == null) return;
+                eco.atmosphere().clear(f, w, n ->
+                        sender.sendMessage(P + ChatColor.GREEN + "已恢复原地形（" + n + " 格）。"));
+            }
+            case "info" -> {
+                sender.sendMessage(P + ChatColor.AQUA + f.name() + " 氛围：主题="
+                        + (st.hasTheme() ? st.theme() : "未设置") + " 已铺开=" + st.applied());
+                StringBuilder sb = new StringBuilder(ChatColor.GRAY + " 强度: ");
+                for (String feat : dev.timefiles.miaeco.atmosphere.AtmosphereSettings.FEATURES) {
+                    sb.append(feat).append('=').append(st.densityOf(feat)).append(' ');
+                }
+                sender.sendMessage(sb.toString());
+            }
+            default -> help(sender);
         }
     }
 
@@ -365,14 +528,19 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                     + " 格 > " + MAX_SNAPSHOT + "）。请缩小选区。");
             return;
         }
+        boolean instant = args.length >= 3 && args[2].equalsIgnoreCase("instant");
         sender.sendMessage(P + ChatColor.GRAY + "拍摄地形快照…");
         TerrainSnapshot snap = TerrainSnapshot.capture(world, f.region());
         sender.sendMessage(P + ChatColor.GRAY + "异步选点计算中…");
         eco.placement().plant(f, snap).whenComplete((planted, err) -> {
             org.bukkit.Bukkit.getScheduler().runTask(eco.plugin(), () -> {
                 if (err != null) { sender.sendMessage(P + ChatColor.RED + "选点失败: " + err.getMessage()); return; }
+                long lm = planted.stream().filter(TreeInstance::isPrefab).count();
+                if (instant) eco.succession().seedMatureMix(f, planted);
                 for (TreeInstance t : planted) f.addTree(t);
-                sender.sendMessage(P + ChatColor.GREEN + "选点完成：新增 " + planted.size() + " 棵树苗，开始生长…");
+                sender.sendMessage(P + ChatColor.GREEN + "选点完成：新增 " + planted.size() + " 棵树"
+                        + (lm > 0 ? "（含 " + lm + " 棵地标古树）" : "")
+                        + (instant ? "，按光照分层直接生成混龄森林…" : "苗，开始生长…"));
                 eco.growth().grow(f, world, planted, n ->
                         sender.sendMessage(P + ChatColor.GREEN + "已写入 " + n + " 个方块。"));
             });
@@ -444,13 +612,15 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
     public List<String> onTabComplete(CommandSender sender, Command command, String label, String[] args) {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
-            addMatches(out, args[0], "help", "test", "pos1", "pos2", "forest", "species", "plant", "grow", "advance", "clear", "save");
+            addMatches(out, args[0], "help", "test", "pos1", "pos2", "forest", "species", "atmo",
+                    "plant", "grow", "advance", "clear", "save");
         } else if (args.length == 2) {
             switch (args[0].toLowerCase(Locale.ROOT)) {
                 case "test" -> addMatches(out, args[1],
                         dev.timefiles.miaeco.model.TreeArchetype.KNOWN.toArray(new String[0]));
                 case "forest" -> addMatches(out, args[1], "create", "list", "info", "remove", "density");
-                case "species" -> addMatches(out, args[1], "add", "list");
+                case "species" -> addMatches(out, args[1], "add", "list", "remove", "replace", "density");
+                case "atmo" -> addMatches(out, args[1], "set", "apply", "clear", "info", "feature", "themes");
                 case "plant", "grow", "advance", "clear" -> addForests(out, args[1]);
                 default -> { }
             }
@@ -469,12 +639,30 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             }
             else if (a0.equals("forest") && (a1.equals("info") || a1.equals("remove") || a1.equals("density"))) addForests(out, args[2]);
             else if (a0.equals("species")) addForests(out, args[2]);
+            else if (a0.equals("atmo") && !a1.equals("themes")) addForests(out, args[2]);
             else if (a0.equals("advance")) addMatches(out, args[2], "1", "3", "6", "12");
+            else if (a0.equals("plant")) addMatches(out, args[2], "instant");
         } else if (args.length == 4) {
             String a0 = args[0].toLowerCase(Locale.ROOT);
+            String a1 = args[1].toLowerCase(Locale.ROOT);
             if (a0.equals("test") && args[2].equalsIgnoreCase("advance")) addMatches(out, args[3], "1", "3", "6", "12", "24");
             else if (a0.equals("test") && args[2].equalsIgnoreCase("plant")) addMatches(out, args[3], "giant");
-            else if (a0.equals("forest") && args[1].equalsIgnoreCase("density")) addMatches(out, args[3], "0.5", "1.0", "1.5", "2.0");
+            else if (a0.equals("forest") && a1.equals("density")) addMatches(out, args[3], "0.5", "1.0", "1.5", "2.0");
+            else if (a0.equals("atmo") && a1.equals("set")) addMatches(out, args[3],
+                    dev.timefiles.miaeco.atmosphere.AtmosphereTheme.ids().toArray(new String[0]));
+            else if (a0.equals("atmo") && a1.equals("feature")) addMatches(out, args[3],
+                    dev.timefiles.miaeco.atmosphere.AtmosphereSettings.FEATURES.toArray(new String[0]));
+            else if (a0.equals("species") && (a1.equals("remove") || a1.equals("replace") || a1.equals("density"))) {
+                Forest f = eco.forest(args[2]);
+                if (f != null) addMatches(out, args[3], f.species().keySet().toArray(new String[0]));
+            }
+        } else if (args.length == 5) {
+            String a0 = args[0].toLowerCase(Locale.ROOT);
+            String a1 = args[1].toLowerCase(Locale.ROOT);
+            if (a0.equals("atmo") && a1.equals("feature")) addMatches(out, args[4], "0", "0.5", "1", "1.5", "2");
+            else if (a0.equals("species") && a1.equals("density")) addMatches(out, args[4], "0.3", "0.7", "1.0", "1.5", "2");
+            else if (a0.equals("species") && a1.equals("replace")) addMatches(out, args[4],
+                    dev.timefiles.miaeco.model.TreeArchetype.KNOWN.toArray(new String[0]));
         }
         return out;
     }

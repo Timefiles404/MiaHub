@@ -32,6 +32,7 @@ public final class EcoManager {
     private PlacementService placementService;
     private GrowthService growthService;
     private SuccessionService successionService;
+    private AtmosphereService atmosphereService;
     private final SelectionManager selectionManager = new SelectionManager();
     private ForestStore store;
 
@@ -67,9 +68,12 @@ public final class EcoManager {
         };
         this.workerPool = Executors.newFixedThreadPool(workerThreads, tf);
         this.editor = new AsyncWorldEditor(plugin, blocksPerTick);
-        this.placementService = new PlacementService(workerPool, maxCandidates);
+        this.placementService = new PlacementService(workerPool, maxCandidates,
+                cfg.getDouble("placement.landmark-chance", 0.05),
+                cfg.getInt("placement.landmark-spacing", 28));
         this.growthService = new GrowthService(plugin, workerPool, editor);
         this.successionService = new SuccessionService();
+        this.atmosphereService = new AtmosphereService(plugin, workerPool, editor);
         this.store = new ForestStore(plugin, this);
 
         store.loadAll(forests);
@@ -139,6 +143,7 @@ public final class EcoManager {
     public PlacementService placement() { return placementService; }
     public GrowthService growth() { return growthService; }
     public SuccessionService succession() { return successionService; }
+    public AtmosphereService atmosphere() { return atmosphereService; }
     public SelectionManager selection() { return selectionManager; }
     public AsyncWorldEditor editor() { return editor; }
     public ForestStore store() { return store; }

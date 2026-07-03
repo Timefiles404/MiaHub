@@ -14,6 +14,8 @@ public final class Forest {
     private final Region region;
     private final Map<String, TreeSpecies> species = new LinkedHashMap<>();
     private final List<TreeInstance> trees = new ArrayList<>();
+    private final dev.timefiles.miaeco.atmosphere.AtmosphereSettings atmosphere =
+            new dev.timefiles.miaeco.atmosphere.AtmosphereSettings();
     private int ageMonths;
     private double densityScale = 1.0;   // 相对密度倍率（叠加在自动密度噪声之上）
 
@@ -30,6 +32,8 @@ public final class Forest {
 
     public double densityScale() { return densityScale; }
     public void densityScale(double v) { this.densityScale = Math.max(0.1, Math.min(5.0, v)); }
+
+    public dev.timefiles.miaeco.atmosphere.AtmosphereSettings atmosphere() { return atmosphere; }
 
     public Map<String, TreeSpecies> species() { return species; }
     public TreeSpecies species(String id) { return species.get(id); }

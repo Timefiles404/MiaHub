@@ -16,7 +16,7 @@ public final class AcaciaModel extends AbstractTreeModel {
     @Override
     protected void buildYoung(TreeStructure s, TreeSpecies sp, Random rng, SizeVariant var, double m) {
         int h = heightOf(sp, m, var, rng);
-        Trunks.Spine spine = Trunks.spine(0, 0, 0, h, Math.min(2.5, h * 0.30), 0.4, rng);
+        Trunks.Spine spine = Trunks.spine(0, 0, 0, h, Math.min(1.6, h * 0.18), 0.4, rng);
         Trunks.sweep(s, spine, 1, 1, 0, 0, rng);
         disc(s, sp, spine.topX(), h + 1, spine.topZ(), Math.max(2, h * 0.35), rng);
         buildScene(s, sp, 1, 1, rng);
@@ -38,8 +38,9 @@ public final class AcaciaModel extends AbstractTreeModel {
         int cells = old || var.large() ? 2 : 1;
         int rot = Trunks.sectionRot(rng);
         int mainH = Math.max(3, (int) Math.round(h * 0.55));
+        // 1 胞细干削弱 S 摆：小个体像素观感差，2 胞以上才上完整曲率
         Trunks.Spine main = Trunks.spine(0, 0, 0, mainH,
-                Math.min(4, h * sp.trunkDrift() * 0.30), 0.3, rng);
+                Math.min(4, h * sp.trunkDrift() * 0.30) * (cells <= 1 ? 0.6 : 1.0), 0.3, rng);
         Trunks.sweep(s, main, cells, 1, 0, rot, rng);
 
         int leaders = 2 + (old || rng.nextDouble() < 0.35 ? 1 : 0);

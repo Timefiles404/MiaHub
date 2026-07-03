@@ -21,6 +21,8 @@ public final class TreeInstance {
     private int ageMonths;
     private int stageStartAge;      // 进入当前阶段时的年龄（月）
     private double vigor = 0.85;    // 地形适宜度 → 生长活力 0..1
+    private String prefabId;        // 非 null = 树库地标预制树（形态取自 StampLibrary，不参与演替）
+    private int prefabRot;          // 预制树绕 Y 旋转（0..3 × 90°）
     private GrowthStage stage;
     private GrowthStage builtStage;   // 当前已写入世界的形态阶段；null=尚未生长
     private double builtProgress;     // 已写入形态的阶段内进度
@@ -59,6 +61,11 @@ public final class TreeInstance {
 
     public double vigor() { return vigor; }
     public void vigor(double v) { this.vigor = Math.max(0, Math.min(1, v)); }
+
+    public String prefabId() { return prefabId; }
+    public int prefabRot() { return prefabRot; }
+    public boolean isPrefab() { return prefabId != null; }
+    public void prefab(String id, int rot) { this.prefabId = id; this.prefabRot = rot & 3; }
 
     public GrowthStage stage() { return stage; }
     public void stage(GrowthStage s) {

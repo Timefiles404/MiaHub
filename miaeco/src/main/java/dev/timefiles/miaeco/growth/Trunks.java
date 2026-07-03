@@ -67,6 +67,8 @@ public final class Trunks {
         double amp1 = drift * (0.62 + 0.38 * rng.nextDouble());
         double amp2 = amp1 * 0.35;
         double ph2 = rng.nextDouble() * Math.PI * 2;
+        // 微抖随高度衰减：短细干经不起像素级弯折，小树保持挺直
+        double jscale = Math.min(1.0, height / 18.0);
         double jx = 0, jz = 0;
         double px = x0, pz = z0;
         for (int i = 0; i < n; i++) {
@@ -75,8 +77,8 @@ public final class Trunks {
             double arc = t * t * (3 - 2 * t);                 // 单向弧（smoothstep）
             double main = amp1 * ((1 - leanBias) * sway + leanBias * arc);
             double side = amp2 * (1 - leanBias) * Math.sin(t * Math.PI * k2 + ph2) * t;
-            jx += (rng.nextDouble() - 0.5) * 0.22;
-            jz += (rng.nextDouble() - 0.5) * 0.22;
+            jx += (rng.nextDouble() - 0.5) * 0.22 * jscale;
+            jz += (rng.nextDouble() - 0.5) * 0.22 * jscale;
             jx = Math.max(-1.0, Math.min(1.0, jx));
             jz = Math.max(-1.0, Math.min(1.0, jz));
             double x = x0 + cos * main + pCos * side + jx * t;

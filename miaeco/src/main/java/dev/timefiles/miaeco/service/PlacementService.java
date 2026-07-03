@@ -1,7 +1,9 @@
 package dev.timefiles.miaeco.service;
 
 import dev.timefiles.miaeco.async.TerrainSnapshot;
+import dev.timefiles.miaeco.growth.StampLibrary;
 import dev.timefiles.miaeco.model.Forest;
+import dev.timefiles.miaeco.model.GrowthStage;
 import dev.timefiles.miaeco.model.Region;
 import dev.timefiles.miaeco.model.TreeInstance;
 import dev.timefiles.miaeco.model.TreeSpecies;
@@ -24,10 +26,15 @@ public final class PlacementService {
 
     private final Executor executor;
     private final int maxCandidates;
+    private final double landmarkChance;
+    private final int landmarkSpacing;
 
-    public PlacementService(Executor executor, int maxCandidates) {
+    public PlacementService(Executor executor, int maxCandidates,
+                            double landmarkChance, int landmarkSpacing) {
         this.executor = executor;
         this.maxCandidates = maxCandidates;
+        this.landmarkChance = Math.max(0, Math.min(1, landmarkChance));
+        this.landmarkSpacing = Math.max(8, landmarkSpacing);
     }
 
     public CompletableFuture<List<TreeInstance>> plant(Forest forest, TerrainSnapshot snap) {
@@ -84,7 +91,50 @@ public final class PlacementService {
             t.vigor(bestScore);   // 地形适宜度 → 生长活力（好地长得快）
             planted.add(t);
         }
+        promoteLandmarks(planted, forest);
         return planted;
+    }
+
+    /**
+     * 地标古树：按概率把部分点位升级为树库预制树（族与树种匹配、地标间保持大间距），
+     * 并清掉每棵地标冠下的普通树苗——地标是“已经长成的远古巨树”，冠下没有更新空间。
+     */
+    private void promoteLandmarks(List<TreeInstance> planted, Forest forest) {
+        if (landmarkChance <= 0) return;
+        List<TreeInstance> landmarks = new ArrayList<>();
+        List<Integer> radii = new ArrayList<>();
+        for (TreeInstance t : planted) {
+            String fam = StampLibrary.familyFor(t.speciesId());
+            if (fam == null) continue;
+            Random r = new Random(t.seed() ^ 0x1A2DBEEFCAFEL);
+            if (r.nextDouble() >= landmarkChance) continue;
+            boolean far = true;
+            for (TreeInstance lm : landmarks) {
+                double dx = lm.x() - t.x(), dz = lm.z() - t.z();
+                if (dx * dx + dz * dz < (double) landmarkSpacing * landmarkSpacing) {
+                    far = false;
+                    break;
+                }
+            }
+            if (!far) continue;
+            StampLibrary.Prefab pf = StampLibrary.random(fam, r);
+            if (pf == null) continue;
+            t.prefab(pf.id(), r.nextInt(4));
+            t.stage(GrowthStage.MATURE);        // 地标一出场就是成树
+            landmarks.add(t);
+            radii.add(Math.max(3, (int) Math.round(pf.canopyW() * 0.45)));
+        }
+        if (landmarks.isEmpty()) return;
+        planted.removeIf(t -> {
+            if (t.isPrefab()) return false;
+            for (int i = 0; i < landmarks.size(); i++) {
+                TreeInstance lm = landmarks.get(i);
+                double dx = lm.x() - t.x(), dz = lm.z() - t.z();
+                int rad = radii.get(i);
+                if (dx * dx + dz * dz < (double) rad * rad) return true;
+            }
+            return false;
+        });
     }
 
     private static long mix(long base, int x, int z) {

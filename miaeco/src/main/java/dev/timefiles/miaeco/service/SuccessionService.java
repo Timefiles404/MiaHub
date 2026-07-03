@@ -52,6 +52,16 @@ public final class SuccessionService {
             TreeInstance t = trees.get(i);
             TreeSpecies sp = forest.species(t.speciesId());
             if (sp == null || t.stage().isDead()) continue;
+            if (t.isPrefab()) {
+                // 地标古树：按预制体真实尺寸参与遮蔽（它是林窗里最强的竞争者）
+                var pf = dev.timefiles.miaeco.growth.StampLibrary.get(t.prefabId());
+                if (pf != null) {
+                    height[i] = pf.height();
+                    crown[i] = Math.max(2.0, pf.canopyW() * 0.5);
+                    grid.computeIfAbsent(cellKey(t.x(), t.z()), k -> new ArrayList<>()).add(i);
+                }
+                continue;
+            }
             var var = TreeVariants.of(t.seed());
             double m = AbstractTreeModel.maturity(t.stage(), GrowthService.progressOf(sp, t));
             if (t.stage() == GrowthStage.SEED) m = 0.05;
@@ -68,6 +78,11 @@ public final class SuccessionService {
             TreeInstance t = trees.get(i);
             TreeSpecies sp = forest.species(t.speciesId());
             if (sp == null) continue;
+            // 地标古树不参与演替：只计龄，永不枯死（它已经站了几百年）
+            if (t.isPrefab()) {
+                t.addMonths(months);
+                continue;
+            }
             Random rng = new Random(t.seed() ^ (0x5DEECE66DL * forestAge));
             GrowthStage cur = t.stage();
 
@@ -167,5 +182,81 @@ public final class SuccessionService {
     private static double perMonth(double p, int months) {
         if (months <= 0) return 0;
         return 1.0 - Math.pow(1.0 - p, months);
+    }
+
+    // ==================== 即时成林 ====================
+
+    /**
+     * 给一批刚选点的树苗按<b>光照分层</b>直接指定混合阶段：从优势个体（高活力、
+     * 大体型）开始逐棵落位，被已落位更高邻树遮蔽越重的树越年轻——开阔处是
+     * OLD/MATURE 巨木，冠隙里是 YOUNG，重度荫蔽下只剩 SAPLING 更新苗。
+     * 年龄/阶段起点一并回填，后续 advance 从这个状态无缝演替。
+     */
+    public void seedMatureMix(Forest forest, List<TreeInstance> planted) {
+        // 已落位树的 {x, z, height, crown}
+        List<double[]> placed = new ArrayList<>();
+        List<TreeInstance> order = new ArrayList<>();
+        for (TreeInstance t : planted) {
+            if (t.isPrefab()) {
+                var pf = dev.timefiles.miaeco.growth.StampLibrary.get(t.prefabId());
+                if (pf != null) {
+                    placed.add(new double[]{t.x(), t.z(), pf.height(), Math.max(2, pf.canopyW() * 0.5)});
+                }
+                continue;   // 地标古树天生就是林冠层
+            }
+            order.add(t);
+        }
+        order.sort((a, b) -> Double.compare(dominance(b), dominance(a)));
+
+        int maxMps = 1;
+        for (TreeInstance t : order) {
+            TreeSpecies sp = forest.species(t.speciesId());
+            if (sp == null) continue;
+            int mps = Math.max(1, sp.monthsPerStage());
+            maxMps = Math.max(maxMps, mps);
+            var var = TreeVariants.of(t.seed());
+            Random rng = new Random(t.seed() ^ 0x11157A67F00DL);
+
+            // 以“长成后的高度”评估潜在受遮蔽度
+            double myH = sp.maxHeight() * 0.8 * var.scale();
+            double myCrown = Math.max(1.5, sp.canopyRadius() * 0.9 * var.scale());
+            double shade = 0;
+            for (double[] p : placed) {
+                if (p[2] < myH + 2) continue;
+                double dx = p[0] - t.x(), dz = p[1] - t.z();
+                double dist = Math.sqrt(dx * dx + dz * dz);
+                double reach = myCrown + p[3];
+                if (dist >= reach) continue;
+                shade += (1.0 - dist / reach) * Math.min(1.0, (p[2] - myH) / 6.0);
+            }
+            shade = Math.min(1.0, shade);
+
+            GrowthStage stage;
+            if (shade < 0.25) stage = rng.nextDouble() < 0.18 ? GrowthStage.OLD : GrowthStage.MATURE;
+            else if (shade < 0.60) stage = rng.nextDouble() < 0.55 ? GrowthStage.MATURE : GrowthStage.YOUNG;
+            else if (shade < 0.90) stage = GrowthStage.YOUNG;
+            else stage = GrowthStage.SAPLING;
+
+            double prog = 0.15 + 0.75 * rng.nextDouble();
+            int start = stage.ordinal() * mps;
+            t.stageStartAge(start);
+            t.ageMonths(start + (int) Math.round(prog * Math.max(0, mps - 1)));
+            t.stage(stage);
+
+            double m = AbstractTreeModel.maturity(stage, prog);
+            if (stage == GrowthStage.SAPLING) m = 0.15;
+            placed.add(new double[]{t.x(), t.z(), sp.maxHeight() * m * var.scale(),
+                    Math.max(1.5, sp.canopyRadius() * (0.45 + 0.65 * m) * var.scale())});
+        }
+        forest.ageMonths(Math.max(forest.ageMonths(), (GrowthStage.OLD.ordinal() + 1) * maxMps));
+    }
+
+    /** 优势度：活力 + 体型变异 + 种子噪声（确定性）。 */
+    private static double dominance(TreeInstance t) {
+        var var = TreeVariants.of(t.seed());
+        long h = t.seed() * 0x9E3779B97F4A7C15L;
+        h ^= h >>> 33;
+        double n = (h >>> 11) / (double) (1L << 53);
+        return t.vigor() + var.scale() * 0.5 + (var.giant() ? 1.5 : 0) + n * 0.3;
     }
 }

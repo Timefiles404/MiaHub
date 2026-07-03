@@ -128,8 +128,11 @@ public abstract class AbstractTreeModel implements GrowthModel {
      */
     protected static TrunkResult buildTrunk(TreeStructure s, TreeSpecies sp, int h, int cells,
                                             double gnarl, SizeVariant var, Random rng) {
-        double drift = Math.min(6 + (var.giant() ? 3 : 0),
-                Math.max(0.8, h * sp.trunkDrift() * 0.22));
+        // 小树近直：h<20 的普通树按比例削减侧漂（像素分辨率下细短干弯折观感差），
+        // 1 胞细干非巨木再封顶 1 格
+        double ramp = Math.max(0.15, Math.min(1, (h - 6) / 14.0));
+        double drift = Math.min(6 + (var.giant() ? 3 : 0), h * sp.trunkDrift() * 0.22 * ramp);
+        if (cells <= 1 && !var.giant()) drift = Math.min(drift, 1.0);
         int rot = Trunks.sectionRot(rng);
         Trunks.Spine main;
         List<Trunks.Spine> leaders = List.of();

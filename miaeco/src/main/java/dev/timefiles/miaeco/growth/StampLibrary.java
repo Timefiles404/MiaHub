@@ -29,7 +29,8 @@ import java.util.zip.GZIPInputStream;
  * 作为"地标树"提供程序化生成达不到的手工级形态。
  *
  * <p>token 语法与离线转换管线一致（wood:/log:/leaves:/planks:/fence:/slab:/
- * block:/pane:/plant:/dplant:/snow:/vine:/bone:/hay:），解析失败的 token 计数忽略。
+ * block:/pane:/plant:/dplant:/snow:/vine:/bone:/hay:/stair:/button:/axis:），
+ * 解析失败的 token 计数忽略。
  * 加载惰性、线程安全（首次访问同步解析一次）。
  */
 public final class StampLibrary {
@@ -65,6 +66,21 @@ public final class StampLibrary {
 
     public static List<String> ids() {
         return List.copyOf(all().keySet());
+    }
+
+    /**
+     * 树种 → 树库预制族的映射（地标古树选池）；null = 该树种无匹配预制树，不出地标。
+     * special 族是羊毛/混凝土彩冠的巨型秋树，正好配秋枫/银杏。
+     */
+    public static String familyFor(String speciesId) {
+        return switch (speciesId) {
+            case "oak", "dark_oak" -> "oak";
+            case "spruce", "snowy_spruce", "cypress" -> "spruce";
+            case "birch" -> "birch";
+            case "jungle", "banyan", "mangrove" -> "jungle";
+            case "maple", "ginkgo" -> "special";
+            default -> null;
+        };
     }
 
     /** 随机挑一棵（可按 family 过滤，null 为全部）。 */
@@ -103,17 +119,27 @@ public final class StampLibrary {
             Set<BlockFace> f = EnumSet.noneOf(BlockFace.class);
             for (BlockFace face : s.faces) {
                 // 坐标旋转 x'=-z, z'=x 下：北(0,-1)→东(1,0)→南(0,1)→西(-1,0)→北
-                f.add(switch (face) {
-                    case NORTH -> BlockFace.EAST;
-                    case EAST -> BlockFace.SOUTH;
-                    case SOUTH -> BlockFace.WEST;
-                    case WEST -> BlockFace.NORTH;
-                    default -> face;
-                });
+                f.add(rotFace(face));
             }
             return BlockSpec.vine(f);
         }
+        if (s.state == BlockSpec.State.STAIR && s.facing != null) {
+            return BlockSpec.stair(s.material, rotFace(s.facing), s.aux == 1);
+        }
+        if (s.state == BlockSpec.State.BUTTON && s.facing != null) {
+            return BlockSpec.button(s.material, rotFace(s.facing), s.aux);
+        }
         return s;
+    }
+
+    private static BlockFace rotFace(BlockFace face) {
+        return switch (face) {
+            case NORTH -> BlockFace.EAST;
+            case EAST -> BlockFace.SOUTH;
+            case SOUTH -> BlockFace.WEST;
+            case WEST -> BlockFace.NORTH;
+            default -> face;
+        };
     }
 
     // ============================ 解析 ============================
@@ -209,6 +235,28 @@ public final class StampLibrary {
                         "x".equals(p[1]) ? Axis.X : "z".equals(p[1]) ? Axis.Z : Axis.Y);
                 case "hay" -> BlockSpec.log(Material.HAY_BLOCK,
                         "x".equals(p[1]) ? Axis.X : "z".equals(p[1]) ? Axis.Z : Axis.Y);
+                case "axis" -> {
+                    Material m = mat(p[1]);
+                    yield m == null ? null : BlockSpec.log(m,
+                            "x".equals(p[2]) ? Axis.X : "z".equals(p[2]) ? Axis.Z : Axis.Y);
+                }
+                case "stair" -> {
+                    Material m = mat(p[1] + "_STAIRS");
+                    BlockFace f = letterFace(p[2]);
+                    yield m == null || f == null ? null : BlockSpec.stair(m, f, "top".equals(p[3]));
+                }
+                case "button" -> {
+                    Material m = mat(p[1] + "_BUTTON");
+                    if (m == null) yield null;
+                    yield switch (p[2]) {
+                        case "floor" -> BlockSpec.button(m, BlockFace.NORTH, BlockSpec.ATTACH_FLOOR);
+                        case "ceiling" -> BlockSpec.button(m, BlockFace.NORTH, BlockSpec.ATTACH_CEILING);
+                        default -> {
+                            BlockFace f = letterFace(p[2]);
+                            yield f == null ? null : BlockSpec.button(m, f, BlockSpec.ATTACH_WALL);
+                        }
+                    };
+                }
                 default -> null;
             };
         } catch (Exception e) {
@@ -218,5 +266,15 @@ public final class StampLibrary {
 
     private static BlockSpec spec(Material m) {
         return m == null ? null : BlockSpec.of(m);
+    }
+
+    private static BlockFace letterFace(String s) {
+        return switch (s) {
+            case "n" -> BlockFace.NORTH;
+            case "s" -> BlockFace.SOUTH;
+            case "e" -> BlockFace.EAST;
+            case "w" -> BlockFace.WEST;
+            default -> null;
+        };
     }
 }

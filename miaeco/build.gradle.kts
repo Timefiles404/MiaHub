@@ -15,3 +15,16 @@ tasks.register<JavaExec>("dumpTrees") {
     )
     args(layout.buildDirectory.dir("treedump").get().asFile.absolutePath)
 }
+
+// 离线氛围验证：合成地形上跑全部主题的六特征生成器，导出供顶视渲染核对分布。
+tasks.register<JavaExec>("dumpAtmo") {
+    group = "verification"
+    description = "Dump atmosphere feature edits on synthetic terrain to build/atmodump/atmo.jsonl"
+    dependsOn("compileJava")
+    mainClass.set("dev.timefiles.miaeco.tool.AtmoDumpTool")
+    classpath = files(
+        provider { project.the<JavaPluginExtension>().sourceSets["main"].output },
+        provider { project.configurations["compileClasspath"] }
+    )
+    args(layout.buildDirectory.dir("atmodump").get().asFile.absolutePath)
+}

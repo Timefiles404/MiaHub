@@ -53,6 +53,18 @@ public final class ForestStore {
             forest.ageMonths(fs.getInt("ageMonths", 0));
             forest.densityScale(fs.getDouble("densityScale", 1.0));
 
+            ConfigurationSection at = fs.getConfigurationSection("atmosphere");
+            if (at != null) {
+                forest.atmosphere().theme(at.getString("theme", ""));
+                forest.atmosphere().applied(at.getBoolean("applied", false));
+                ConfigurationSection dn = at.getConfigurationSection("density");
+                if (dn != null) {
+                    for (String k : dn.getKeys(false)) {
+                        forest.atmosphere().density(k, dn.getDouble(k, 1.0));
+                    }
+                }
+            }
+
             ConfigurationSection spSec = fs.getConfigurationSection("species");
             if (spSec != null) {
                 for (String sid : spSec.getKeys(false)) {
@@ -83,6 +95,15 @@ public final class ForestStore {
             yml.set(p + "region.z2", r.maxZ());
             yml.set(p + "ageMonths", forest.ageMonths());
             yml.set(p + "densityScale", forest.densityScale());
+
+            var atmo = forest.atmosphere();
+            if (atmo.hasTheme() || atmo.applied()) {
+                yml.set(p + "atmosphere.theme", atmo.theme());
+                yml.set(p + "atmosphere.applied", atmo.applied());
+                for (var en : atmo.densities().entrySet()) {
+                    yml.set(p + "atmosphere.density." + en.getKey(), en.getValue());
+                }
+            }
 
             for (TreeSpecies s : forest.species().values()) {
                 writeSpecies(yml, p + "species." + s.id() + ".", s);
@@ -190,6 +211,10 @@ public final class ForestStore {
         m.put("stage", t.stage().name());
         m.put("built", t.builtStage() == null ? "" : t.builtStage().name());
         m.put("builtProgress", t.builtProgress());
+        if (t.isPrefab()) {
+            m.put("prefab", t.prefabId());
+            m.put("prefabRot", t.prefabRot());
+        }
         return m;
     }
 
@@ -208,6 +233,11 @@ public final class ForestStore {
             t.stageStartAge(ss instanceof Number num ? num.intValue() : 0);
             Object vg = m.get("vigor");
             if (vg instanceof Number num) t.vigor(num.doubleValue());
+            Object pf = m.get("prefab");
+            if (pf != null && !String.valueOf(pf).isEmpty()) {
+                Object pr = m.get("prefabRot");
+                t.prefab(String.valueOf(pf), pr instanceof Number num ? num.intValue() : 0);
+            }
             GrowthStage stage = GrowthStage.valueOf(String.valueOf(m.get("stage")));
             t.stage(stage);
             Object builtObj = m.get("built");

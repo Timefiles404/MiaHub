@@ -2,8 +2,10 @@ package dev.timefiles.miaeco.service;
 
 import dev.timefiles.miaeco.async.AsyncWorldEditor;
 import dev.timefiles.miaeco.async.BlockEdit;
+import dev.timefiles.miaeco.async.BlockSpec;
 import dev.timefiles.miaeco.growth.GrowthModel;
 import dev.timefiles.miaeco.growth.GrowthModels;
+import dev.timefiles.miaeco.growth.StampLibrary;
 import dev.timefiles.miaeco.growth.TreeStructure;
 import dev.timefiles.miaeco.model.Forest;
 import dev.timefiles.miaeco.model.GrowthStage;
@@ -88,6 +90,15 @@ public final class GrowthService {
         List<BlockEdit> edits = new ArrayList<>();
         if (sp == null) return edits;
 
+        // 地标预制树：形态固定，只在首次生长时整棵盖印
+        if (t.isPrefab()) {
+            if (t.builtStage() == null) {
+                StampLibrary.Prefab pf = StampLibrary.get(t.prefabId());
+                if (pf != null) edits.addAll(StampLibrary.place(pf, t.x(), t.y(), t.z(), t.prefabRot()));
+            }
+            return edits;
+        }
+
         GrowthStage built = t.builtStage();
         GrowthStage target = t.stage();
         GrowthModel model = GrowthModels.forSpecies(sp);
@@ -112,6 +123,15 @@ public final class GrowthService {
                 List<BlockEdit> e = new ArrayList<>();
                 GrowthStage built = t.builtStage();
                 if (sp == null || built == null) return e;
+                if (t.isPrefab()) {
+                    StampLibrary.Prefab pf = StampLibrary.get(t.prefabId());
+                    if (pf != null) {
+                        for (BlockEdit pe : StampLibrary.place(pf, t.x(), t.y(), t.z(), t.prefabRot())) {
+                            e.add(new BlockEdit(pe.x(), pe.y(), pe.z(), BlockSpec.AIR));
+                        }
+                    }
+                    return e;
+                }
                 TreeStructure s = GrowthModels.forSpecies(sp)
                         .generate(sp, built, t.seed(), t.builtProgress());
                 e.addAll(s.toClearEdits(t.x(), t.y(), t.z()));

@@ -6,11 +6,14 @@ import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.data.Bisected;
 import org.bukkit.block.data.BlockData;
+import org.bukkit.block.data.Directional;
+import org.bukkit.block.data.FaceAttachable;
 import org.bukkit.block.data.MultipleFacing;
 import org.bukkit.block.data.Orientable;
 import org.bukkit.block.data.type.Leaves;
 import org.bukkit.block.data.type.Slab;
 import org.bukkit.block.data.type.Snow;
+import org.bukkit.block.data.type.Stairs;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
@@ -35,6 +38,9 @@ public final class AsyncWorldEditor {
         this.blocksPerTick = Math.max(1, blocksPerTick);
     }
 
+    /** 一条可回滚记录：位置 + 原方块的 BlockData 序列化串。 */
+    public record Undo(int x, int y, int z, String data) { }
+
     public void apply(World world, List<BlockEdit> edits, Consumer<Integer> onDone) {
         if (edits.isEmpty()) {
             if (onDone != null) onDone.accept(0);
@@ -54,6 +60,60 @@ public final class AsyncWorldEditor {
                 if (cursor >= edits.size()) {
                     cancel();
                     if (onDone != null) onDone.accept(edits.size());
+                }
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    /** 同 apply，但写入前记录每格原方块，用于之后精确回滚（氛围 clear）。 */
+    public void applyRecording(World world, List<BlockEdit> edits, Consumer<List<Undo>> onDone) {
+        List<Undo> undo = new java.util.ArrayList<>(edits.size());
+        if (edits.isEmpty()) {
+            if (onDone != null) onDone.accept(undo);
+            return;
+        }
+        new BukkitRunnable() {
+            int cursor = 0;
+
+            @Override
+            public void run() {
+                int end = Math.min(cursor + blocksPerTick, edits.size());
+                for (; cursor < end; cursor++) {
+                    BlockEdit e = edits.get(cursor);
+                    Block b = world.getBlockAt(e.x(), e.y(), e.z());
+                    undo.add(new Undo(e.x(), e.y(), e.z(), b.getBlockData().getAsString()));
+                    b.setBlockData(toData(e.spec()), false);
+                }
+                if (cursor >= edits.size()) {
+                    cancel();
+                    if (onDone != null) onDone.accept(undo);
+                }
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    /** 按记录的 BlockData 串原样恢复（解析失败的格子跳过）。 */
+    public void applyRaw(World world, List<Undo> entries, Consumer<Integer> onDone) {
+        if (entries.isEmpty()) {
+            if (onDone != null) onDone.accept(0);
+            return;
+        }
+        new BukkitRunnable() {
+            int cursor = 0;
+
+            @Override
+            public void run() {
+                int end = Math.min(cursor + blocksPerTick, entries.size());
+                for (; cursor < end; cursor++) {
+                    Undo u = entries.get(cursor);
+                    try {
+                        BlockData data = org.bukkit.Bukkit.createBlockData(u.data());
+                        world.getBlockAt(u.x(), u.y(), u.z()).setBlockData(data, false);
+                    } catch (IllegalArgumentException ignored) { }
+                }
+                if (cursor >= entries.size()) {
+                    cancel();
+                    if (onDone != null) onDone.accept(entries.size());
                 }
             }
         }.runTaskTimer(plugin, 1L, 1L);
@@ -85,10 +145,34 @@ public final class AsyncWorldEditor {
             }
             case SNOW_LAYERS -> {
                 if (data instanceof Snow s) s.setLayers(Math.max(s.getMinimumLayers(),
-                        Math.min(s.getMaximumLayers(), spec.layers)));
+                        Math.min(s.getMaximumLayers(), spec.aux)));
             }
             case HALF_UPPER -> {
                 if (data instanceof Bisected b) b.setHalf(Bisected.Half.TOP);
+            }
+            case STAIR -> {
+                if (data instanceof Stairs st) {
+                    if (spec.facing != null) st.setFacing(spec.facing);
+                    if (spec.aux == 1) st.setHalf(Bisected.Half.TOP);
+                }
+            }
+            case AGE -> {
+                if (data instanceof org.bukkit.block.data.Ageable a) {
+                    a.setAge(Math.min(a.getMaximumAge(), spec.aux));
+                }
+            }
+            case BUTTON -> {
+                if (data instanceof FaceAttachable fa) {
+                    fa.setAttachedFace(switch (spec.aux) {
+                        case BlockSpec.ATTACH_CEILING -> FaceAttachable.AttachedFace.CEILING;
+                        case BlockSpec.ATTACH_WALL -> FaceAttachable.AttachedFace.WALL;
+                        default -> FaceAttachable.AttachedFace.FLOOR;
+                    });
+                    if (spec.aux == BlockSpec.ATTACH_WALL && spec.facing != null
+                            && data instanceof Directional dir) {
+                        dir.setFacing(spec.facing);
+                    }
+                }
             }
             case NONE -> { }
         }

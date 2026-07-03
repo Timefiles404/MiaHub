@@ -6,8 +6,8 @@ import dev.timefiles.miaeco.model.TreeSpecies;
 import java.util.Random;
 
 /**
- * 棕榈（树库 #4655 范式）：单向倾倒弧的细干（上段转栅栏显锥度）+
- * 顶部放射叶羽（先扬后垂的弧臂）+ 顶簇。水岸/沙滩树，成排即椰林。
+ * 棕榈（树库 #4655 范式）：单向倾倒弧的全木细干 + 顶部放射叶羽
+ * （先扬后垂的弧臂）+ 顶簇。水岸/沙滩树，成排即椰林。
  */
 public final class PalmModel extends AbstractTreeModel {
 
@@ -19,7 +19,7 @@ public final class PalmModel extends AbstractTreeModel {
     @Override
     protected void buildYoung(TreeStructure s, TreeSpecies sp, Random rng, SizeVariant var, double m) {
         int h = Math.max(2, heightOf(sp, m, var, rng) / 2);
-        Trunks.Spine spine = Trunks.spine(0, 0, 0, h, 1 + rng.nextDouble(), 0.9, rng);
+        Trunks.Spine spine = Trunks.spine(0, 0, 0, h, Math.min(0.8, h * 0.12), 0.9, rng);
         Trunks.sweep(s, spine, 1, 1, 0, 0, rng);
         fronds(s, sp, spine.topX(), h, spine.topZ(), 3 + rng.nextInt(2), 2.5, rng);
         buildScene(s, sp, 1, 1, rng);
@@ -52,12 +52,10 @@ public final class PalmModel extends AbstractTreeModel {
 
     private void trunkWithCrown(TreeStructure s, TreeSpecies sp, int bx, int bz, int h,
                                 boolean old, Random rng) {
-        double lean = 2.0 + rng.nextDouble() * 2.5;
+        double lean = Math.min(2.0 + rng.nextDouble() * 2.5, h * 0.28);
         Trunks.Spine spine = Trunks.spine(0, bx, bz, h, lean, 1.0, rng);
-        int fenceFrom = h - Math.max(2, h / 3);
         for (int y = 0; y <= h; y++) {
-            if (y >= fenceFrom && y < h) s.put(spine.xi(y), y, spine.zi(y), Part.FENCE);
-            else s.put(spine.xi(y), y, spine.zi(y), Part.WOOD);
+            s.put(spine.xi(y), y, spine.zi(y), Part.WOOD);
         }
         int fr = 6 + rng.nextInt(4) + (old ? 1 : 0);
         double reach = Math.max(4, Math.min(7, 3.2 + h * 0.18));

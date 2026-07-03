@@ -41,18 +41,36 @@
 <table>
 <tr><th>命令</th><th>说明</th></tr>
 <tr><td><code>/miaeco pos1 | pos2</code></td><td>把脚下方块设为选区角点</td></tr>
-<tr><td><code>/miaeco forest create/list/info/remove</code></td><td>森林管理</td></tr>
-<tr><td><code>/miaeco species add/list</code></td><td>树种管理（参数取自 config 默认，可在 forests.yml 覆盖）</td></tr>
-<tr><td><code>/miaeco plant &lt;森林&gt;</code></td><td>异步选点 + 种植</td></tr>
+<tr><td><code>/miaeco forest create/list/info/remove/density</code></td><td>森林管理</td></tr>
+<tr><td><code>/miaeco species add/list/remove/replace/density</code></td><td>树种管理：remove 连树清除；replace 原位换树种（保留位置/年龄）；density 调单树种密度</td></tr>
+<tr><td><code>/miaeco plant &lt;森林&gt; [instant]</code></td><td>异步选点 + 种植；<b>instant</b> 直接生成混龄成熟森林（光照分层）</td></tr>
 <tr><td><code>/miaeco grow &lt;森林&gt;</code></td><td>并行生成并写入待更新的树</td></tr>
 <tr><td><code>/miaeco advance &lt;森林&gt; &lt;月&gt;</code></td><td>推进演替</td></tr>
+<tr><td><code>/miaeco atmo set &lt;森林&gt; &lt;主题&gt;</code></td><td>设置氛围主题（<code>atmo themes</code> 列出全部 8 种）</td></tr>
+<tr><td><code>/miaeco atmo apply | clear | info &lt;森林&gt;</code></td><td>铺开氛围 / 精确恢复原地形 / 查看设置</td></tr>
+<tr><td><code>/miaeco atmo feature &lt;森林&gt; &lt;特征&gt; &lt;0~3&gt;</code></td><td>单项强度：groundcover/water/paths/soil/rocks/ruins（0=关）</td></tr>
 <tr><td><code>/miaeco clear &lt;森林&gt;</code></td><td>清除该森林所有树方块</td></tr>
 <tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（147 棵建筑师设计树）</td></tr>
 </table>
 
+<h2>森林氛围（0.7.0）</h2>
+<p>森林不再只有树，而是一个有机生态：<code>atmo set</code> 选主题 → <code>atmo apply</code> 一键铺开<b>六类特征</b>，分布全部由地形参数自然控制（坡度/湿度/树冠荫蔽/树基保护），写入前逐格记录原方块，<code>atmo clear</code> 可精确恢复：</p>
+<table>
+<tr><th>特征</th><th>内容</th></tr>
+<tr><td><b>groundcover</b> 地物</td><td>草蕨花丛、双层花、杜鹃/浆果丛、微灌木叶团、菌菇（冠下阴生）、雨林大小垂滴叶（近水）、孢子花与垂根（挂冠底）、樱瓣、苔毯、雪斑</td></tr>
+<tr><td><b>water</b> 积水</td><td>天然洼地积水、近水渍洼（1~2 层水）、睡莲、岸边芦苇；雪原结冰面</td></tr>
+<tr><td><b>paths</b> 小路</td><td>贯穿森林的蜿蜒小径：土径/砂砾/苔石混铺、零散断续、坡面自动放楼梯坡道、踏石台阶，绕树绕水避陡坡</td></tr>
+<tr><td><b>soil</b> 土壤</td><td>主题化地表斑块（灰化土/泥巴/苔藓/砂土…）+ 大树脚缠根泥土圈</td></tr>
+<tr><td><b>rocks</b> 岩石</td><td>1~4 块的小岩组（含苔石变体），顶覆苔毯、侧挂藤、石钉细节</td></tr>
+<tr><td><b>ruins</b> 遗迹</td><td>残缺石柱列（雕纹柱础、断顶、倒伏柱身）、L 形残墙 + 瓦砾，苔藓裂纹风化、挂藤</td></tr>
+</table>
+<p><b>8 个主题</b>：temperate 温带阔叶 / rainforest 雨林 / savanna 稀树草原 / taiga 北方针叶 / swamp 沼泽湿地 / snowy 雪原针叶 / cherry 樱花园 / autumn 金秋落叶。全部方块 1.21.4 可用。</p>
+<p><b>即时成林：</b><code>/miaeco plant &lt;森林&gt; instant</code> 不从零开始长——选点后按<b>光照分层</b>直接生成 OLD/MATURE/YOUNG/SAPLING 混龄森林：开阔高地是巨木，冠隙是青壮，重度荫蔽下只剩更新苗；年龄回填，之后 advance 无缝演替。</p>
+<p><b>地标古树：</b>plant 时每棵匹配树种的树苗有 <code>placement.landmark-chance</code>（默认 5%）概率升级为树库预制树（族匹配：橡→oak 族巨橡、云杉→巨杉、枫/银杏→彩冠秋树巨木…），地标间保持大间距、冠下小树自动让位、永不枯死，参与光照竞争遮蔽周围。</p>
+
 <h2>参数模型（0.6.0 树库规范重制）</h2>
 <p>0.6.0 依据一座 999 棵建筑师设计树的树库逐树实测重写了整个生成体系：</p>
-<p><b>曲干体系：</b>树干是<b>连续 S 曲线脊线 + 有机截面扫掠</b>——干径按树库实测规律取胞（h&lt;25 中位仅 2 胞，h38-60 才 7 胞），气势靠曲线与低位分导枝而不是粗度；结构一律六面皮木头（带朝向原木只出现在枯木断口等锯断面），大干表面点缀木板补丁。</p>
+<p><b>曲干体系：</b>树干是<b>连续 S 曲线脊线 + 有机截面扫掠</b>——干径按树库实测规律取胞（h&lt;25 中位仅 2 胞，h38-60 才 7 胞），气势靠曲线与低位分导枝而不是粗度；结构一律六面皮木头（带朝向原木只出现在枯木断口等锯断面），大干表面点缀木板补丁。0.7.0 修缮：<b>小型树（非巨型）大幅收直</b>——像素分辨率下细短干经不起弯折，曲率与微抖都随高度衰减，20 格以上大树才有完整曲线；棕榈改为全木弧干（去掉栅栏上段）。</p>
 <p><b>空壳裂片冠：</b>大冠是 1~2 格厚的<b>叶壳</b>分成 2~4 个错位裂片，内部中空、由放射状伞骨辐条从里面撑住；44% 树库树混 2~3 种树叶，本作按调色板通道混叶；冠底垂 1 宽叶帘（丛林藤帘/柳瀑/秋树彩条）；冠面撒草蕨花或雪层绒饰；树脚配苔石堆与草花圃组景。</p>
 <p><b>树种阵容：</b>oak / spruce / birch / jungle / acacia / dark_oak / mangrove（红树，带扎地气根）/ <b>willow 垂柳</b>（瘤结巨座+下瀑冠）/ <b>palm 棕榈</b>（倾倒弧干+放射叶羽）/ <b>banyan 榕树</b>（巨伞+气根帘）/ <b>maple 秋枫</b>、<b>ginkgo 银杏</b>（羊毛+混凝土+陶瓦彩冠、垂缘）/ <b>cherry 樱花</b> / <b>cypress 柏树</b> / <b>bush 灌木</b>（高密度可作水岸小片林）/ <b>snowy_spruce 雪杉</b>。</p>
 <p><b>树库预制树(Prefab)：</b>内置从树库直采的 147 棵手工级预制树（含巨型秋树、垂榕、雪花树、巨杉等），<code>/miaeco test stamp random</code> 直接盖印体验，可按族名（oak/spruce/birch/jungle/special/none）抽取。</p>

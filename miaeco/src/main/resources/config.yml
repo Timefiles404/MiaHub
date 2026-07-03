@@ -10,6 +10,11 @@ engine:
 placement:
   # Poisson 采样最大候选点尝试次数上限（防止超大区域卡死）
   max-candidates: 20000
+  # 地标古树：每棵匹配树种的树苗有此概率被升级为树库预制树（0=关闭）。
+  # 地标一出场即成树、永不枯死，冠下的普通树苗会被自动清掉。
+  landmark-chance: 0.05
+  # 地标古树之间的最小间距（格）
+  landmark-spacing: 28
 
 # 树种默认模板；/miaeco species add 使用这些默认值，可在 forests.yml 中逐森林覆盖。
 species-defaults:
