@@ -3,87 +3,57 @@ package dev.timefiles.miaeco.growth;
 import dev.timefiles.miaeco.growth.TreeVariants.SizeVariant;
 import dev.timefiles.miaeco.model.TreeSpecies;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Random;
 
 /**
- * 深色橡木特化：粗壮短干 + 宽阔平顶穹冠 + 根瘤/板根。
- * 干粗随体型：普通 2x2、大个体 3x3、GIANT <b>4x4</b> 黑森林巨木。
+ * 深色橡木：矮壮的有机粗干（非方柱）+ 贴得很低的浓密宽冠（裂片挤在一起）+
+ * 夸张根盘。树库对应黑森林般的低冠巨墩。
  */
 public final class DarkOakModel extends AbstractTreeModel {
 
-    private static int fp(SizeVariant var) {
-        if (var.giant()) return 4;
-        return var.large() ? 3 : 2;
+    private static int cellsOf(SizeVariant var) {
+        if (var.giant()) return 9;
+        if (var.large()) return 6;
+        return 4;
     }
 
     @Override
     protected void buildYoung(TreeStructure s, TreeSpecies sp, Random rng, SizeVariant var, double m) {
-        int h = Math.max(3, heightOf(sp, m, var, rng));
-        int f = var.giant() ? 2 : 1;                       // 幼树还未换粗干
-        Trees.thickTrunk(s, h, f);
-        Trees.leafBlob(s, f / 2, h, f / 2, 2 + (var.large() ? 1 : 0), 2, rng);
-        Trees.leafDisk(s, h + 2, 1, f);
+        int h = heightOf(sp, m, var, rng);
+        TrunkResult tr = buildTrunk(s, sp, h, 2, 0.2, var, rng);
+        int[] a = tr.anchors().get(0);
+        double R = Math.max(2.5, h * 0.45);
+        buildCrown(s, sp, tr.anchors(), a[0], a[1] + 1, a[2], R, 0.55, 2, rng);
+        buildScene(s, sp, 1, 2, rng);
     }
 
     @Override
     protected void buildMature(TreeStructure s, TreeSpecies sp, Random rng, SizeVariant var, double m) {
-        int f = fp(var);
-        int h = heightOf(sp, m, var, rng);
-        Trees.thickTrunk(s, h, f);
-
-        int R = crownOf(sp, m, var);
-        dome(s, h, R, f);
-
-        List<int[]> tips = new ArrayList<>();
-        int branches = 2 + rng.nextInt(2) + (var.giant() ? 2 : 0);
-        for (int i = 0; i < branches; i++) {
-            double ang = rng.nextDouble() * Math.PI * 2;
-            int y = h - 1 - rng.nextInt(2);
-            Trees.branch(s, f / 2, y, f / 2, Math.cos(ang), 0.15, Math.sin(ang),
-                    R + 1, 1, 0.05, 0.2, rng, tips);
-        }
-        for (int[] t : tips) Stamps.lobe(rng).place(s, t[0], t[1], t[2], rng.nextInt(4));
-
-        Trees.rootNubs(s, f, 4 + rng.nextInt(2), rng);
+        build(s, sp, rng, var, m, false);
     }
 
     @Override
     protected void buildOld(TreeStructure s, TreeSpecies sp, Random rng, SizeVariant var, double m) {
-        int f = fp(var);
-        int h = heightOf(sp, m, var, rng);
-        Trees.thickTrunk(s, h, f);
-
-        int R = crownOf(sp, m, var) + 1;
-        dome(s, h, R, f);
-        for (int i = 0; i < 4 + (var.giant() ? 4 : 0); i++) {
-            double ang = i * Math.PI * 2 / (4 + (var.giant() ? 4 : 0)) + rng.nextGaussian() * 0.3;
-            Stamps.lobe(rng).place(s,
-                    (int) Math.round(Math.cos(ang) * (R - 1)) + f / 2, h + rng.nextInt(2),
-                    (int) Math.round(Math.sin(ang) * (R - 1)) + f / 2, rng.nextInt(4));
-        }
-
-        List<int[]> tips = new ArrayList<>();
-        int branches = 3 + rng.nextInt(2) + (var.giant() ? 2 : 0);
-        for (int i = 0; i < branches; i++) {
-            double ang = rng.nextDouble() * Math.PI * 2;
-            int y = h - rng.nextInt(3);
-            Trees.branch(s, f / 2, y, f / 2, Math.cos(ang), 0.12, Math.sin(ang),
-                    R + 2, 1, 0.05, 0.25, rng, tips);
-        }
-        for (int[] t : tips) Stamps.lobe(rng).place(s, t[0], t[1], t[2], rng.nextInt(4));
-
-        Trees.buttresses(s, var.large() ? Stamps.BUTTRESS_BIG : Stamps.BUTTRESS_SMALL, f, 4, rng);
-        Trees.rootNubs(s, f, 4, rng);
-        Stamps.DEAD_STUB.place(s, f, (int) (h * 0.5), rng.nextInt(f), rng.nextInt(4));
+        build(s, sp, rng, var, m, true);
     }
 
-    /** 平顶穹冠：底宽顶窄的 4 层厚盘。 */
-    private void dome(TreeStructure s, int h, int R, int fp) {
-        Trees.leafDisk(s, h - 1, R - 1, fp);
-        Trees.leafDisk(s, h, R, fp);
-        Trees.leafDisk(s, h + 1, R - 1, fp);
-        Trees.leafDisk(s, h + 2, Math.max(1, R - 3), fp);
+    private void build(TreeStructure s, TreeSpecies sp, Random rng, SizeVariant var,
+                       double m, boolean old) {
+        int h = heightOf(sp, m, var, rng);
+        int cells = cellsOf(var) + (old ? 1 : 0);
+        CrownPlan plan = planCrown(h, 0.55 * (var.giant() ? 1.2 : 1), 0.52, 4, rng);
+        TrunkResult tr = buildTrunk(s, sp, plan.trunkH(), Math.min(12, cells), old ? 0.5 : 0.35, var, rng);
+        double R = plan.R();
+        double[] c = BroadleafModel.center(tr);
+        int lobes = 4 + (old || var.giant() ? 1 : 0);
+        buildCrown(s, sp, tr.anchors(), c[0], c[1] + plan.ry() * 0.2, c[2], R, 0.52, lobes, rng);
+        if (old) {
+            int stubY = Math.max(1, (int) (h * 0.5));
+            Stamps.DEAD_STUB.place(s, tr.main().xi(stubY), stubY, tr.main().zi(stubY), rng.nextInt(4));
+        }
+        Trees.buttresses(s, old || var.large() ? Stamps.BUTTRESS_BIG : Stamps.BUTTRESS_SMALL, 2,
+                3 + (old ? 1 : 0), rng);
+        Trees.roots(s, 1, sp.rootSpread() + (var.giant() ? 1 : 0), rng);
+        buildScene(s, sp, 2, 3, rng);
     }
 }

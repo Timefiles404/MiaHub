@@ -85,6 +85,49 @@ public final class SaplingBuilder {
                 Trees.column(s, 0, 0, h, 0);
                 Trees.leafBlob(s, 0, h + 1, 0, 2, 1, rng);
             }
+            case WILLOW -> {
+                // 小垂枝：矮杆 + 头重冠 + 两三缕垂叶
+                int h = 2 + rng.nextInt(2) + extra;
+                Trees.column(s, 0, 0, h, 0);
+                Trees.leafBlob(s, 0, h + 1, 0, 2, 1, rng);
+                int n = 2 + rng.nextInt(2);
+                for (int i = 0; i < n; i++) {
+                    double ang = rng.nextDouble() * Math.PI * 2;
+                    int dx = (int) Math.round(Math.cos(ang)), dz = (int) Math.round(Math.sin(ang));
+                    if (dx == 0 && dz == 0) dx = 1;
+                    s.put(dx * 2, h, dz * 2, Part.LEAF);
+                    s.put(dx * 2, h - 1, dz * 2, Part.LEAF);
+                }
+            }
+            case PALM -> {
+                // 斜倚小苗：矮弯杆 + 三四条短羽
+                int h = 2 + rng.nextInt(2) + extra;
+                int lean = rng.nextBoolean() ? 1 : -1;
+                for (int y = 0; y <= h; y++) s.put(y >= h - 1 ? lean : 0, y, 0, Part.WOOD);
+                s.put(lean, h + 1, 0, Part.LEAF);
+                int n = 3 + rng.nextInt(2);
+                for (int i = 0; i < n; i++) {
+                    double ang = i * Math.PI * 2 / n + rng.nextGaussian() * 0.2;
+                    int dx = (int) Math.round(Math.cos(ang) * 2), dz = (int) Math.round(Math.sin(ang) * 2);
+                    s.put(lean + (int) Math.signum(dx), h + 1, (int) Math.signum(dz), Part.LEAF);
+                    s.put(lean + dx, h, dz, Part.LEAF);
+                }
+            }
+            case SHRUB -> {
+                // 灌木苗：直接一小簇
+                Trees.leafBlob(s, 0, 1, 0, 1, 1, rng);
+                s.put(0, 0, 0, Part.WOOD);
+            }
+            case CYPRESS -> {
+                // 迷你尖塔
+                int h = 2 + rng.nextInt(2) + extra;
+                Trees.column(s, 0, 0, h, 0);
+                for (int y = 1; y <= h; y++) {
+                    Trees.leafDisk(s, y, 1, 1);
+                }
+                s.put(0, h + 1, 0, Part.LEAF);
+                s.put(0, h + 2, 0, Part.LEAF);
+            }
             default -> {
                 // 通用阔叶小苗：细杆 + 顶叶簇 + 零星侧叶
                 int h = 3 + rng.nextInt(2) + extra;

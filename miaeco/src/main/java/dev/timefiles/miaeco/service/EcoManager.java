@@ -140,5 +140,6 @@ public final class EcoManager {
     public GrowthService growth() { return growthService; }
     public SuccessionService succession() { return successionService; }
     public SelectionManager selection() { return selectionManager; }
+    public AsyncWorldEditor editor() { return editor; }
     public ForestStore store() { return store; }
 }

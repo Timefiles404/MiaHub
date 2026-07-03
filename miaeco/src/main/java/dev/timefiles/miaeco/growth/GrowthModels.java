@@ -22,6 +22,11 @@ public final class GrowthModels {
         MODELS.put(TreeForm.JUNGLE, new JungleModel());
         MODELS.put(TreeForm.CONIFER, new ConiferModel());
         MODELS.put(TreeForm.ACACIA, new AcaciaModel());
+        MODELS.put(TreeForm.WILLOW, new WillowModel());
+        MODELS.put(TreeForm.PALM, new PalmModel());
+        MODELS.put(TreeForm.BANYAN, new BanyanModel());
+        MODELS.put(TreeForm.SHRUB, new ShrubModel());
+        MODELS.put(TreeForm.CYPRESS, new CypressModel());
     }
 
     private GrowthModels() { }

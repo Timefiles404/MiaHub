@@ -40,6 +40,9 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
     /** 每个玩家的“单棵测试树”：一个只含 1 棵树的临时 Forest，用于快速迭代生长模型。 */
     private final Map<UUID, Forest> testTrees = new HashMap<>();
 
+    /** 每个玩家最近盖印的树库预制树（用于替换/清除）。 */
+    private final Map<UUID, List<dev.timefiles.miaeco.async.BlockEdit>> lastStamp = new HashMap<>();
+
     public MiaEcoCommand(EcoManager eco) {
         this.eco = eco;
     }
@@ -74,6 +77,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         msg(s, "/miaeco test <树种> plant [giant]", "在脚下种一棵测试树（giant=巨木变异）");
         msg(s, "/miaeco test <树种> advance <月>", "推进这棵测试树的形态");
         msg(s, "/miaeco test <树种> clear", "移除测试树");
+        msg(s, "/miaeco test stamp <id|random|族名>", "盖印一棵树库预制树（147 棵建筑师树）");
         msg(s, "/miaeco pos1 | pos2", "把脚下方块设为选区角点");
         msg(s, "/miaeco forest create <名称>", "用当前选区新建森林（只取 XZ，自动找地表）");
         msg(s, "/miaeco forest list | info <名称> | remove <名称>", "森林管理");
@@ -96,9 +100,14 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage(P + ChatColor.RED + "只有玩家能使用测试树。");
             return;
         }
-        // 用法: /miaeco test <树种> <plant|advance|clear> [月数]
+        // 用法: /miaeco test <树种> <plant|advance|clear> [月数]  |  /miaeco test stamp <id|random|clear>
+        if (args.length >= 2 && args[1].equalsIgnoreCase("stamp")) {
+            testStamp(p, args);
+            return;
+        }
         if (args.length < 3) {
-            sender.sendMessage(P + ChatColor.RED + "用法: /miaeco test <树种> plant | advance <月> | clear");
+            sender.sendMessage(P + ChatColor.RED + "用法: /miaeco test <树种> plant | advance <月> | clear，"
+                    + "或 /miaeco test stamp <id|random|clear>");
             return;
         }
         String speciesId = args[1].toLowerCase(Locale.ROOT);
@@ -116,6 +125,53 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             case "clear" -> testClear(p);
             default -> sender.sendMessage(P + ChatColor.RED + "未知操作: " + action + "（plant/advance/clear）");
         }
+    }
+
+    /** 树库预制树：/miaeco test stamp <id|random|<family>|list|clear>。 */
+    private void testStamp(Player p, String[] args) {
+        String arg = args.length >= 3 ? args[2].toLowerCase(Locale.ROOT) : "random";
+        if (arg.equals("list")) {
+            var ids = dev.timefiles.miaeco.growth.StampLibrary.ids();
+            p.sendMessage(P + ChatColor.GREEN + "树库预制树 " + ids.size() + " 棵："
+                    + ChatColor.GRAY + String.join(", ", ids.subList(0, Math.min(40, ids.size())))
+                    + (ids.size() > 40 ? " …" : ""));
+            return;
+        }
+        // 清掉上一棵
+        List<dev.timefiles.miaeco.async.BlockEdit> prev = lastStamp.remove(p.getUniqueId());
+        if (prev != null) {
+            List<dev.timefiles.miaeco.async.BlockEdit> clear = new ArrayList<>(prev.size());
+            for (var e : prev) {
+                clear.add(new dev.timefiles.miaeco.async.BlockEdit(e.x(), e.y(), e.z(),
+                        dev.timefiles.miaeco.async.BlockSpec.AIR));
+            }
+            eco.editor().apply(p.getWorld(), clear, null);
+        }
+        if (arg.equals("clear")) {
+            p.sendMessage(P + ChatColor.GREEN + "已清除盖印的预制树。");
+            return;
+        }
+        var rng = new java.util.Random();
+        dev.timefiles.miaeco.growth.StampLibrary.Prefab found;
+        if (arg.equals("random")) {
+            found = dev.timefiles.miaeco.growth.StampLibrary.random(null, rng);
+        } else {
+            found = dev.timefiles.miaeco.growth.StampLibrary.get(arg);
+            if (found == null) found = dev.timefiles.miaeco.growth.StampLibrary.random(arg, rng);
+        }
+        final var pf = found;
+        if (pf == null) {
+            p.sendMessage(P + ChatColor.RED + "没有找到预制树: " + arg
+                    + "（可用 /miaeco test stamp list 查看，或用 family: oak/spruce/birch/jungle/special/none）");
+            return;
+        }
+        Location base = p.getLocation().getBlock().getLocation();
+        var edits = dev.timefiles.miaeco.growth.StampLibrary.place(
+                pf, base.getBlockX(), base.getBlockY(), base.getBlockZ(), rng.nextInt(4));
+        lastStamp.put(p.getUniqueId(), edits);
+        eco.editor().apply(p.getWorld(), edits, n -> p.sendMessage(P + ChatColor.GREEN
+                + "盖印 " + pf.id() + ChatColor.GRAY + "（" + pf.family() + " 高" + pf.height()
+                + " 冠" + pf.canopyW() + " " + n + " 方块）再次 stamp 会替换，stamp clear 清除。"));
     }
 
     private void testPlant(Player p, String speciesId, boolean giant) {
@@ -391,7 +447,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             addMatches(out, args[0], "help", "test", "pos1", "pos2", "forest", "species", "plant", "grow", "advance", "clear", "save");
         } else if (args.length == 2) {
             switch (args[0].toLowerCase(Locale.ROOT)) {
-                case "test" -> addMatches(out, args[1], "oak", "spruce", "birch", "jungle", "acacia", "dark_oak");
+                case "test" -> addMatches(out, args[1],
+                        dev.timefiles.miaeco.model.TreeArchetype.KNOWN.toArray(new String[0]));
                 case "forest" -> addMatches(out, args[1], "create", "list", "info", "remove", "density");
                 case "species" -> addMatches(out, args[1], "add", "list");
                 case "plant", "grow", "advance", "clear" -> addForests(out, args[1]);
@@ -400,7 +457,16 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         } else if (args.length == 3) {
             String a0 = args[0].toLowerCase(Locale.ROOT);
             String a1 = args[1].toLowerCase(Locale.ROOT);
-            if (a0.equals("test")) addMatches(out, args[2], "plant", "advance", "clear");
+            if (a0.equals("test")) {
+                if (args[1].equalsIgnoreCase("stamp")) {
+                    addMatches(out, args[2], "random", "list", "clear",
+                            "oak", "spruce", "birch", "jungle", "special", "none");
+                    addMatches(out, args[2],
+                            dev.timefiles.miaeco.growth.StampLibrary.ids().toArray(new String[0]));
+                } else {
+                    addMatches(out, args[2], "plant", "advance", "clear");
+                }
+            }
             else if (a0.equals("forest") && (a1.equals("info") || a1.equals("remove") || a1.equals("density"))) addForests(out, args[2]);
             else if (a0.equals("species")) addForests(out, args[2]);
             else if (a0.equals("advance")) addMatches(out, args[2], "1", "3", "6", "12");

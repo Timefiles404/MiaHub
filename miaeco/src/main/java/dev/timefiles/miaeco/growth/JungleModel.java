@@ -3,138 +3,108 @@ package dev.timefiles.miaeco.growth;
 import dev.timefiles.miaeco.growth.TreeVariants.SizeVariant;
 import dev.timefiles.miaeco.model.TreeSpecies;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
 /**
- * 热带雨林树：裸干少量中段枝 + 有界伞冠 + 侧挂垂藤/爬藤 + 板根。
- * 体型连续：大个体 2x2；老树固定 2x2 巨柱；GIANT 3x3 雨林之王。
- * 藤蔓全部侧向依附（冠缘外侧、枝端侧面、干体侧面），不再有平铺/悬空。
+ * 热带雨林树。树库范式：高裸曲干 + 宽扁多裂片伞冠（混 2~3 种树叶 + 顶部
+ * 花色点缀）+ <b>冠底叶帘垂坠</b> + 侧挂藤蔓 + 板根。中段挂少量小叶团。
+ * 王者巨木 3x3+ 曲干、冠幅 40+。
  */
 public final class JungleModel extends AbstractTreeModel {
 
-    private static int fp(SizeVariant var, boolean old) {
-        if (var.giant()) return 3;
-        if (old) return 2;
-        return var.large() ? 2 : 1;
+    private static int cellsOf(int h, SizeVariant var) {
+        int c = Trunks.cellsFor(h) + 1;                  // 雨林树干比同高阔叶粗一档
+        if (var.giant()) return Math.min(12, Math.max(c + 3, 9));
+        if (var.large()) return c + 1;
+        return c;
     }
 
     @Override
     protected void buildYoung(TreeStructure s, TreeSpecies sp, Random rng, SizeVariant var, double m) {
         int h = heightOf(sp, m, var, rng);
-        int f = var.giant() ? 2 : 1;
-        Trees.thickTrunk(s, h, f);
-        Trees.leafDisk(s, h, 2, f);
-        Trees.leafDisk(s, h + 1, 1, f);
-        Trees.leafDisk(s, h + 2, 0, f);
+        TrunkResult tr = buildTrunk(s, sp, h, var.giant() ? 2 : 1, 0, var, rng);
+        int[] a = tr.anchors().get(0);
+        double R = Math.max(2, h * 0.22);
+        buildCrown(s, sp, tr.anchors(), a[0], a[1] + 1, a[2], R, 0.6, 1, rng);
+        // 干上大单叶（幼雨林树的标志）
+        Trunks.Spine main = tr.main();
         int n = 2 + rng.nextInt(3);
         for (int i = 0; i < n; i++) {
-            int y = (int) (h * 0.4) + rng.nextInt(Math.max(1, (int) (h * 0.5)));
+            int y = (int) (h * 0.35) + rng.nextInt(Math.max(1, (int) (h * 0.5)));
             double ang = rng.nextDouble() * Math.PI * 2;
             int dx = (int) Math.round(Math.cos(ang)), dz = (int) Math.round(Math.sin(ang));
             if (dx == 0 && dz == 0) dx = 1;
-            s.put(f / 2 + dx, y, f / 2 + dz, Part.LEAF);       // 大单叶
-            if (rng.nextBoolean()) s.put(f / 2 + dx * 2, y, f / 2 + dz * 2, Part.LEAF);
+            s.put(main.xi(y) + dx, y, main.zi(y) + dz, Part.LEAF, 0);
+            if (rng.nextBoolean()) s.put(main.xi(y) + dx * 2, y, main.zi(y) + dz * 2, Part.LEAF, 0);
         }
-        if (rng.nextDouble() < 0.4) Trees.hangVine(s, 0, (int) (h * 0.7), 0, 1, 0, 2);
+        buildScene(s, sp, 1, 2, rng);
     }
 
     @Override
     protected void buildMature(TreeStructure s, TreeSpecies sp, Random rng, SizeVariant var, double m) {
-        int f = fp(var, false);
-        int h = heightOf(sp, m, var, rng);
-        Trees.thickTrunk(s, h, f);
-        int bare = (int) Math.round(h * 0.55);
-
-        List<int[]> midTips = new ArrayList<>();
-        int mids = 1 + rng.nextInt(2);
-        for (int i = 0; i < mids; i++) {
-            int y = (int) (bare * (0.5 + 0.4 * rng.nextDouble()));
-            double ang = rng.nextDouble() * Math.PI * 2;
-            Trees.branch(s, f / 2, y, f / 2, Math.cos(ang), 0.15, Math.sin(ang),
-                    2 + rng.nextInt(2), 2, 0.1, 0.2, rng, midTips);
-        }
-        for (int[] t : midTips) Trees.leafBlob(s, t[0], t[1], t[2], 2, 1, rng);
-
-        List<int[]> tips = new ArrayList<>();
-        int R = crownOf(sp, m, var);
-        int ups = 3 + rng.nextInt(2) + (var.giant() ? 2 : 0);
-        for (int i = 0; i < ups; i++) {
-            double ang = i * Math.PI * 2 / ups + rng.nextGaussian() * 0.2;
-            int y = bare + rng.nextInt(Math.max(1, h - bare));
-            Trees.branch(s, f / 2, y, f / 2, Math.cos(ang), 0.45, Math.sin(ang),
-                    3 + rng.nextInt(2) + (var.large() ? 1 : 0), 1, sp.droop(), sp.branchiness(), rng, tips);
-        }
-        Trees.leafDisk(s, h + 1, Math.max(1, R - 1), f);
-        Trees.leafDisk(s, h, R, f);
-        for (int[] t : tips) Stamps.lobe(rng).place(s, t[0], t[1], t[2], rng.nextInt(4));
-
-        Trees.tipVines(s, tips, rng, 0.5);
-        rimVines(s, h, R, f, 3 + rng.nextInt(2), 4, rng);
-        Trees.buttresses(s, Stamps.BUTTRESS_SMALL, f, 3, rng);
-        Trees.roots(s, 0, Math.max(2, sp.rootSpread() - 1), rng);
+        build(s, sp, rng, var, m, false);
     }
 
     @Override
     protected void buildOld(TreeStructure s, TreeSpecies sp, Random rng, SizeVariant var, double m) {
-        int f = fp(var, true);
-        int h = heightOf(sp, m, var, rng);
-        Trees.thickTrunk(s, h, f);                          // 老雨林树 = 巨柱
-        int bare = (int) Math.round(h * 0.55);
-
-        List<int[]> midTips = new ArrayList<>();
-        int mids = 2 + rng.nextInt(2);
-        for (int i = 0; i < mids; i++) {
-            int y = (int) (bare * (0.4 + 0.5 * rng.nextDouble()));
-            double ang = rng.nextDouble() * Math.PI * 2;
-            Trees.branch(s, f / 2, y, f / 2, Math.cos(ang), 0.15, Math.sin(ang),
-                    2 + rng.nextInt(3), 2, 0.1, 0.2, rng, midTips);
-        }
-        for (int[] t : midTips) Trees.leafBlob(s, t[0], t[1], t[2], 2, 1, rng);
-
-        List<int[]> tips = new ArrayList<>();
-        int R = crownOf(sp, m, var) + 1;
-        int ups = 4 + rng.nextInt(2) + (var.giant() ? 2 : 0);
-        for (int i = 0; i < ups; i++) {
-            double ang = i * Math.PI * 2 / ups + rng.nextGaussian() * 0.2;
-            int y = bare + rng.nextInt(Math.max(1, h - bare));
-            Trees.branch(s, f / 2, y, f / 2, Math.cos(ang), 0.4, Math.sin(ang),
-                    4 + rng.nextInt(3) + (var.giant() ? 2 : 0), 1, sp.droop(), sp.branchiness(), rng, tips);
-        }
-        // 双层冠：主伞 + 下层小盘
-        Trees.leafDisk(s, h + 1, Math.max(1, R - 2), f);
-        Trees.leafDisk(s, h, R, f);
-        Trees.leafDisk(s, h - 3, Math.max(2, R / 2), f);
-        for (int[] t : tips) Stamps.lobe(rng).place(s, t[0], t[1], t[2], rng.nextInt(4));
-
-        // 藤蔓：枝端 + 冠缘 + 干体爬藤（全部侧挂）
-        Trees.tipVines(s, tips, rng, 0.7);
-        rimVines(s, h, R, f, 5 + rng.nextInt(3), 7, rng);
-        int trunkVines = 4 + rng.nextInt(4);
-        for (int i = 0; i < trunkVines; i++) {
-            int side = rng.nextInt(4);
-            int along = rng.nextInt(f);
-            int ax = side == 0 ? 0 : side == 1 ? f - 1 : along;
-            int az = side == 2 ? 0 : side == 3 ? f - 1 : along;
-            int dx = side == 0 ? -1 : side == 1 ? 1 : 0;
-            int dz = side == 2 ? -1 : side == 3 ? 1 : 0;
-            int top = 2 + rng.nextInt(Math.max(1, bare));
-            Trees.hangVine(s, ax, top, az, dx, dz, 1 + rng.nextInt(3));
-        }
-        Trees.buttresses(s, Stamps.BUTTRESS_BIG, f, 4, rng);
-        Trees.roots(s, 1, sp.rootSpread() + (var.giant() ? 2 : 0), rng);
+        build(s, sp, rng, var, m, true);
     }
 
-    /** 从伞冠边缘的叶块<b>外侧</b>垂下藤蔓链（侧向依附冠缘）。 */
-    private void rimVines(TreeStructure s, int capY, int r, int fp, int count, int maxLen, Random rng) {
-        for (int i = 0; i < count; i++) {
+    private void build(TreeStructure s, TreeSpecies sp, Random rng, SizeVariant var,
+                       double m, boolean old) {
+        int h = heightOf(sp, m, var, rng);
+        int cells = cellsOf(h, var) + (old ? 1 : 0);
+        CrownPlan plan = planCrown(h, 0.42 * (var.giant() ? 1.15 : 1), 0.45, 4, rng);
+        TrunkResult tr = buildTrunk(s, sp, plan.trunkH(), Math.min(12, cells), 0.2, var, rng);
+        double R = plan.R();
+        double[] c = BroadleafModel.center(tr);
+        int lobes = Math.max(3, Math.min(5, 3 + (int) (R / 6))) + (var.giant() || old ? 1 : 0);
+        Canopy.ShellCells cells2 = buildCrown(s, sp, tr.anchors(),
+                c[0], c[1] + plan.ry() * 0.2, c[2], R, 0.45, lobes, rng);
+
+        // 中段小叶团（下方分叉少但不是没有）
+        Trunks.Spine main = tr.main();
+        int mids = 1 + rng.nextInt(old ? 3 : 2);
+        for (int i = 0; i < mids; i++) {
+            int y = (int) (plan.trunkH() * (0.40 + 0.25 * rng.nextDouble()));
             double ang = rng.nextDouble() * Math.PI * 2;
-            int ax = (int) Math.round(Math.cos(ang) * (r - 1)) + fp / 2;
-            int az = (int) Math.round(Math.sin(ang) * (r - 1)) + fp / 2;
-            int dx = Math.abs(Math.cos(ang)) >= Math.abs(Math.sin(ang)) ? (Math.cos(ang) >= 0 ? 1 : -1) : 0;
-            int dz = dx == 0 ? (Math.sin(ang) >= 0 ? 1 : -1) : 0;
-            Trees.hangVine(s, ax, capY, az, dx, dz, 2 + rng.nextInt(Math.max(1, maxLen)));
+            double dist = 2 + rng.nextDouble() * 2;
+            Canopy.Lobe lb = new Canopy.Lobe(
+                    main.xAt(y) + Math.cos(ang) * dist, y, main.zAt(y) + Math.sin(ang) * dist,
+                    1.8 + rng.nextDouble(), 1.4, 1.8 + rng.nextDouble(),
+                    Canopy.channelFor(sp, rng));
+            Canopy.shell(s, lb, 0.12, rng);
+            Canopy.spoke(s, main.xi(y), y, main.zi(y), lb, rng);
+        }
+
+        // 藤蔓：冠缘侧挂 + 干体爬藤（垂帘由 buildCrown 按调色板完成）
+        if (sp.vines()) {
+            vinesFromRim(s, cells2.rim, old ? 0.14 : 0.08, old ? 7 : 5, rng);
+            int trunkVines = (old ? 4 : 2) + rng.nextInt(3);
+            for (int i = 0; i < trunkVines; i++) {
+                int y = 2 + rng.nextInt(Math.max(1, (int) (h * 0.5)));
+                int side = rng.nextInt(4);
+                int dx = side == 0 ? 1 : side == 1 ? -1 : 0;
+                int dz = side == 2 ? 1 : side == 3 ? -1 : 0;
+                Trees.hangVine(s, main.xi(y), y, main.zi(y), dx, dz, 1 + rng.nextInt(3));
+            }
+        }
+
+        Trees.buttresses(s, old || var.large() ? Stamps.BUTTRESS_BIG : Stamps.BUTTRESS_SMALL,
+                cells >= 4 ? 2 : 1, 3 + (var.giant() ? 1 : 0), rng);
+        Trees.roots(s, old ? 1 : 0, sp.rootSpread() + (var.giant() ? 2 : 0), rng);
+        buildScene(s, sp, cells >= 4 ? 2 : 1, 3, rng);
+    }
+
+    /** 从伞冠下缘叶块的外侧面垂挂藤蔓链。 */
+    private void vinesFromRim(TreeStructure s, List<int[]> rim, double chance, int maxLen, Random rng) {
+        for (int[] r : rim) {
+            if (rng.nextDouble() >= chance) continue;
+            int side = rng.nextInt(4);
+            int dx = side == 0 ? 1 : side == 1 ? -1 : 0;
+            int dz = side == 2 ? 1 : side == 3 ? -1 : 0;
+            Trees.hangVine(s, r[0], r[1], r[2], dx, dz, 2 + rng.nextInt(maxLen));
         }
     }
 }

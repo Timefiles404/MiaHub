@@ -4,6 +4,7 @@ import dev.timefiles.miaeco.async.BlockEdit;
 import dev.timefiles.miaeco.async.BlockSpec;
 import dev.timefiles.miaeco.model.TreeSpecies;
 import org.bukkit.Axis;
+import org.bukkit.Material;
 import org.bukkit.block.BlockFace;
 
 import java.util.ArrayList;
@@ -16,11 +17,16 @@ import java.util.Set;
 
 /**
  * 一棵树在写入世界之前的<b>纯内存表示</b>：相对基座的体素集合，每格记录
- * {@link Part}（语义角色）与 {@link Axis}（原木朝向）。线程安全、无 Bukkit 世界引用。
+ * {@link Part}（语义角色）、可选 {@link Axis}（朝向）与 aux 字节
+ * （树叶=混色通道 / 台阶=上下半 / 雪=层数 / 花=花序下标 / 石=石种）。
+ * 线程安全性：单线程构建后只读；无 Bukkit 世界引用。
  *
- * <p>具体材质延迟到 {@link #toEdits} 时按 {@link TreeSpecies} 解析。
- * 藤蔓解析遵循原版规则：只允许<b>侧向依附</b>（或链式垂挂继承链顶贴面），
- * 无依附点的藤蔓直接丢弃——不会出现平铺或悬空的藤蔓。
+ * <p>具体材质延迟到 {@link #toEdits} 时按 {@link TreeSpecies} 调色板解析：
+ * <ul>
+ *   <li>树叶按通道解析成混合树叶（或彩冠方块组），并带确定性的细粒度串色；</li>
+ *   <li>依附装饰（草/蕨/花/雪）解析时校验支撑，不合法直接丢弃；</li>
+ *   <li>藤蔓只允许侧向依附（或链式垂挂继承链顶贴面），无依附点丢弃。</li>
+ * </ul>
  */
 public final class TreeStructure {
 
@@ -31,24 +37,46 @@ public final class TreeStructure {
 
     private static int sx21(int v) { return (v << 11) >> 11; }
 
-    private record Voxel(Part part, Axis axis) { }
+    private record Voxel(Part part, Axis axis, byte aux) { }
 
     private final Map<Long, Voxel> voxels = new LinkedHashMap<>();
 
-    public void put(int dx, int dy, int dz, Part part) { put(dx, dy, dz, part, null); }
+    /** 细粒度混色盐（由生成器注入树种子），保证同种子完全可复现。 */
+    private long salt;
 
-    /** 放置一格；木质方块不会被叶/藤覆盖，接头 WOOD 不会被 LOG 覆盖。 */
-    public void put(int dx, int dy, int dz, Part part, Axis axis) {
+    public void salt(long s) { this.salt = s; }
+
+    public void put(int dx, int dy, int dz, Part part) { put(dx, dy, dz, part, null, 0); }
+
+    public void put(int dx, int dy, int dz, Part part, Axis axis) { put(dx, dy, dz, part, axis, 0); }
+
+    public void put(int dx, int dy, int dz, Part part, int aux) { put(dx, dy, dz, part, null, aux); }
+
+    /**
+     * 放置一格。优先级：实体结构 &gt; 树叶/藤 &gt; 依附装饰；
+     * 接头 WOOD 不会被 LOG 覆盖，装饰绝不覆盖任何已有格。
+     */
+    public void put(int dx, int dy, int dz, Part part, Axis axis, int aux) {
         long k = key(dx, dy, dz);
         Voxel existing = voxels.get(k);
         if (existing != null) {
+            if (part.isDecor()) return;
             if (existing.part.isWoody() && !part.isWoody()) return;
             if (existing.part == Part.WOOD && part == Part.LOG) return;
+            if (existing.part.isDecor() && (part.isWoody() || part == Part.LEAF)) {
+                voxels.remove(k);   // 结构挤掉装饰，重新插入保持顺序
+            }
         }
-        voxels.put(k, new Voxel(part, axis));
+        voxels.put(k, new Voxel(part, axis, (byte) aux));
     }
 
     public boolean has(int dx, int dy, int dz) { return voxels.containsKey(key(dx, dy, dz)); }
+
+    /** 该格是否为实体（木质/叶）——装饰不算。 */
+    public boolean solidAt(int dx, int dy, int dz) {
+        Voxel v = voxels.get(key(dx, dy, dz));
+        return v != null && !v.part.isDecor() && v.part != Part.VINE;
+    }
 
     public int size() { return voxels.size(); }
 
@@ -65,14 +93,14 @@ public final class TreeStructure {
     }
 
     /**
-     * 把本结构的<b>木质骨架</b>（原木/木头/根，保留朝向）拷贝到 dst，
-     * 截断 cutY 以上的部分；断口层随机缺损并转为木头（参差的折断面）。
+     * 把本结构的<b>木质骨架</b>（含木板/栅栏，保留朝向）拷贝到 dst，
+     * 截断 cutY 以上的部分；断口层随机缺损并转为带年轮的原木断面。
      * 用于枯立木：死树保留整棵树的枝干轮廓而不是简单的一根柱子。
      */
     public void copyWoodySkeleton(TreeStructure dst, int cutY, Random rng) {
         for (Map.Entry<Long, Voxel> e : voxels.entrySet()) {
             Voxel v = e.getValue();
-            if (!v.part.isWoody()) continue;
+            if (!v.part.isWoody() || v.part == Part.STONE) continue;
             long k = e.getKey();
             int dx = sx21((int) ((k >> 42) & 0x1FFFFF));
             int dy = sx21((int) ((k >> 21) & 0x1FFFFF));
@@ -80,9 +108,9 @@ public final class TreeStructure {
             if (dy > cutY) continue;
             if (dy == cutY) {
                 if (rng.nextDouble() < 0.45) continue;   // 断口缺损
-                dst.put(dx, dy, dz, Part.WOOD);          // 断口用木头
+                dst.put(dx, dy, dz, Part.LOG, Axis.Y);   // 断口露年轮
             } else {
-                dst.put(dx, dy, dz, v.part, v.axis);
+                dst.put(dx, dy, dz, v.part, v.axis, v.aux);
             }
         }
     }
@@ -115,10 +143,11 @@ public final class TreeStructure {
         for (long k : remove) voxels.remove(k);
 
         // 补叶（凹陷填充）
-        List<int[]> add = new ArrayList<>();
-        for (long k : voxels.keySet().toArray(new Long[0])) {
-            Voxel v = voxels.get(k);
-            if (v == null || v.part != Part.LEAF) continue;
+        List<long[]> add = new ArrayList<>();
+        for (Map.Entry<Long, Voxel> e : List.copyOf(voxels.entrySet())) {
+            Voxel v = e.getValue();
+            if (v.part != Part.LEAF) continue;
+            long k = e.getKey();
             int dx = sx21((int) ((k >> 42) & 0x1FFFFF));
             int dy = sx21((int) ((k >> 21) & 0x1FFFFF));
             int dz = sx21((int) (k & 0x1FFFFF));
@@ -130,10 +159,30 @@ public final class TreeStructure {
                     Voxel nb = voxels.get(key(ex + d2[0], ey + d2[1], ez + d2[2]));
                     if (nb != null && nb.part == Part.LEAF) n++;
                 }
-                if (n >= 4 && rng.nextDouble() < 0.35) add.add(new int[]{ex, ey, ez});
+                if (n >= 4 && rng.nextDouble() < 0.35) add.add(new long[]{ex, ey, ez, v.aux});
             }
         }
-        for (int[] a : add) put(a[0], a[1], a[2], Part.LEAF);
+        for (long[] a : add) put((int) a[0], (int) a[1], (int) a[2], Part.LEAF, (int) a[3]);
+    }
+
+    /** CA 之后清除失去支撑的依附装饰（叶被吃掉后残留的草/花/雪）。 */
+    public void pruneUnsupportedDecor() {
+        List<Long> remove = new ArrayList<>();
+        for (Map.Entry<Long, Voxel> e : voxels.entrySet()) {
+            Voxel v = e.getValue();
+            if (!v.part.isDecor()) continue;
+            long k = e.getKey();
+            int dx = sx21((int) ((k >> 42) & 0x1FFFFF));
+            int dy = sx21((int) ((k >> 21) & 0x1FFFFF));
+            int dz = sx21((int) (k & 0x1FFFFF));
+            if (v.part == Part.FRINGE_TALL_U) {
+                Voxel below = voxels.get(key(dx, dy - 1, dz));
+                if (below == null || below.part != Part.FRINGE_TALL_L) remove.add(k);
+            } else if (dy > 0 && !solidAt(dx, dy - 1, dz)) {
+                remove.add(k);   // dy<=0 视为踩在地面上
+            }
+        }
+        for (long k : remove) voxels.remove(k);
     }
 
     private boolean lateralVine(int dx, int dy, int dz) {
@@ -148,7 +197,7 @@ public final class TreeStructure {
 
     // ============================ 输出 ============================
 
-    /** 解析为绝对方块写入，材质取自 species。无依附的藤蔓在此被丢弃。 */
+    /** 解析为绝对方块写入，材质取自 species 调色板。非法依附在此被丢弃。 */
     public List<BlockEdit> toEdits(int baseX, int baseY, int baseZ, TreeSpecies sp) {
         List<BlockEdit> out = new ArrayList<>(voxels.size());
         for (Map.Entry<Long, Voxel> e : voxels.entrySet()) {
@@ -174,17 +223,69 @@ public final class TreeStructure {
         return out;
     }
 
+    /** 确定性坐标散列（加树种子盐），用于细粒度混色/材质抖动。 */
+    private int hash(int dx, int dy, int dz) {
+        long h = salt ^ (dx * 0x9E3779B97F4A7C15L) ^ (dy * 0xC2B2AE3D27D4EB4FL) ^ (dz * 0x165667B19E3779F9L);
+        h = (h ^ (h >>> 29)) * 0xBF58476D1CE4E5B9L;
+        return (int) ((h >>> 33) & 0x7FFFFFFF);
+    }
+
     private BlockSpec resolve(Voxel v, int dx, int dy, int dz, TreeSpecies sp) {
         return switch (v.part) {
             case LOG -> BlockSpec.log(sp.logMaterial(), v.axis == null ? Axis.Y : v.axis);
             case WOOD -> BlockSpec.of(sp.woodMaterial());
-            case ROOT -> BlockSpec.log(sp.woodMaterial(), v.axis == null ? Axis.Y : v.axis);
-            case LEAF -> BlockSpec.of(sp.leafMaterial());
+            case ROOT -> {
+                if (sp.rootKnotChance() > 0 && hash(dx, dy, dz) % 1000 < sp.rootKnotChance() * 1000) {
+                    yield BlockSpec.of(Material.MANGROVE_ROOTS);
+                }
+                yield v.axis == null ? BlockSpec.of(sp.woodMaterial())
+                        : BlockSpec.log(sp.woodMaterial(), v.axis);
+            }
+            case PLANK -> BlockSpec.of(sp.plankMaterial());
+            case FENCE -> BlockSpec.of(sp.fenceMaterial());
+            case SLAB -> v.aux == 1 ? BlockSpec.slabTop(sp.slabMaterial()) : BlockSpec.of(sp.slabMaterial());
+            case LEAF -> BlockSpec.of(leafMaterial(v.aux, dx, dy, dz, sp));
+            case FRINGE_SHORT -> {
+                List<Material> fs = sp.fringeShorts();
+                yield BlockSpec.of(fs.get(hash(dx, dy, dz) % fs.size()));
+            }
+            case FRINGE_TALL_L -> BlockSpec.of(tallMaterial(dx, dy, dz, sp));
+            case FRINGE_TALL_U -> BlockSpec.upperHalf(tallMaterial(dx, dy - 1, dz, sp));
+            case FLOWER -> {
+                List<Material> fl = sp.flowers();
+                yield BlockSpec.of(fl.get(Math.floorMod(v.aux, fl.size())));
+            }
+            case SNOW -> BlockSpec.snow(v.aux);
+            case STONE -> BlockSpec.of(v.aux == 1 ? Material.MOSSY_COBBLESTONE
+                    : v.aux == 2 ? Material.COBBLESTONE : Material.STONE);
             case VINE -> {
                 Set<BlockFace> faces = vineFaces(dx, dy, dz);
                 yield faces.isEmpty() ? null : BlockSpec.vine(faces);   // 无依附 → 丢弃
             }
         };
+    }
+
+    /** 混叶解析：通道基色 + 12% 细粒度串色（彩冠模式改为整组权重挑选）。 */
+    private Material leafMaterial(int channel, int dx, int dy, int dz, TreeSpecies sp) {
+        List<Material> colors = sp.canopyBlocks();
+        int h = hash(dx, dy, dz);
+        if (!colors.isEmpty()) {
+            return colors.get((h + channel * 7) % colors.size());
+        }
+        int ch = channel;
+        if (h % 100 < 12) ch = (ch + 1 + (h / 100) % 2) % 3;   // 串色
+        Material m2 = sp.leafMaterial2(), m3 = sp.leafMaterial3();
+        return switch (ch) {
+            case 1 -> m2 != null ? m2 : sp.leafMaterial();
+            case 2 -> m3 != null ? m3 : (m2 != null ? m2 : sp.leafMaterial());
+            default -> sp.leafMaterial();
+        };
+    }
+
+    /** 高株绒饰材质：上下半必须一致，故以“下半坐标”取材。 */
+    private Material tallMaterial(int lx, int ly, int lz, TreeSpecies sp) {
+        List<Material> ft = sp.fringeTalls();
+        return ft.get(hash(lx, ly, lz) % ft.size());
     }
 
     /**
@@ -208,6 +309,6 @@ public final class TreeStructure {
 
     private boolean isSupport(int dx, int dy, int dz) {
         Voxel v = voxels.get(key(dx, dy, dz));
-        return v != null && v.part != Part.VINE;
+        return v != null && v.part != Part.VINE && !v.part.isDecor();
     }
 }

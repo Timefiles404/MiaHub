@@ -9,13 +9,9 @@ import java.util.Random;
 /**
  * 各树种生成模型共享的体素图元库。全部为确定性纯函数，线程安全。
  *
- * <p>核心规范集中在此：
- * <ul>
- *   <li>{@link #branch} 用 3D 单轴步进，保证每格原木只沿一个轴、朝向正确，转折枢轴置木头；</li>
- *   <li>树干支持 1x1 / 2x2 / 3x3 底面（footprint，巨木与深色橡木用）；</li>
- *   <li><b>叶盘用放宽的圆公式</b>（原先的紧公式产出瘦十字，是针叶层难看的主因）；</li>
- *   <li>{@link #roots}/{@link #rootCollar}/{@link #rootNubs} 三种尺度的扎根表达。</li>
- * </ul>
+ * <p>0.6.0 起遵循树库实测规范：<b>结构一律六面皮木头</b>（带朝向原木只在
+ * 锯断面出现）；连续曲干/空壳树冠等高级图元见 {@link Trunks}/{@link Canopy}，
+ * 本类保留小苗、根系、藤蔓、倒伏木等基础图元。
  */
 public final class Trees {
 
@@ -27,9 +23,9 @@ public final class Trees {
 
     // ============================ 树干 ============================
 
-    /** 竖直主干列：y0..y1 的 LOG(Y 轴)。 */
+    /** 竖直主干列：y0..y1 的皮木。 */
     public static void column(TreeStructure s, int x, int y0, int y1, int z) {
-        for (int y = y0; y <= y1; y++) s.put(x, y, z, Part.LOG, Axis.Y);
+        for (int y = y0; y <= y1; y++) s.put(x, y, z, Part.WOOD);
     }
 
     /** fp×fp 底面的粗主干（fp=1/2/3），占据 [0,fp) 的方格。 */
@@ -37,53 +33,6 @@ public final class Trees {
         for (int a = 0; a < fp; a++)
             for (int b = 0; b < fp; b++)
                 column(s, a, 0, height, b);
-    }
-
-    /** 逐层圆盘的锥形粗干（紧公式：r=1 时为 + 型，适合树干截面）。 */
-    public static void trunk(TreeStructure s, int height, int coreR, double taper) {
-        for (int dy = 0; dy <= height; dy++) {
-            double f = height == 0 ? 0 : (double) dy / height;
-            int r = Math.max(0, (int) Math.round(coreR * (1 - taper * f)));
-            trunkDisk(s, dy, r);
-        }
-    }
-
-    /** 树干截面盘（紧公式）。 */
-    public static void trunkDisk(TreeStructure s, int y, int r) {
-        if (r <= 0) { s.put(0, y, 0, Part.LOG, Axis.Y); return; }
-        double rr = r * r + 0.4;
-        for (int a = -r; a <= r; a++)
-            for (int b = -r; b <= r; b++)
-                if (a * a + b * b <= rr) s.put(a, y, b, Part.LOG, Axis.Y);
-    }
-
-    /**
-     * 带 1~2 处水平错位的“弯曲”单格干（金合欢/老橡树的姿态）。
-     * 错位处按规范放置：枢轴木头 + 横向原木 + 继续竖直原木。
-     * @return 顶端的 {x, z}
-     */
-    public static int[] crookedColumn(TreeStructure s, int height, int bends, Random rng) {
-        int x = 0, z = 0;
-        s.put(0, 0, 0, Part.LOG, Axis.Y);
-        // 选出错位高度（互不相邻）
-        boolean[] bendAt = new boolean[height + 1];
-        for (int i = 0; i < bends; i++) {
-            int y = 2 + rng.nextInt(Math.max(1, height - 3));
-            if (y + 1 <= height) bendAt[y] = true;
-        }
-        for (int y = 1; y <= height; y++) {
-            if (bendAt[y]) {
-                int dir = rng.nextInt(4);
-                int dx = dir == 0 ? 1 : dir == 1 ? -1 : 0;
-                int dz = dir == 2 ? 1 : dir == 3 ? -1 : 0;
-                s.put(x, y, z, Part.WOOD);                         // 枢轴
-                x += dx; z += dz;
-                s.put(x, y, z, Part.LOG, dx != 0 ? Axis.X : Axis.Z); // 横向一步
-            } else {
-                s.put(x, y, z, Part.LOG, Axis.Y);
-            }
-        }
-        return new int[]{x, z};
     }
 
     // ============================ 叶层 ============================
@@ -143,28 +92,6 @@ public final class Trees {
                         s.put(cx + a, cy + b, cz + c, Part.LEAF);
                     }
                 }
-    }
-
-    /** 金合欢式平顶冠：主层饱满盘 + 顶部小盘 + 边缘稀疏垂叶。 */
-    public static void flatCap(TreeStructure s, int cx, int cy, int cz, int r, Random rng) {
-        double rr = r * r + r * 0.8 + 0.4;
-        double inner = Math.max(0, (r - 1) * (r - 1));
-        for (int a = -r; a <= r; a++)
-            for (int b = -r; b <= r; b++) {
-                double dd = a * a + b * b;
-                if (dd > rr) continue;
-                s.put(cx + a, cy, cz + b, Part.LEAF);
-                if (dd > inner && rng.nextDouble() < 0.3) s.put(cx + a, cy - 1, cz + b, Part.LEAF);
-            }
-        if (r >= 2) leafDisk0(s, cx, cy + 1, cz, r - 2);
-    }
-
-    private static void leafDisk0(TreeStructure s, int cx, int y, int cz, int r) {
-        if (r < 0) return;
-        double rr = r * r + r * 0.8 + 0.4;
-        for (int a = -r; a <= r; a++)
-            for (int b = -r; b <= r; b++)
-                if (a * a + b * b <= rr) s.put(cx + a, y, cz + b, Part.LEAF);
     }
 
     // ============================ 根系 ============================
@@ -238,7 +165,7 @@ public final class Trees {
     // ============================ 枝条 ============================
 
     /**
-     * 一条木质枝：连续方向 + 3D 单轴步进 → 朝向原木；转折枢轴置木头；
+     * 一条木质枝：连续方向步进的皮木线（树库规范：树枝不露年轮），
      * 随距离按 droop 下垂；按 branchiness 递归分叉。末端坐标写入 tips（{x,y,z,order}）。
      */
     public static void branch(TreeStructure s, int sx, int sy, int sz,
@@ -247,8 +174,7 @@ public final class Trees {
                               Random rng, List<int[]> tips) {
         s.put(sx, sy, sz, Part.WOOD);
         double px = sx, py = sy, pz = sz;
-        int cx = sx, cy = sy, cz = sz, lx = sx, ly = sy, lz = sz;
-        Axis prev = null;
+        int cx = sx, cy = sy, cz = sz;
         int placed = 0, since = 0;
         for (int step = 0; step < length * 4 && placed < length; step++) {
             vy -= droop * 0.15;
@@ -258,19 +184,10 @@ public final class Trees {
             py += vy / len * 0.5;
             pz += vz / len * 0.5;
             int nx = (int) Math.round(px), ny = (int) Math.round(py), nz = (int) Math.round(pz);
-            while (cx != nx || cy != ny || cz != nz) {
-                int gx = nx - cx, gy = ny - cy, gz = nz - cz;
-                Axis ax;
-                if (Math.abs(gx) >= Math.abs(gy) && Math.abs(gx) >= Math.abs(gz) && gx != 0) { cx += Integer.signum(gx); ax = Axis.X; }
-                else if (Math.abs(gz) >= Math.abs(gy) && gz != 0) { cz += Integer.signum(gz); ax = Axis.Z; }
-                else if (gy != 0) { cy += Integer.signum(gy); ax = Axis.Y; }
-                else break;
-                if (prev != null && ax != prev) s.put(lx, ly, lz, Part.WOOD);
-                s.put(cx, cy, cz, Part.LOG, ax);
-                prev = ax;
-                lx = cx; ly = cy; lz = cz;
+            if (nx != cx || ny != cy || nz != cz) {
+                cx = nx; cy = ny; cz = nz;
+                s.put(cx, cy, cz, Part.WOOD);
                 placed++;
-                if (placed >= length) break;
             }
             since++;
             if (order < 3 && placed >= 2 && since >= 2 && rng.nextDouble() < branchiness * 0.3) {
@@ -322,13 +239,15 @@ public final class Trees {
         boolean giant = var.giant();
         int len = Math.max(4, (int) Math.round(sp.maxHeight() * 0.7 * scale));
 
-        // 树桩：短干 + 参差断口 + 根领 + 埋根
+        // 树桩：短干 + 参差断口（断面露年轮）+ 根领 + 埋根
         int stumpH = 1 + rng.nextInt(2) + (thick ? 1 : 0);
         int fp = thick ? 2 : 1;
-        thickTrunk(s, stumpH, fp);
+        thickTrunk(s, stumpH - 1, fp);
         for (int a = 0; a < fp; a++)
-            for (int b = 0; b < fp; b++)
+            for (int b = 0; b < fp; b++) {
+                s.put(a, stumpH, b, Part.LOG, Axis.Y);              // 断口年轮面
                 if (rng.nextDouble() < 0.5) s.put(a, stumpH + 1, b, Part.WOOD);
+            }
         rootCollar(s, fp);
         roots(s, 0, Math.max(2, sp.rootSpread()), rng);
 
