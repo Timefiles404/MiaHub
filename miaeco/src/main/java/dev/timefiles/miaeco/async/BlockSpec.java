@@ -14,7 +14,7 @@ import java.util.Set;
 public final class BlockSpec {
 
     /** 附加状态类型。 */
-    public enum State { NONE, AXIS, VINE_FACES, SLAB_TOP, SNOW_LAYERS, HALF_UPPER, STAIR, BUTTON, AGE }
+    public enum State { NONE, AXIS, VINE_FACES, SLAB_TOP, SNOW_LAYERS, HALF_UPPER, STAIR, BUTTON, AGE, LEVELLED }
 
     /** BUTTON 附着位置（aux 值）。 */
     public static final int ATTACH_FLOOR = 0;
@@ -73,5 +73,10 @@ public final class BlockSpec {
     /** 有生长阶段的方块（甜浆果丛等）：aux=age。 */
     public static BlockSpec aged(Material m, int age) {
         return new BlockSpec(m, State.AGE, null, null, null, Math.max(0, age));
+    }
+
+    /** 有液位/层级的方块（水等 Levelled）：aux=level（水 7=最薄流水层，配冻结更新成覆地水膜）。 */
+    public static BlockSpec levelled(Material m, int level) {
+        return new BlockSpec(m, State.LEVELLED, null, null, null, Math.max(0, level));
     }
 }

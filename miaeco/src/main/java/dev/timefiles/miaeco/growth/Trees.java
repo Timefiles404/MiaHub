@@ -279,6 +279,8 @@ public final class Trees {
                 s.put(cx, 0, cz, Part.LOG, ax);
                 if (thick) s.put(cx + px, 0, cz + pz, Part.LOG, ax);         // 第二排 → 2 宽
                 if (giant) s.put(cx, 1, cz, Part.LOG, ax);                   // 巨木再叠一层
+                // 每隔几格向下垫一格残枝抵地：坡地上倒干不再整段悬空
+                if (placed % 3 == 1) s.put(cx, -1, cz, Part.WOOD);
                 double f = placed / (double) len;
                 if (rng.nextDouble() < 0.18) {                               // 残枝突起
                     s.put(cx, 1 + (giant ? 1 : 0), cz, Part.WOOD);

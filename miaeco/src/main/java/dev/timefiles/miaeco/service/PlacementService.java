@@ -11,7 +11,9 @@ import dev.timefiles.miaeco.placement.PoissonDiskSampler;
 import dev.timefiles.miaeco.placement.SuitabilityEvaluator;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -46,53 +48,114 @@ public final class PlacementService {
         List<TreeSpecies> speciesList = new ArrayList<>(forest.species().values());
         if (speciesList.isEmpty()) return List.of();
 
-        // 采样间距取所有树种中的最小 spacing，密度冲突交给适宜度/概率解决
-        double minSpacing = speciesList.stream().mapToDouble(TreeSpecies::spacing).min().orElse(5.0);
+        // 采样间距取所有树种中的最小 spacing（细粒度候选网），
+        // 真正的树间距由下方 per-species 空间哈希强制。
+        double minSpacing = Math.max(1.5,
+                speciesList.stream().mapToDouble(TreeSpecies::spacing).min().orElse(5.0));
 
-        // 森林名 + 区域派生一个稳定的基准种子，保证同一片森林重复放置结果可复现
         long forestSeed = ((long) forest.name().hashCode() << 32)
                 ^ ((long) region.minX() * 73856093) ^ ((long) region.minZ() * 19349663);
-        Random rng = new Random(forestSeed);
+        // 用已有树数做盐：再次 plant 是“补植”——既有树占位，新一轮换一套随机数填空隙
+        Random rng = new Random(forestSeed ^ (forest.trees().size() * 0x9E3779B97F4A7C15L));
+
+        // 空间占用哈希：既有树先入场（补植不会贴着旧树种）
+        Map<Long, List<double[]>> occupied = new HashMap<>();
+        for (TreeInstance t : forest.trees()) {
+            TreeSpecies sp = forest.species(t.speciesId());
+            double spc = sp == null ? 4 : sp.spacing();
+            if (t.isPrefab()) spc = Math.max(spc, 10);   // 地标古树领域更大
+            occupy(occupied, t.x(), t.z(), spc);
+        }
 
         List<double[]> points = PoissonDiskSampler.sample(
                 snap.width(), snap.depth(), minSpacing, maxCandidates, rng);
 
         List<TreeInstance> planted = new ArrayList<>();
-        // 候选点评估可并行，但泊松点数通常不大且需要确定性顺序，这里顺序处理保证可复现
+        double[] w = new double[speciesList.size()];
         for (double[] p : points) {
             int lx = (int) p[0];
             int lz = (int) p[1];
-
-            // 在该点选出得分最高的适宜树种
-            TreeSpecies best = null;
-            double bestScore = 0;
-            for (TreeSpecies sp : speciesList) {
-                double sc = SuitabilityEvaluator.score(snap, sp, lx, lz);
-                if (sc > bestScore) {
-                    bestScore = sc;
-                    best = sp;
-                }
-            }
-            if (best == null) continue;
-
             int wx = region.minX() + lx;
             int wz = region.minZ() + lz;
 
-            // 概率接受：适宜度 × 树种密度 × 密度噪声场（疏密不均） × 森林密度倍率
+            // 每个树种的权重 = 适宜度 × 密度；总权重驱动接受率，占比驱动混植
+            double total = 0;
+            for (int i = 0; i < speciesList.size(); i++) {
+                w[i] = SuitabilityEvaluator.score(snap, speciesList.get(i), lx, lz)
+                        * Math.max(0, speciesList.get(i).density());
+                total += w[i];
+            }
+            if (total <= 0) continue;
+
             double noise = valueNoise(forestSeed, wx, wz);              // 0..1
-            double accept = bestScore * best.density() * (0.55 + 0.9 * noise) * forest.densityScale();
+            double accept = Math.min(0.95, total) * (0.55 + 0.9 * noise) * forest.densityScale();
             if (rng.nextDouble() > accept) continue;
 
+            // 按权重抽树种；间距不满足则退下一候选——小间距灌木能钻进乔木间隙
+            TreeSpecies chosen = null;
+            double chosenScore = 0;
+            boolean[] used = new boolean[w.length];
+            double left = total;
+            for (int tries = 0; tries < w.length && left > 0; tries++) {
+                double r = rng.nextDouble() * left;
+                int pick = -1;
+                for (int i = 0; i < w.length; i++) {
+                    if (used[i] || w[i] <= 0) continue;
+                    r -= w[i];
+                    if (r <= 0) { pick = i; break; }
+                }
+                if (pick < 0) break;
+                TreeSpecies cand = speciesList.get(pick);
+                if (spacingOk(occupied, wx, wz, cand.spacing())) {
+                    chosen = cand;
+                    chosenScore = w[pick] / Math.max(1e-9, cand.density());
+                    break;
+                }
+                used[pick] = true;
+                left -= w[pick];
+            }
+            if (chosen == null) continue;
+
             int wy = snap.surfaceYLocal(lx, lz) + 1; // 种在表面之上一格
-            long treeSeed = mix(forestSeed, wx, wz);
+            long treeSeed = mix(forestSeed, wx, wz) ^ forest.trees().size();
             TreeInstance t = new TreeInstance(
-                    UUID.nameUUIDFromBytes((forest.name() + ":" + wx + ":" + wz).getBytes()),
-                    best.id(), region.world(), wx, wy, wz, treeSeed);
-            t.vigor(bestScore);   // 地形适宜度 → 生长活力（好地长得快）
+                    UUID.nameUUIDFromBytes((forest.name() + ":" + wx + ":" + wz + ":"
+                            + forest.trees().size()).getBytes()),
+                    chosen.id(), region.world(), wx, wy, wz, treeSeed);
+            t.vigor(chosenScore);   // 地形适宜度 → 生长活力（好地长得快）
             planted.add(t);
+            occupy(occupied, wx, wz, chosen.spacing());
         }
         promoteLandmarks(planted, forest);
         return planted;
+    }
+
+    // ---- per-species 间距的空间哈希（cell=8 格） ----
+
+    private static long occKey(int cx, int cz) {
+        return (((long) cx) << 32) ^ (cz & 0xffffffffL);
+    }
+
+    private static void occupy(Map<Long, List<double[]>> occ, int x, int z, double spacing) {
+        occ.computeIfAbsent(occKey(Math.floorDiv(x, 8), Math.floorDiv(z, 8)),
+                k -> new ArrayList<>()).add(new double[]{x, z, spacing});
+    }
+
+    /** 与任一近邻的距离必须 ≥ 两者较大 spacing × 0.8。 */
+    private static boolean spacingOk(Map<Long, List<double[]>> occ, int x, int z, double spacing) {
+        int cx = Math.floorDiv(x, 8), cz = Math.floorDiv(z, 8);
+        for (int gx = cx - 2; gx <= cx + 2; gx++) {
+            for (int gz = cz - 2; gz <= cz + 2; gz++) {
+                List<double[]> cell = occ.get(occKey(gx, gz));
+                if (cell == null) continue;
+                for (double[] o : cell) {
+                    double need = Math.max(spacing, o[2]) * 0.8;
+                    double dx = o[0] - x, dz = o[1] - z;
+                    if (dx * dx + dz * dz < need * need) return false;
+                }
+            }
+        }
+        return true;
     }
 
     /**

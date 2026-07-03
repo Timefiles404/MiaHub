@@ -161,6 +161,11 @@ public final class AsyncWorldEditor {
                     a.setAge(Math.min(a.getMaximumAge(), spec.aux));
                 }
             }
+            case LEVELLED -> {
+                if (data instanceof org.bukkit.block.data.Levelled l) {
+                    l.setLevel(Math.min(l.getMaximumLevel(), spec.aux));
+                }
+            }
             case BUTTON -> {
                 if (data instanceof FaceAttachable fa) {
                     fa.setAttachedFace(switch (spec.aux) {

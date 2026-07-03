@@ -204,13 +204,13 @@ public final class StampLibrary {
                     });
                 }
                 case "leaves" -> spec(mat(p[1] + "_LEAVES"));
-                case "planks" -> spec(mat(p[1] + "_PLANKS"));
+                case "planks" -> spec(mat(darkWood(p[1]) + "_PLANKS"));
                 case "fence" -> spec(mat(p[1] + "_FENCE"));
                 case "slab" -> {
-                    Material m = mat(p[1] + "_SLAB");
+                    Material m = mat(remapSlab(p[1]) + "_SLAB");
                     yield m == null ? null : ("top".equals(p[2]) ? BlockSpec.slabTop(m) : BlockSpec.of(m));
                 }
-                case "block" -> spec(mat(p[1]));
+                case "block" -> spec(mat("sandstone".equals(p[1]) ? "PACKED_MUD" : p[1]));
                 case "pane" -> "clear".equals(p[1]) ? BlockSpec.of(Material.GLASS_PANE)
                         : spec(mat(p[1] + "_STAINED_GLASS_PANE"));
                 case "plant" -> spec(mat(p[1]));
@@ -241,7 +241,7 @@ public final class StampLibrary {
                             "x".equals(p[2]) ? Axis.X : "z".equals(p[2]) ? Axis.Z : Axis.Y);
                 }
                 case "stair" -> {
-                    Material m = mat(p[1] + "_STAIRS");
+                    Material m = mat(remapSlab(p[1]) + "_STAIRS");
                     BlockFace f = letterFace(p[2]);
                     yield m == null || f == null ? null : BlockSpec.stair(m, f, "top".equals(p[3]));
                 }
@@ -275,6 +275,19 @@ public final class StampLibrary {
             case "e" -> BlockFace.EAST;
             case "w" -> BlockFace.WEST;
             default -> null;
+        };
+    }
+
+    /** 木板色调收紧：浅色木板发白不衬树干，只保留深色橡木/云杉两种。 */
+    private static String darkWood(String sp) {
+        return "dark_oak".equals(sp) ? "dark_oak" : "spruce";
+    }
+
+    /** 台阶/楼梯的木种同样收紧；石质（smooth_stone 等）原样保留。 */
+    private static String remapSlab(String sp) {
+        return switch (sp) {
+            case "oak", "birch", "jungle", "acacia" -> "spruce";
+            default -> sp;
         };
     }
 }

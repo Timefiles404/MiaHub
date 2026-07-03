@@ -85,7 +85,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         msg(s, "/miaeco forest density <名称> [倍率]", "查看/设置相对密度倍率");
         msg(s, "/miaeco species add|remove <森林> <树种id>", "添加/移除树种（remove 连树一起清）");
         msg(s, "/miaeco species replace <森林> <旧id> <新id>", "原位替换树种（保留每棵树位置/年龄）");
-        msg(s, "/miaeco species density <森林> <id> [0~2]", "查看/设置单个树种密度");
+        msg(s, "/miaeco species density <森林> <id> [0~5]", "查看/设置单个树种密度");
         msg(s, "/miaeco species list <森林>", "查看树种");
         msg(s, "/miaeco plant <森林> [instant]", "异步选点种植；instant=直接生成混龄成熟森林");
         msg(s, "/miaeco grow <森林>", "异步生长/重建待更新的树");
@@ -418,20 +418,20 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 });
             }
             case "density" -> {
-                if (args.length < 4) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco species density <森林> <树种id> [0~2]"); return; }
+                if (args.length < 4) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco species density <森林> <树种id> [0~5]"); return; }
                 Forest f = eco.forest(args[2]);
                 if (f == null) { sender.sendMessage(P + ChatColor.RED + "森林不存在。"); return; }
                 TreeSpecies sp = f.species(args[3].toLowerCase(Locale.ROOT));
                 if (sp == null) { sender.sendMessage(P + ChatColor.RED + "该森林没有此树种。"); return; }
                 if (args.length < 5) {
-                    sender.sendMessage(P + ChatColor.GRAY + sp.id() + " 当前密度: " + sp.density());
+                    sender.sendMessage(P + ChatColor.GRAY + sp.id() + " 当前密度: " + sp.density()
+                            + " 间距: " + sp.spacing());
                     return;
                 }
                 try {
-                    double v = Math.max(0, Math.min(2, Double.parseDouble(args[4])));
-                    sp.density(v);
-                    sender.sendMessage(P + ChatColor.GREEN + sp.id() + " 密度 = " + v
-                            + ChatColor.GRAY + "（下次 plant 生效；bush/palm 配高密度可成小片林）");
+                    sp.density(Double.parseDouble(args[4]));
+                    sender.sendMessage(P + ChatColor.GREEN + sp.id() + " 密度 = " + sp.density()
+                            + ChatColor.GRAY + "（下次 plant 生效；高密度配小 spacing 可成灌木海）");
                 } catch (NumberFormatException e) {
                     sender.sendMessage(P + ChatColor.RED + "密度必须是数字。");
                 }
@@ -652,6 +652,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                     dev.timefiles.miaeco.atmosphere.AtmosphereTheme.ids().toArray(new String[0]));
             else if (a0.equals("atmo") && a1.equals("feature")) addMatches(out, args[3],
                     dev.timefiles.miaeco.atmosphere.AtmosphereSettings.FEATURES.toArray(new String[0]));
+            else if (a0.equals("species") && a1.equals("add")) addMatches(out, args[3],
+                    dev.timefiles.miaeco.model.TreeArchetype.KNOWN.toArray(new String[0]));
             else if (a0.equals("species") && (a1.equals("remove") || a1.equals("replace") || a1.equals("density"))) {
                 Forest f = eco.forest(args[2]);
                 if (f != null) addMatches(out, args[3], f.species().keySet().toArray(new String[0]));
@@ -660,7 +662,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             String a0 = args[0].toLowerCase(Locale.ROOT);
             String a1 = args[1].toLowerCase(Locale.ROOT);
             if (a0.equals("atmo") && a1.equals("feature")) addMatches(out, args[4], "0", "0.5", "1", "1.5", "2");
-            else if (a0.equals("species") && a1.equals("density")) addMatches(out, args[4], "0.3", "0.7", "1.0", "1.5", "2");
+            else if (a0.equals("species") && a1.equals("density")) addMatches(out, args[4], "0.3", "0.7", "1.0", "1.5", "2", "3", "4");
             else if (a0.equals("species") && a1.equals("replace")) addMatches(out, args[4],
                     dev.timefiles.miaeco.model.TreeArchetype.KNOWN.toArray(new String[0]));
         }

@@ -103,14 +103,29 @@ public final class TreeSpecies {
     public List<Material> canopyBlocks() { return canopyBlocks; }
     public TreeSpecies canopyBlocks(List<Material> l) { this.canopyBlocks = l == null ? List.of() : List.copyOf(l); return this; }
 
-    public Material plankMaterial() { return plankMaterial != null ? plankMaterial : derive(logMaterial, "_PLANKS", Material.OAK_PLANKS); }
+    public Material plankMaterial() {
+        return plankMaterial != null ? plankMaterial
+                : (darkToned(logMaterial) ? Material.DARK_OAK_PLANKS : Material.SPRUCE_PLANKS);
+    }
     public TreeSpecies plankMaterial(Material m) { this.plankMaterial = m; return this; }
 
     public Material fenceMaterial() { return fenceMaterial != null ? fenceMaterial : derive(logMaterial, "_FENCE", Material.OAK_FENCE); }
     public TreeSpecies fenceMaterial(Material m) { this.fenceMaterial = m; return this; }
 
-    public Material slabMaterial() { return slabMaterial != null ? slabMaterial : derive(logMaterial, "_SLAB", Material.OAK_SLAB); }
+    public Material slabMaterial() {
+        return slabMaterial != null ? slabMaterial
+                : (darkToned(logMaterial) ? Material.DARK_OAK_SLAB : Material.SPRUCE_SLAB);
+    }
     public TreeSpecies slabMaterial(Material m) { this.slabMaterial = m; return this; }
+
+    /**
+     * 木板/台阶质感层只允许深色橡木与云杉两种色调（浅色木板发白，贴在树干上出戏）：
+     * 深色系原木配深色橡木板，其余一律云杉板。
+     */
+    private static boolean darkToned(Material log) {
+        String n = log.name();
+        return n.startsWith("DARK_OAK") || n.startsWith("MANGROVE") || n.startsWith("CRIMSON");
+    }
 
     public List<Material> flowers() { return flowers; }
     public TreeSpecies flowers(List<Material> l) { if (l != null && !l.isEmpty()) this.flowers = List.copyOf(l); return this; }
@@ -212,7 +227,7 @@ public final class TreeSpecies {
     public TreeSpecies spacing(double v) { this.spacing = v; return this; }
 
     public double density() { return density; }
-    public TreeSpecies density(double v) { this.density = v; return this; }
+    public TreeSpecies density(double v) { this.density = Math.max(0, Math.min(5, v)); return this; }
 
     public Set<Material> surfaceWhitelist() { return surfaceWhitelist; }
     public TreeSpecies surfaceWhitelist(Set<Material> s) { this.surfaceWhitelist = s; return this; }

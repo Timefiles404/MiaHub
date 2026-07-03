@@ -107,6 +107,7 @@ public final class TreeDumpTool {
             case SNOW_LAYERS -> "s" + s.aux;
             case HALF_UPPER -> "up";
             case AGE -> "a" + s.aux;
+            case LEVELLED -> "l" + s.aux;
             case STAIR -> (s.facing == null ? "" : s.facing.name().substring(0, 1).toLowerCase())
                     + (s.aux == 1 ? "_top" : "");
             case BUTTON -> switch (s.aux) {

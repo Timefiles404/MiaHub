@@ -25,7 +25,7 @@ import java.util.Random;
  */
 public final class AtmoDumpTool {
 
-    private static final int W = 120, D = 120, BASE = 64;
+    private static final int W = 160, D = 160, BASE = 64;
 
     private AtmoDumpTool() { }
 
@@ -47,17 +47,21 @@ public final class AtmoDumpTool {
         for (int z = 0; z < D; z++) {
             for (int x = 0; x < W; x++) {
                 int i = z * W + x;
-                double h = 3.5 * Math.sin(x / 16.0) + 2.5 * Math.cos(z / 19.0)
+                double h = 4.5 * Math.sin(x / 21.0) + 3.5 * Math.cos(z / 24.0)
                         + 1.8 * hash01(7, x / 6, z / 6);
+                // 一条贯穿东西的蜿蜒山谷（河流走廊）：谷底比两侧低 4~5 格
+                double valleyZ = 92 + 20 * Math.sin(x / 34.0);
+                double vd = Math.abs(z - valleyZ);
+                h -= 5.0 * Math.exp(-(vd * vd) / (2 * 9.0 * 9.0));
                 groundY[i] = BASE + (int) Math.round(h);
                 ground[i] = hash01(13, x, z) < 0.12 ? Material.DIRT : Material.GRASS_BLOCK;
                 valid[i] = true;
             }
         }
-        // 湖泊：中心 (88,30) r≈7，水面低于岸线
+        // 湖泊：中心 (118,30) r≈7，水面低于岸线
         for (int z = 0; z < D; z++) {
             for (int x = 0; x < W; x++) {
-                double d = Math.hypot(x - 88, z - 30);
+                double d = Math.hypot(x - 118, z - 30);
                 if (d < 7.5) {
                     int i = z * W + x;
                     water[i] = true;
@@ -67,13 +71,13 @@ public final class AtmoDumpTool {
                 }
             }
         }
-        // 假树：45 棵，树冠圆斑 + 树基保护
+        // 假树：70 棵，树冠圆斑 + 树基保护
         Random rng = new Random(20260704);
         List<int[]> bases = new ArrayList<>();
-        for (int t = 0; t < 45; t++) {
+        for (int t = 0; t < 70; t++) {
             int tx = 4 + rng.nextInt(W - 8);
             int tz = 4 + rng.nextInt(D - 8);
-            if (Math.hypot(tx - 88, tz - 30) < 10) continue;
+            if (Math.hypot(tx - 118, tz - 30) < 10) continue;
             int r = 1 + (rng.nextInt(5) == 0 ? 1 : 0);
             bases.add(new int[]{tx, tz, r});
             int cr = 3 + rng.nextInt(3);

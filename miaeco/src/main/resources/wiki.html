@@ -48,10 +48,17 @@
 <tr><td><code>/miaeco advance &lt;森林&gt; &lt;月&gt;</code></td><td>推进演替</td></tr>
 <tr><td><code>/miaeco atmo set &lt;森林&gt; &lt;主题&gt;</code></td><td>设置氛围主题（<code>atmo themes</code> 列出全部 8 种）</td></tr>
 <tr><td><code>/miaeco atmo apply | clear | info &lt;森林&gt;</code></td><td>铺开氛围 / 精确恢复原地形 / 查看设置</td></tr>
-<tr><td><code>/miaeco atmo feature &lt;森林&gt; &lt;特征&gt; &lt;0~3&gt;</code></td><td>单项强度：groundcover/water/paths/soil/rocks/ruins（0=关）</td></tr>
+<tr><td><code>/miaeco atmo feature &lt;森林&gt; &lt;特征&gt; &lt;0~3&gt;</code></td><td>单项强度：river/groundcover/water/paths/soil/rocks/ruins（0=关）</td></tr>
 <tr><td><code>/miaeco clear &lt;森林&gt;</code></td><td>清除该森林所有树方块</td></tr>
 <tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（147 棵建筑师设计树）</td></tr>
 </table>
+
+<h2>0.8.0 河流与大型地物</h2>
+<p><b>河流（氛围最优先特征）：</b>A* 沿低谷走廊自动择线——对两组对边低点各搜一条走廊，取<b>逆流爬升率</b>更低者；没有真正的谷地（率超阈值）就退化为 2~3 个雕刻小水潭，绝不硬穿山。沿线雕出宽 2~4、中线深 2 的河槽（最多动 3~4 层地表），水位单调下行、被迫深挖超限自动截断并以水湾收尾（不突兀截流）；<b>淤泥/黏土/砂砾河床 + 深槽水草 + 苔石岸线</b>，两端椭圆水湾，雪原整面结冰。河水并入湿度场：垂滴叶、苔毯、芦苇会自发聚向河岸。</p>
+<p><b>枯树天然桥：</b>每条河 1~2 座——窄河段上横跨的深色倒木（云杉/深橡原木），苔毯覆背、垂根挂底、偶有菌菇。<b>滚石巨岩：</b>岩石特征 15%（坡脚加倍）升级为 2~4 格径的实心椭球巨石，底层嵌地、阴面披苔，像从山上滚落的。</p>
+<p><b>小路升级为 A* 成本寻路：</b>坡度/水体/冠层惩罚 + 噪声扰动，小径自动沿等高线与谷缘绕行、避水绕树，坡面放楼梯坡道、平段撒踏石。<b>积水新增覆地薄水膜</b>：近水平地铺 level=7 最薄水层（冻结更新），湿地滩涂质感；水潭获得泥/黏土潭底、深潭水草、潭缘卵石。</p>
+<p><b>选点重构：</b>多树种按 <b>适宜度×密度 加权混植</b>（修复了并列评分时首树种垄断、再次 plant 不进新树种的问题）；再次 plant 成为<b>补植</b>——旧树占位、新一轮填空隙；树间距按各自树种 spacing 空间哈希强制（小间距灌木能钻进乔木间隙）；species density 上限放宽到 5，高密度+小 spacing=灌木海。</p>
+<p><b>色调修缮：</b>树体木板/台阶/楼梯一律深色橡木或云杉（浅色木板出戏），预制树同步重映射，砂岩改夯泥；灌木不再上台阶缘；倒伏木每隔数格向下垫残枝抵地，坡地不悬空。</p>
 
 <h2>森林氛围（0.7.0）</h2>
 <p>森林不再只有树，而是一个有机生态：<code>atmo set</code> 选主题 → <code>atmo apply</code> 一键铺开<b>六类特征</b>，分布全部由地形参数自然控制（坡度/湿度/树冠荫蔽/树基保护），写入前逐格记录原方块，<code>atmo clear</code> 可精确恢复：</p>
