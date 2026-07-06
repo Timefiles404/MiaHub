@@ -34,7 +34,8 @@ public record AtmosphereTheme(
         double deepPool,             // 洼地扩成 2 层深水的概率
         boolean frozen,              // 水面结冰（雪原）
         double lilyPad,              // 水面睡莲概率
-        double riverStrength         // 河流基准强度（找不到好走廊时退化为水潭）
+        double riverStrength,        // 河流基准强度（找不到好走廊时退化为水潭）
+        double waterFlora            // 水生植株丰富度 0..1（荷花/芦苇/浮水/沉水/驳岸植被）
 ) {
 
     /**
@@ -90,7 +91,7 @@ public record AtmosphereTheme(
                         Material.COARSE_DIRT, Material.GRAVEL},
                 new Material[]{Material.COBBLESTONE, Material.MOSSY_COBBLESTONE, Material.STONE},
                 MOSSY, 0.35, false, BRICK3, true,
-                0.30, 0.25, 0.45, 0.5, 0.15, 0.25, false, 0.10, 0.5));
+                0.30, 0.25, 0.45, 0.5, 0.15, 0.25, false, 0.10, 0.5, 0.65));
 
         reg(new AtmosphereTheme("rainforest", "雨林",
                 List.of(pe("fern", 2.2), pe("large_fern", 1.2), pe("short_grass", 1.0),
@@ -107,7 +108,7 @@ public record AtmosphereTheme(
                         Material.STONE, Material.COBBLESTONE}, 0.7, true,
                 new Material[]{Material.MOSSY_STONE_BRICKS, Material.MOSSY_STONE_BRICKS,
                         Material.CRACKED_STONE_BRICKS}, true,
-                0.55, 0.55, 0.25, 0.4, 0.30, 0.45, false, 0.18, 0.85));
+                0.55, 0.55, 0.25, 0.4, 0.30, 0.45, false, 0.18, 0.85, 1.0));
 
         reg(new AtmosphereTheme("savanna", "稀树草原",
                 List.of(pe("short_grass", 3.5), pe("tall_grass", 1.6),
@@ -117,7 +118,7 @@ public record AtmosphereTheme(
                 new Material[]{Material.DIRT_PATH, Material.DIRT_PATH, Material.COARSE_DIRT,
                         Material.COARSE_DIRT, Material.PACKED_MUD},
                 new Material[]{}, STONY, 0.05, false, BRICK3, false,
-                0.40, 0.30, 0.45, 0.35, 0.08, 0.5, false, 0.05, 0.45));
+                0.40, 0.30, 0.45, 0.35, 0.08, 0.5, false, 0.05, 0.45, 0.30));
 
         reg(new AtmosphereTheme("taiga", "北方针叶",
                 List.of(pe("fern", 2.2), pe("large_fern", 1.0), pe("short_grass", 1.2),
@@ -132,7 +133,7 @@ public record AtmosphereTheme(
                 MOSSY, 0.5, false,
                 new Material[]{Material.MOSSY_STONE_BRICKS, Material.STONE_BRICKS,
                         Material.CRACKED_STONE_BRICKS}, true,
-                0.40, 0.20, 0.35, 0.6, 0.12, 0.3, false, 0.08, 0.55));
+                0.40, 0.20, 0.35, 0.6, 0.12, 0.3, false, 0.08, 0.55, 0.45));
 
         reg(new AtmosphereTheme("swamp", "沼泽湿地",
                 List.of(pe("short_grass", 1.5), pe("tall_grass", 0.8), pe("fern", 0.6),
@@ -147,7 +148,7 @@ public record AtmosphereTheme(
                         Material.COBBLESTONE}, 0.8, true,
                 new Material[]{Material.MOSSY_STONE_BRICKS, Material.MOSSY_STONE_BRICKS,
                         Material.CRACKED_STONE_BRICKS}, true,
-                0.45, 0.80, 0.15, 0.25, 0.35, 0.55, false, 0.25, 0.9));
+                0.45, 0.80, 0.15, 0.25, 0.35, 0.55, false, 0.25, 0.9, 1.0));
 
         reg(new AtmosphereTheme("snowy", "雪原针叶",
                 List.of(pe("snow_patch", 3.0), pe("fern", 0.5), dry("dead_bush", 0.10, 0.4),
@@ -160,7 +161,7 @@ public record AtmosphereTheme(
                         Material.COBBLESTONE}, 0.0, false,
                 new Material[]{Material.STONE_BRICKS, Material.STONE_BRICKS,
                         Material.CRACKED_STONE_BRICKS}, false,
-                0.35, 0.15, 0.30, 0.5, 0.10, 0.2, true, 0.0, 0.35));
+                0.35, 0.15, 0.30, 0.5, 0.10, 0.2, true, 0.0, 0.35, 0.0));
 
         reg(new AtmosphereTheme("cherry", "樱花园",
                 List.of(pe("pink_petals", 2.6), pe("short_grass", 2.0),
@@ -176,7 +177,7 @@ public record AtmosphereTheme(
                 0.25, false,
                 new Material[]{Material.STONE_BRICKS, Material.MOSSY_STONE_BRICKS,
                         Material.CHISELED_STONE_BRICKS}, false,
-                0.35, 0.30, 0.70, 0.35, 0.20, 0.3, false, 0.15, 0.4));
+                0.35, 0.30, 0.70, 0.35, 0.20, 0.3, false, 0.15, 0.4, 0.85));
 
         reg(new AtmosphereTheme("autumn", "金秋落叶",
                 List.of(pe("short_grass", 1.6), pe("fern", 0.8),
@@ -190,6 +191,6 @@ public record AtmosphereTheme(
                         Material.GRAVEL},
                 new Material[]{Material.COBBLESTONE, Material.MOSSY_COBBLESTONE, Material.STONE},
                 MOSSY, 0.4, false, BRICK3, true,
-                0.35, 0.20, 0.50, 0.45, 0.20, 0.25, false, 0.10, 0.5));
+                0.35, 0.20, 0.50, 0.45, 0.20, 0.25, false, 0.10, 0.5, 0.55));
     }
 }

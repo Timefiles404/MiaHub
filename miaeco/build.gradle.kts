@@ -27,4 +27,8 @@ tasks.register<JavaExec>("dumpAtmo") {
         provider { project.configurations["compileClasspath"] }
     )
     args(layout.buildDirectory.dir("atmodump").get().asFile.absolutePath)
+    // -Pmiaeco.debugRiver=1 时向 stderr 输出河道走廊/成河诊断
+    if (project.hasProperty("miaeco.debugRiver")) {
+        jvmArgs("-Dmiaeco.debugRiver=1")
+    }
 }

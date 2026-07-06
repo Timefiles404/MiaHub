@@ -126,6 +126,9 @@ public final class AsyncWorldEditor {
         if (data instanceof Leaves leaves) {
             leaves.setPersistent(true);
         }
+        if (spec.waterlogged && data instanceof org.bukkit.block.data.Waterlogged wl) {
+            wl.setWaterlogged(true);
+        }
         switch (spec.state) {
             case AXIS -> {
                 if (data instanceof Orientable o && spec.axis != null) o.setAxis(spec.axis);
@@ -164,6 +167,20 @@ public final class AsyncWorldEditor {
             case LEVELLED -> {
                 if (data instanceof org.bukkit.block.data.Levelled l) {
                     l.setLevel(Math.min(l.getMaximumLevel(), spec.aux));
+                }
+            }
+            case PICKLES -> {
+                if (data instanceof org.bukkit.block.data.type.SeaPickle sp) {
+                    sp.setPickles(Math.max(sp.getMinimumPickles(),
+                            Math.min(sp.getMaximumPickles(), spec.aux)));
+                }
+            }
+            case PETALS -> {
+                if (data instanceof org.bukkit.block.data.type.PinkPetals pp) {
+                    pp.setFlowerAmount(Math.max(1, Math.min(pp.getMaximumFlowerAmount(), spec.aux)));
+                }
+                if (spec.facing != null && data instanceof Directional dir) {
+                    dir.setFacing(spec.facing);
                 }
             }
             case BUTTON -> {

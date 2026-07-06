@@ -101,13 +101,15 @@ public final class TreeDumpTool {
     }
 
     static String stateTag(BlockSpec s) {
-        return switch (s.state) {
+        String tag = switch (s.state) {
             case AXIS -> s.axis == null ? "" : s.axis.name().toLowerCase();
             case SLAB_TOP -> "top";
             case SNOW_LAYERS -> "s" + s.aux;
             case HALF_UPPER -> "up";
             case AGE -> "a" + s.aux;
             case LEVELLED -> "l" + s.aux;
+            case PICKLES -> "p" + s.aux;
+            case PETALS -> "f" + s.aux;
             case STAIR -> (s.facing == null ? "" : s.facing.name().substring(0, 1).toLowerCase())
                     + (s.aux == 1 ? "_top" : "");
             case BUTTON -> switch (s.aux) {
@@ -128,5 +130,6 @@ public final class TreeDumpTool {
             }
             case NONE -> "";
         };
+        return s.waterlogged ? tag + "~w" : tag;
     }
 }

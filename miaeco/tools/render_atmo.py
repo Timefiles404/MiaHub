@@ -50,6 +50,19 @@ COLORS = {
     "VINE": (58, 108, 44),
     "BROWN_MUSHROOM": (150, 112, 80),
     "RED_MUSHROOM": (200, 60, 50),
+    # ---- 0.10.0 水生植株 / 驳岸 / 汀步 ----
+    "AZALEA_LEAVES": (116, 162, 62),
+    "FLOWERING_AZALEA_LEAVES": (178, 138, 176),
+    "SEA_PICKLE": (196, 202, 106),
+    "KELP_PLANT": (30, 92, 46),
+    "TALL_SEAGRASS": (40, 122, 62),
+    "GREEN_STAINED_GLASS_PANE": (72, 102, 56),
+    "LIME_STAINED_GLASS_PANE": (132, 192, 72),
+    "HORN_CORAL": (206, 196, 84),
+    "MOSSY_STONE_BRICKS": (120, 132, 100),
+    "STONE_BRICKS": (152, 150, 144),
+    "DEAD_BUSH": (150, 118, 68),
+    "SHORT_GRASS": (110, 180, 84),
 }
 
 

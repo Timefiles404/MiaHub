@@ -56,6 +56,8 @@ public final class AtmoDumpTool {
                 // 封闭盆地（验证盆地湖）：碗形凹陷，四周丘陵合拢、水填满不外流
                 double bd = Math.hypot(x - 44, z - 40);
                 h -= 5.5 * Math.exp(-(bd * bd) / (2 * 6.0 * 6.0));
+                // 贯谷断层崖（验证瀑布跌水）：x=99→100 骤降 3.5，东侧整体 -4.5
+                h += x < 99 ? 0 : x == 99 ? -1 : -4.5;
                 // 两座平顶山（验证山侧月牙塘）：顶缘外向 3 格骤降 ≥4
                 h += mesa(x, z, 128, 122, 7, 10, 10);
                 h += mesa(x, z, 36, 130, 7, 10, 10);
@@ -131,6 +133,7 @@ public final class AtmoDumpTool {
 
             List<String> runs = new ArrayList<>(AtmosphereTheme.ids());
             runs.add("temperate!boost");     // 小测试区里放大岩石/遗迹强度做外观验证
+            runs.add("temperate!river3");    // 中强度真实水文式（支流/瀑布/驳岸/植株）
             runs.add("rainforest!river5");   // 河流 density=5 的 fierce 档验证
             runs.add("swamp!river5");
             for (String run : runs) {
@@ -146,6 +149,8 @@ public final class AtmoDumpTool {
                     st.density("paths", 2);
                 } else if (mode.equals("river5")) {
                     st.density("river", 5);
+                } else if (mode.equals("river3")) {
+                    st.density("river", 3);
                 }
                 List<BlockEdit> edits = AtmosphereGenerator.generate(snap, th, st, 987654321L, bases);
                 String label = mode.isEmpty() ? id : id + "_" + mode;
