@@ -153,19 +153,25 @@ MiaEco 是 MiaHub monorepo（`Timefiles404/MiaHub`）里的一个 Paper 1.21.x /
 
 ## 当前阶段状态
 
-**地物氛围阶段重新展开**（0.9.0 后用户判定 ~80%，河流与特殊地物需继续完善）。
-0.10.0 完成河流算法重做 + 自然驳岸 + 水生植株 + 汀步。
-**用户明确的后续方向**：河周特殊地物继续加料（河心洲/沙洲、砾石滩、倒木堆等）、
-其他区域特殊地物（岩拱/石柱林/洞穴天坑/温泉/巨石阵等）——具体做法等用户指示。
+**地物氛围阶段**推进至 0.14.0（河流水文/驳岸/植株/簇聚落/冲刷/山体硬化/地表 v2 已成体系）。
+**下一阶段两条线已完成调研与设计**（见 `docs/settlement-terrain-design.md`）：
+- **人烟首版（建议 0.15.x）**：Epic Villages 152 件 NBT（已解包盘点，
+  `references/epic-villages/nbt_inventory.json`）+ 自研地形自适应 jigsaw 拼装器 +
+  村内街道/村外 A* 接路 + 程序化院落地基；整屋程序化评估为高风险，先不做。
+- **真实地形生成（mia-terrain 模块）**：terrain-diffusion-mc 已是纯 Java+ONNX 全本地
+  推理（MIT），提炼即用；调研全文 `references/terrain-diffusion/STUDY.md`。
+河周/其他区域特殊地物（河心洲/砾石滩/倒木堆/岩拱/石柱林/温泉等）仍在池中，等用户排期。
 
-## 后续任务（用户已排期、明确"暂不做"，接手前先问用户从哪个开始）
+## 后续任务（用户已排期，接手前先问用户从哪个开始）
 
-1. **研究 terrain diffusion mod**：看它如何用大模型生成地形与生态群系，评估可借鉴点。
+1. ~~研究 terrain diffusion mod~~ **已完成**：结论=路径 B（ONNX+Java 进程内，上游已做完
+   最难的 80%），设计与分期见 `docs/settlement-terrain-design.md` 第二节。
 2. **自定义导入图章（stamp）**：允许用户导入自己的 schematic/结构作为氛围地物图章，
    提升氛围可用性。
 3. **自定义导入树类型**：导入树 schematic 作为树种，用导入树构建 instant 森林
    （树库解析管线 `references/treepark-analysis/` 可复用）。
-4. **人烟模式**：与氛围/树种同构的新维度——人造建筑物生成 + 道路网生成（更有挑战）。
+4. **人烟模式**：设计已就绪（`docs/settlement-terrain-design.md` 第一节），素材/API/
+   算法路线全部验证过，建议下一个动工。
 
 ## 开发提示（踩坑记录）
 
