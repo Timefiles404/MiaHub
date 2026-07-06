@@ -1574,9 +1574,11 @@ public final class AtmosphereGenerator {
     // ============================ 全地表改造 + 土壤斑块 ============================
 
     /**
-     * 全森林地表改造：所有露天地面按<b>坡度</b>与<b>湿度</b>成片重铺——
-     * 陡坡（≥4）裸出砂土/泥土/夯泥、中坡混砂土斑、近水湿带铺主题湿土/细沙，
-     * 平缓地叠主题土壤斑块（原逻辑）；全部经低频噪声成片、坡面过渡自然（岩石面暂不做）。
+     * 全森林地表改造：所有露天地面按<b>坡度/起伏量/湿度</b>成片重铺——
+     * 山体域（陡崖或窗口起伏 ≥9 的坡面）整片<b>岩石硬化</b>（石/安山/凝灰/圆石低频分选，
+     * 湿主题嵌苔石）；山麓过渡带石斑+土斑、其余还草；中缓坡少量土斑并把裸土还草（不再全秃）；
+     * 近水湿带铺主题湿土/细沙；湿润主题圈出<b>苔藓块大区</b>（茂密浅草地，缘带苔毯羽化、
+     * 区内留草孔）；平缓地叠主题土壤斑块。高坎立面走石系地层带、矮坎走土系。
      * 最后保留大树缠根泥土圈。
      */
     private static void soil(GroundSnapshot g, AtmosphereTheme th, AtmosphereSettings st,
@@ -1588,26 +1590,67 @@ public final class AtmosphereGenerator {
                 : new Material[]{Material.COARSE_DIRT};
         double cover = Math.min(0.85, th.soilCover() * dens);
         long s = seed ^ S_SOIL;
-        for (int lz = 0; lz < g.depth(); lz++) {
-            for (int lx = 0; lx < g.width(); lx++) {
-                int i = lz * g.width() + lx;
+        int w = g.width(), d = g.depth();
+        // 窗口起伏量（Chebyshev r=3 内高差）：单列 slope 只看 4 邻，持续陡坡每列
+        // 往往只有 1~2，识别"山体"必须看窗口而不是单列
+        int[] relief = new int[w * d];
+        for (int lz = 0; lz < d; lz++) {
+            for (int lx = 0; lx < w; lx++) {
+                int lo = Integer.MAX_VALUE, hi = Integer.MIN_VALUE;
+                for (int dz = -3; dz <= 3; dz++) {
+                    for (int dx = -3; dx <= 3; dx++) {
+                        int nx = lx + dx, nz = lz + dz;
+                        if (!g.inBounds(nx, nz) || !g.valid(nx, nz) || g.water(nx, nz)) continue;
+                        int y = g.groundY(nx, nz);
+                        if (y < lo) lo = y;
+                        if (y > hi) hi = y;
+                    }
+                }
+                relief[lz * w + lx] = hi == Integer.MIN_VALUE ? 0 : hi - lo;
+            }
+        }
+        double mossBase = th.rockMoss();   // 主题苔藓度：复用岩顶苔毯概率（湿主题高、旱/雪≈0）
+        for (int lz = 0; lz < d; lz++) {
+            for (int lx = 0; lx < w; lx++) {
+                int i = lz * w + lx;
                 if (!g.valid(lx, lz) || g.water(lx, lz) || claimed[i]) continue;
-                if (!replaceableSoil(g.ground(lx, lz))) continue;
+                Material gm = g.ground(lx, lz);
+                if (!replaceableSoil(gm)) continue;
                 int wx = g.region().minX() + lx;
                 int wz = g.region().minZ() + lz;
                 int slope = g.slope(lx, lz);
+                int rel = relief[i];
                 double patch = noise(s ^ 0x50BEL, wx, wz, 7.0);
                 double m = hash01(s ^ 0xA7L, wx, wz);
                 double wet = wetOf(wetDist, i);
+                boolean rockZone = slope >= 5 || (slope >= 2 && rel >= 9);
+                boolean rockEdge = !rockZone && (slope == 4 || (slope >= 2 && rel >= 7));
                 Material top = null;
-                if (slope >= 4) {
-                    // 陡坡裸土（山体坡面）：砂土为主、泥土/夯泥成片点缀
-                    top = patch < 0.5 ? Material.COARSE_DIRT
-                            : patch < 0.8 ? Material.DIRT : Material.PACKED_MUD;
-                } else if (slope == 3 && patch > 0.35) {
-                    top = m < 0.6 ? Material.COARSE_DIRT : Material.DIRT;
-                } else if (slope == 2 && patch > 0.62) {
-                    top = Material.COARSE_DIRT;
+                boolean force = false;   // 硬化/还草是修复不是装饰：不受密度稀释
+                if (rockZone) {
+                    // 山体硬化：崖壁与陡峰整片石质，低频斑块分选，湿主题嵌苔石
+                    force = true;
+                    top = patch < 0.40 ? Material.STONE
+                            : patch < 0.62 ? Material.ANDESITE
+                            : patch < 0.80 ? Material.TUFF : Material.COBBLESTONE;
+                    if (mossBase >= 0.2 && m < 0.04 + mossBase * 0.15) {
+                        top = Material.MOSSY_COBBLESTONE;
+                    } else if (m > 0.955) {
+                        top = Material.GRAVEL;   // 石坡碎屑窝
+                    }
+                } else if (rockEdge) {
+                    // 山麓过渡带：石斑+粗土斑点缀，其余裸土还草——山坡不再全秃
+                    if (patch < 0.26) {
+                        top = m < 0.55 ? Material.STONE : Material.COBBLESTONE;
+                        force = true;
+                    } else if (patch < 0.48) {
+                        top = Material.COARSE_DIRT;
+                    } else if (patch < 0.60) {
+                        top = Material.DIRT;
+                    } else if (gm == Material.DIRT || gm == Material.COARSE_DIRT) {
+                        top = Material.GRASS_BLOCK;
+                        force = true;
+                    }
                 } else if (wet > 0.55 && slope <= 1 && patch > 0.5) {
                     // 近水湿地带：湿主题铺首选土（泥/苔），旱主题细沙
                     top = soils[0] == Material.SNOW_BLOCK ? Material.GRAVEL : soils[0];
@@ -1615,24 +1658,54 @@ public final class AtmosphereGenerator {
                         top = Material.SAND;
                     }
                 } else {
-                    // 平缓地：主题土壤斑块（原逻辑）
-                    double n = Math.pow(noise(s, wx, wz, 9.0), 1.3);
-                    if (n <= cover) {
-                        top = soils[(int) (hash01(s ^ 0xA5, wx, wz) * soils.length)
-                                % soils.length];
+                    // 苔藓大区：低频区域场按主题苔藓度圈出成片"茂密浅草地"，
+                    // 缘带苔毯羽化、区内留草孔隙；再往下才是中坡土斑/还草与平地主题斑块
+                    double mz = noise(s ^ 0x3055L, wx, wz, 13.0);
+                    double mossT = 0.34 * Math.min(1.0,
+                            mossBase * (0.8 + 0.4 * wet) * (g.canopy(lx, lz) ? 1.2 : 1.0));
+                    if (slope <= 3 && mz < mossT) {
+                        if (m > 0.93) continue;   // 孔隙留草
+                        top = Material.MOSS_BLOCK;
+                        force = true;
+                    } else if (slope <= 2 && mossT >= 0.05 && mz < mossT + 0.045) {
+                        put(edits, wx, g.groundY(lx, lz) + 1, wz,
+                                BlockSpec.of(Material.MOSS_CARPET));
+                        continue;
+                    } else if (slope == 3) {
+                        if (patch > 0.58) {
+                            top = m < 0.6 ? Material.COARSE_DIRT : Material.DIRT;
+                        } else if (gm == Material.DIRT || gm == Material.COARSE_DIRT) {
+                            top = Material.GRASS_BLOCK;
+                            force = true;
+                        }
+                    } else if (slope == 2) {
+                        if (patch > 0.76) {
+                            top = Material.COARSE_DIRT;
+                        } else if (gm == Material.DIRT || gm == Material.COARSE_DIRT) {
+                            top = Material.GRASS_BLOCK;
+                            force = true;
+                        }
+                    } else {
+                        // 平缓地：主题土壤斑块（原逻辑）
+                        double n = Math.pow(noise(s, wx, wz, 9.0), 1.3);
+                        if (n <= cover) {
+                            top = soils[(int) (hash01(s ^ 0xA5, wx, wz) * soils.length)
+                                    % soils.length];
+                        }
                     }
                 }
-                if (top == null) continue;
-                if (dens < 1 && m > dens) continue;   // 低密度稀释改造强度
+                if (top == null || top == gm) continue;
+                if (!force && dens < 1 && m > dens) continue;   // 低密度只稀释装饰性斑块
                 put(edits, wx, g.groundY(lx, lz), wz, BlockSpec.of(top));
             }
         }
         // 侧面暴露块（3D 露天）：与邻列高差 ≥2 的原始坎面——"上下都不是空气、但一侧
-        // 朝空气"的侧块同样是露天面，按面材成片重铺（≤4 层；贴水立面归衬砌，跳过）
+        // 朝空气"的侧块同样是露天面，按面材成片重铺（≤4 层；贴水立面归衬砌，跳过）。
+        // 高坎（≥3）与山体域立面走石系"地层带"（列主导材 70% + 逐块扰动 30%），矮坎走土系
         long fs = s ^ 0xFACEL;
-        for (int lz = 0; lz < g.depth(); lz++) {
-            for (int lx = 0; lx < g.width(); lx++) {
-                int i = lz * g.width() + lx;
+        for (int lz = 0; lz < d; lz++) {
+            for (int lx = 0; lx < w; lx++) {
+                int i = lz * w + lx;
                 if (!g.valid(lx, lz) || g.water(lx, lz) || claimed[i]) continue;
                 if (!replaceableSoil(g.ground(lx, lz))) continue;
                 int gy = g.groundY(lx, lz);
@@ -1641,7 +1714,7 @@ public final class AtmosphereGenerator {
                 for (int[] dd : new int[][]{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
                     int nx = lx + dd[0], nz = lz + dd[1];
                     if (!g.inBounds(nx, nz) || !g.valid(nx, nz)) continue;
-                    int ni = nz * g.width() + nx;
+                    int ni = nz * w + nx;
                     if (g.water(nx, nz) || pool[ni]) {
                         nearWater = true;
                         break;
@@ -1653,11 +1726,25 @@ public final class AtmosphereGenerator {
                 if (faceH < 2) continue;
                 int wx = g.region().minX() + lx;
                 int wz = g.region().minZ() + lz;
+                boolean rocky = faceH >= 3 || (g.slope(lx, lz) >= 2 && relief[i] >= 9);
+                double strata = noise(fs ^ 0x51ABL, wx, wz, 8.0);
                 int from = Math.max(nbMin + 1, gy - 4);
                 for (int y = from; y < gy; y++) {
                     double fr = hash01(fs ^ (y * 0x9E5L), wx, wz);
-                    Material fm = fr < 0.5 ? Material.DIRT
-                            : fr < 0.85 ? Material.COARSE_DIRT : Material.PACKED_MUD;
+                    Material fm;
+                    if (rocky) {
+                        if (mossBase >= 0.2 && fr < 0.10) {
+                            fm = Material.MOSSY_COBBLESTONE;
+                        } else {
+                            double v = strata * 0.7 + fr * 0.3;
+                            fm = v < 0.38 ? Material.STONE
+                                    : v < 0.60 ? Material.ANDESITE
+                                    : v < 0.80 ? Material.TUFF : Material.COBBLESTONE;
+                        }
+                    } else {
+                        fm = fr < 0.5 ? Material.DIRT
+                                : fr < 0.85 ? Material.COARSE_DIRT : Material.PACKED_MUD;
+                    }
                     put(edits, wx, y, wz, BlockSpec.of(fm));
                 }
             }
@@ -2243,6 +2330,10 @@ public final class AtmosphereGenerator {
                                   boolean[] claimed, boolean[] pool) {
         int gy = g.groundY(lx, lz);
         Material gm = g.ground(lx, lz);
+        // 有效地表：soil() 可能已把该列顶面改成石/苔/沙——植株底材判断必须看改后的块，
+        // 否则草苗会种在新铺的石头上
+        Material em = editedMat(edits, wx, gy, wz);
+        if (em != null) gm = em;
         String kind = e.kind();
         boolean grassy = gm == Material.GRASS_BLOCK || gm == Material.DIRT
                 || gm == Material.PODZOL || gm == Material.COARSE_DIRT
@@ -2350,6 +2441,14 @@ public final class AtmosphereGenerator {
         long key = (((long) x & 0x3FFFFFFL) << 38) | (((long) z & 0x3FFFFFFL) << 12)
                 | ((long) (y + 2048) & 0xFFFL);
         edits.put(key, new BlockEdit(x, y, z, spec));
+    }
+
+    /** 该坐标若已有编辑，返回其材质；否则 null——后续特征据此感知"有效地表"。 */
+    static Material editedMat(Map<Long, BlockEdit> edits, int x, int y, int z) {
+        long key = (((long) x & 0x3FFFFFFL) << 38) | (((long) z & 0x3FFFFFFL) << 12)
+                | ((long) (y + 2048) & 0xFFFL);
+        BlockEdit e = edits.get(key);
+        return e == null ? null : e.spec().material;
     }
 
     // ---- 确定性 2D 值噪声 ----
