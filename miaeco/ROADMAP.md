@@ -53,7 +53,14 @@ MiaEco 是 MiaHub monorepo（`Timefiles404/MiaHub`）里的一个 Paper 1.21.x /
   - **山侧月牙塘**：山肩选址（外向 3 格骤降≥4、背靠山体）→ 突出平台挖 1~2 格灌水，
     水面=双圆交集之补集的一半（月牙、凸弧朝崖外）；围水完整性预检防漏水
   - 特征间避让：湖/塘列 claimed，soil/树圈/paths 全部绕开
-- **0.18.0（本版）** 大世界：扩散地形 + 多世界 + 自动生态融合：
+- **0.18.1（本版）** 热修：模型装载 OOM（Java heap space）：
+  - 根因：OnnxModel 沿用上游 byte[] 设计——2GB base 模型 `readAllBytes` 进堆，
+    首载时"源字节+优化后字节"两份并存 ≈ **4GB+ 堆峰值**，服务器 -Xmx 装不下
+  - 修复：**会话全程从文件路径创建**（`env.createSession(path)`，权重走 ORT native
+    堆外内存）；优化产物 file-to-file；缓存键 sha256 改流式；GPU 槽换入也从文件建
+  - 佐证：dumpTerra 降到 **-Xmx2g 跑通**（原 6g），推理结果与 0.18.0 逐位一致
+  - 运维口径更正：**无需调大 -Xmx**；机器需 ~3GB 空闲物理内存（堆外）
+- **0.18.0** 大世界：扩散地形 + 多世界 + 自动生态融合：
   - **推理管线内置**：terrain-diffusion-mc（MIT）的纯 Java+ONNX 三阶段级联
     （coarse 20 步 DPM-Solver++ → base 2 步 flow-matching → decoder 超分）整体移植进
     `terrain/pipeline/`+`terrain/infinitetensor/`（~6000 行，Fabric 触点已换 TerrainConfig）；

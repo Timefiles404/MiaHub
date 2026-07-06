@@ -44,62 +44,54 @@ public final class OnnxModel implements AutoCloseable {
     private static OrtSession activeGpuSession = null;
 
     private final OrtEnvironment env;
-    private final byte[] optimizedModelBytes;
+    /** 会话一律从文件路径创建：2GB 权重留在 ORT 的 native 内存，不进 Java 堆。 */
+    private final Path modelPath;
     private final String name;
     private OrtSession cpuSession;    // non-null in CPU-only mode
     private OrtSession gpuSession;    // non-null when offload_models=false
 
-    private static final class OptimizedModelLoadResult {
-        private final byte[] modelBytes;
-        private final Path optimizedModelPath;
-        private final boolean loadedFromCache;
-
-        private OptimizedModelLoadResult(byte[] modelBytes, Path optimizedModelPath, boolean loadedFromCache) {
-            this.modelBytes = modelBytes;
-            this.optimizedModelPath = optimizedModelPath;
-            this.loadedFromCache = loadedFromCache;
-        }
-    }
+    private record OptimizedModel(Path path, boolean fromCache) { }
 
     public OnnxModel(Path modelFilePath, String name) {
         this.name = name;
         try {
             long start = System.currentTimeMillis();
             this.env = OrtEnvironment.getEnvironment(OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR);
-            byte[] sourceModelBytes = Files.readAllBytes(modelFilePath);
-            OptimizedModelLoadResult initialOptimizedModelLoadResult = optimizeModelAtRuntime(sourceModelBytes, false);
-            byte[] loadedModelBytes;
+            String sourceHashPrefix = sha256HexOfFile(modelFilePath).substring(0, 16);
+            OptimizedModel optimized = optimizeModelAtRuntime(modelFilePath, sourceHashPrefix, false);
+            Path loadedPath;
             try {
-                initializeModelSession(initialOptimizedModelLoadResult.modelBytes, start);
-                loadedModelBytes = initialOptimizedModelLoadResult.modelBytes;
+                initializeModelSession(optimized.path(), start);
+                loadedPath = optimized.path();
             } catch (Exception initialLoadException) {
-                if (!initialOptimizedModelLoadResult.loadedFromCache) {
+                if (!optimized.fromCache()) {
                     throw initialLoadException;
                 }
                 closeLoadedSessions();
                 LOG.warn("Cached optimized ONNX model '{}' failed to load. Rebuilding cache: {}",
                         name, initialLoadException.getMessage());
-                deleteOptimizedCacheFile(initialOptimizedModelLoadResult.optimizedModelPath);
-                OptimizedModelLoadResult rebuiltOptimizedModelLoadResult = optimizeModelAtRuntime(sourceModelBytes, true);
-                initializeModelSession(rebuiltOptimizedModelLoadResult.modelBytes, start);
-                loadedModelBytes = rebuiltOptimizedModelLoadResult.modelBytes;
+                deleteOptimizedCacheFile(optimized.path());
+                OptimizedModel rebuilt = optimizeModelAtRuntime(modelFilePath, sourceHashPrefix, true);
+                initializeModelSession(rebuilt.path(), start);
+                loadedPath = rebuilt.path();
             }
-            this.optimizedModelBytes = loadedModelBytes;
+            this.modelPath = loadedPath;
         } catch (Exception e) {
             throw new RuntimeException("Failed to load ONNX model: " + modelFilePath, e);
         }
     }
 
     /**
-     * Optimizes model bytes and caches the optimized file in the config directory.
-     * Falls back to the source model bytes if optimization or cache I/O fails.
+     * Optimizes the model and caches the optimized file next to the weights.
+     * All work is file-to-file (no whole-model byte arrays on the Java heap).
+     * Falls back to the source model path if optimization or cache I/O fails.
      */
-    private OptimizedModelLoadResult optimizeModelAtRuntime(byte[] sourceModelBytes, boolean forceRebuildFromSource) {
-        Path optimizedModelPath = resolveOptimizedModelPath(sourceModelBytes);
+    private OptimizedModel optimizeModelAtRuntime(Path sourceModelPath, String sourceHashPrefix,
+                                                  boolean forceRebuildFromSource) {
+        Path optimizedModelPath = resolveOptimizedModelPath(sourceHashPrefix);
         try {
             if (!forceRebuildFromSource && Files.exists(optimizedModelPath)) {
-                byte[] cachedOptimizedModelBytes = Files.readAllBytes(optimizedModelPath);
-                return new OptimizedModelLoadResult(cachedOptimizedModelBytes, optimizedModelPath, true);
+                return new OptimizedModel(optimizedModelPath, true);
             }
 
             Files.createDirectories(optimizedModelPath.getParent());
@@ -108,10 +100,10 @@ public final class OnnxModel implements AutoCloseable {
             OrtSession.SessionOptions optimizationOptions = new OrtSession.SessionOptions();
             optimizationOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.EXTENDED_OPT);
             optimizationOptions.setOptimizedModelFilePath(temporaryOptimizedModelPath.toAbsolutePath().toString());
-            try (OrtSession ignored = env.createSession(sourceModelBytes, optimizationOptions)) {
+            try (OrtSession ignored = env.createSession(sourceModelPath.toAbsolutePath().toString(), optimizationOptions)) {
                 // Session creation materializes the optimized model on disk.
             }
-            byte[] optimizedModelBytesFromDisk = Files.readAllBytes(temporaryOptimizedModelPath);
+            long optimizedSize = Files.size(temporaryOptimizedModelPath);
             Files.move(
                     temporaryOptimizedModelPath,
                     optimizedModelPath,
@@ -119,12 +111,12 @@ public final class OnnxModel implements AutoCloseable {
                     StandardCopyOption.ATOMIC_MOVE
             );
             LOG.info("Optimized ONNX model '{}' at runtime ({} KB -> {} KB)",
-                    name, sourceModelBytes.length / 1024, optimizedModelBytesFromDisk.length / 1024);
-            return new OptimizedModelLoadResult(optimizedModelBytesFromDisk, optimizedModelPath, false);
+                    name, Files.size(sourceModelPath) / 1024, optimizedSize / 1024);
+            return new OptimizedModel(optimizedModelPath, false);
         } catch (Exception optimizationException) {
-            LOG.warn("Runtime ONNX optimization failed for '{}', using source model bytes: {}",
+            LOG.warn("Runtime ONNX optimization failed for '{}', using source model file: {}",
                     name, optimizationException.getMessage());
-            return new OptimizedModelLoadResult(sourceModelBytes, optimizedModelPath, false);
+            return new OptimizedModel(sourceModelPath, false);
         }
     }
 
@@ -145,38 +137,45 @@ public final class OnnxModel implements AutoCloseable {
 
     /**
      * Loads model sessions for the active inference device configuration.
+     * 会话从文件路径创建（ORT 内部流式读入 native 内存）。
      */
-    private void initializeModelSession(byte[] modelBytes, long startMillis) throws OrtException {
+    private void initializeModelSession(Path path, long startMillis) throws OrtException {
         if ("cpu".equals(TerrainConfig.inferenceDevice())) {
             OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
             sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
             applyIntraOpThreads(sessionOptions);
-            this.cpuSession = env.createSession(modelBytes, sessionOptions);
+            this.cpuSession = env.createSession(path.toAbsolutePath().toString(), sessionOptions);
             this.gpuSession = null;
             setResolvedProviderOnce("CPU");
-            LOG.info("ONNX model '{}' loaded on CPU ({} KB) in {} ms",
-                    name, modelBytes.length / 1024, System.currentTimeMillis() - startMillis);
+            LOG.info("ONNX model '{}' loaded on CPU from {} in {} ms",
+                    name, path.getFileName(), System.currentTimeMillis() - startMillis);
             return;
         }
         if (!TerrainConfig.offloadModels()) {
             OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
             sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+            applyIntraOpThreads(sessionOptions);
             addGpuProvider(sessionOptions);
             if ("CoreML".equals(resolvedInferenceProvider)) {
                 throw new OrtException(
                         "inference.offload_models=false is not supported with CoreML. " +
-                        "Set inference.offload_models=true in terrain-diffusion-mc.properties.");
+                        "Set terrain.offload-models=true in config.yml.");
             }
-            this.gpuSession = env.createSession(modelBytes, sessionOptions);
+            this.gpuSession = env.createSession(path.toAbsolutePath().toString(), sessionOptions);
             this.cpuSession = null;
-            LOG.info("ONNX model '{}' loaded on GPU ({} KB) in {} ms",
-                    name, modelBytes.length / 1024, System.currentTimeMillis() - startMillis);
+            LOG.info("ONNX model '{}' loaded on GPU from {} in {} ms",
+                    name, path.getFileName(), System.currentTimeMillis() - startMillis);
             return;
+        }
+        // offload 模式：不常驻会话，claimGpuSlot 时按需从文件建（验证一次可建即弃）
+        try (OrtSession probe = env.createSession(path.toAbsolutePath().toString(),
+                new OrtSession.SessionOptions())) {
+            // 仅验证模型文件可加载
         }
         this.cpuSession = null;
         this.gpuSession = null;
-        LOG.info("ONNX model '{}' bytes cached in CPU RAM ({} KB) in {} ms",
-                name, modelBytes.length / 1024, System.currentTimeMillis() - startMillis);
+        LOG.info("ONNX model '{}' registered (lazy GPU-slot sessions from {}) in {} ms",
+                name, path.getFileName(), System.currentTimeMillis() - startMillis);
     }
 
     private void closeLoadedSessions() {
@@ -202,8 +201,7 @@ public final class OnnxModel implements AutoCloseable {
     /**
      * Resolves a deterministic cache file path for an optimized model.
      */
-    private Path resolveOptimizedModelPath(byte[] sourceModelBytes) {
-        String sourceModelHashPrefix = sha256Hex(sourceModelBytes).substring(0, 16);
+    private Path resolveOptimizedModelPath(String sourceModelHashPrefix) {
         String runtimeVersionTag = resolveOnnxRuntimeVersionTag();
         String optimizedFileName = name + "-" + runtimeVersionTag + "-" + sourceModelHashPrefix + ".onnx";
         return ModelAssetManager.resolveAssetPath(OPTIMIZED_MODELS_DIR_NAME)
@@ -227,12 +225,17 @@ public final class OnnxModel implements AutoCloseable {
     }
 
     /**
-     * Computes a lowercase SHA-256 hex string for deterministic cache naming.
+     * Computes a lowercase SHA-256 hex string of a file (streaming — no whole-file heap copy).
      */
-    private static String sha256Hex(byte[] inputBytes) {
-        try {
+    private static String sha256HexOfFile(Path file) {
+        try (java.io.InputStream in = Files.newInputStream(file)) {
             MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
-            byte[] digestBytes = messageDigest.digest(inputBytes);
+            byte[] buffer = new byte[1024 * 1024];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                messageDigest.update(buffer, 0, read);
+            }
+            byte[] digestBytes = messageDigest.digest();
             StringBuilder hexBuilder = new StringBuilder(digestBytes.length * 2);
             for (byte digestByte : digestBytes) {
                 hexBuilder.append(String.format("%02x", digestByte));
@@ -240,6 +243,8 @@ public final class OnnxModel implements AutoCloseable {
             return hexBuilder.toString();
         } catch (NoSuchAlgorithmException noSuchAlgorithmException) {
             throw new IllegalStateException("Missing SHA-256 algorithm", noSuchAlgorithmException);
+        } catch (java.io.IOException ioException) {
+            throw new IllegalStateException("Failed hashing model file: " + file, ioException);
         }
     }
 
@@ -296,7 +301,7 @@ public final class OnnxModel implements AutoCloseable {
             opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
             applyIntraOpThreads(opts);
             addGpuProvider(opts);
-            activeGpuSession = env.createSession(optimizedModelBytes, opts);
+            activeGpuSession = env.createSession(modelPath.toAbsolutePath().toString(), opts);
             gpuSlotHolder = this;
             LOG.debug("GPU session ready for '{}'", name);
         } catch (OrtException e) {

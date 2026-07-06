@@ -37,7 +37,8 @@ tasks.register<JavaExec>("dumpTerra") {
         provider { project.configurations["compileClasspath"] },
         provider { terraTool }
     )
-    jvmArgs("-Xmx6g")
+    // 0.18.1 起会话从文件路径建（权重在 native 堆外），2G 堆即可跑通——顺带回归防护
+    jvmArgs("-Xmx" + (findProperty("miaeco.dumpXmx") ?: "2g"))
     systemProperty("miaeco.modelDir",
         (findProperty("miaeco.modelDir")
             ?: rootProject.projectDir.parentFile.resolve("references/terrain-diffusion/weights").absolutePath).toString())
