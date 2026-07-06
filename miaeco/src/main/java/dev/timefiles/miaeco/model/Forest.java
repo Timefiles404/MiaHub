@@ -18,10 +18,28 @@ public final class Forest {
             new dev.timefiles.miaeco.atmosphere.AtmosphereSettings();
     private int ageMonths;
     private double densityScale = 1.0;   // 相对密度倍率（叠加在自动密度噪声之上）
+    /** 不规则区掩码（terra 生态分区）：region bbox 内局部坐标位图；null=整个矩形有效。 */
+    private java.util.BitSet mask;
+    private int maskW;
 
     public Forest(String name, Region region) {
         this.name = name;
         this.region = region;
+    }
+
+    public void mask(java.util.BitSet mask, int maskW) {
+        this.mask = mask;
+        this.maskW = maskW;
+    }
+
+    public java.util.BitSet mask() { return mask; }
+    public int maskW() { return maskW; }
+
+    /** 局部坐标 (lx,lz) 是否在掩码内；无掩码=全矩形有效。 */
+    public boolean inMask(int lx, int lz) {
+        if (mask == null) return true;
+        if (lx < 0 || lz < 0 || maskW <= 0 || lx >= maskW) return false;
+        return mask.get(lz * maskW + lx);   // 越界索引 BitSet 返回 false，天然安全
     }
 
     public String name() { return name; }

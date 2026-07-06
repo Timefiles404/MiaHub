@@ -49,9 +49,20 @@
 <tr><td><code>/miaeco atmo set &lt;森林&gt; &lt;主题&gt;</code></td><td>设置氛围主题（<code>atmo themes</code> 列出全部 8 种）</td></tr>
 <tr><td><code>/miaeco atmo apply | clear | info &lt;森林&gt;</code></td><td>铺开氛围 / 精确恢复原地形 / 查看设置</td></tr>
 <tr><td><code>/miaeco atmo feature &lt;森林&gt; &lt;特征&gt; &lt;0~5&gt;</code></td><td>单项强度：river/town/groundcover/water/paths/soil/rocks/ruins（0=关，river 5 档水系尤其强烈，town=人烟）</td></tr>
+<tr><td><code>/miaeco world create &lt;名&gt; [seed] | list | tp &lt;名&gt; | remove &lt;名&gt; confirm</code></td><td>专用生态世界管理（平原画布，不被打扰；remove 连文件夹删除）</td></tr>
+<tr><td><code>/miaeco terra gen [noeco]</code></td><td>在选区生成真实地形+自动群系+自动森林（noeco=只地形）</td></tr>
+<tr><td><code>/miaeco terra scout | prefetch | status | cancel</code></td><td>陆地探测 / 预下载模型 / 任务状态 / 取消</td></tr>
 <tr><td><code>/miaeco clear &lt;森林&gt;</code></td><td>清除该森林所有树方块</td></tr>
 <tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（147 棵建筑师设计树）</td></tr>
 </table>
+
+<h2>0.18.0 大世界 · 扩散地形与自动生态</h2>
+<p><b>真实地形生成：</b>MiaEco 现在内置一套本地 AI 地形推理管线（terrain-diffusion 的纯 Java 移植，MIT）：在专用世界里用 <code>pos1/pos2</code> 框两个点、<code>/miaeco terra gen</code>，即可生成一块以真实地球 30m 高程数据训练出来的完整地貌——山脉、丘陵、海岸、荒漠自动成形，并自动写入原版群系（雪峰/针叶林/丛林/沼泽/草原/海洋等 20 余种）。同一世界内多次框选，块与块<b>天然无缝拼接</b>（世界种子决定一切，边缘自动缝合）。</p>
+<p><b>专用多世界：</b><code>/miaeco world create &lt;名&gt; [seed]</code> 新建一个不被打扰的平原画布世界（无洞穴、无结构、不刷怪），<code>world tp</code> 传送、<code>world remove &lt;名&gt; confirm</code> 连文件夹删除。世界列表随服务器重启自动恢复。</p>
+<p><b>自动生态融合：</b>地形铺完后自动按群系切分出<b>不规则的森林区与开阔区</b>（不再是方形森林）：针叶林区自动种云杉、丛林区雨林树、沼泽区柳树红树、温带区橡桦混交（偶有金秋林与樱花小林班），稀疏林密度自动减半；草甸/荒漠/雪坡等开阔区只铺氛围（花田/岩石/雪堆各有侧重）。每一块都是常规森林对象——之后照常 <code>advance</code> 演替、<code>atmo</code> 调参重铺。</p>
+<p><b>全程进度条：</b>聊天栏文本进度条 + BossBar 双通道：首次使用会自动下载 2.2GB 模型权重（分段并行+断点续传+SHA-256 校验，显示速度与剩余时间）、装载模型（首次需数分钟图优化）、扩散推理（512×512 约半分钟）、铺设方块、逐区生态，每个阶段都有实时百分比。</p>
+<p><b>选址辅助：</b>世界种子是随机地球——出生点可能在大洋腹地。<code>/miaeco terra scout</code> 几秒钟粗扫周边 1.6 万格，报告陆地占比、最近陆地坐标与大陆质心，再传送过去框选。</p>
+<p><b>运维提示：</b>推理在 CPU 上进行（可配 GPU），服务器建议 -Xmx 预留 3GB+，<code>terrain.inference-threads</code> 可限核防卡 tick；权重存于 <code>plugins/MiaEco/models/</code>，也可手动放置跳过下载。</p>
 
 <h2>0.17.0 村落成熟版 · 广场水井与院落</h2>
 <p><b>村心广场：</b>聚齐三户以上成村时，村子中央会整平出一块斑驳铺装的小广场（小径/砂砾/圆石混铺、留草缝），中间立一座<b>石砌水井</b>（圈石井台、井水、双层石墙撑起石板顶），对角各一盏灯柱；各户小路在井边汇合，再由干道引出森林。</p>

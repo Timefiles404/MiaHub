@@ -64,6 +64,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             case "grow" -> grow(sender, args);
             case "advance" -> advance(sender, args);
             case "clear" -> clear(sender, args);
+            case "world" -> world(sender, args);
+            case "terra" -> terra(sender, args);
             case "save" -> {
                 eco.store().saveAll(eco.forests());
                 sender.sendMessage(P + ChatColor.GREEN + "已保存全部森林。");
@@ -73,8 +75,108 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
+    // ---- world（多世界管理） ----
+    private void world(CommandSender sender, String[] args) {
+        if (args.length < 2) { helpWorld(sender); return; }
+        var worlds = eco.worlds();
+        switch (args[1].toLowerCase(Locale.ROOT)) {
+            case "create" -> {
+                if (args.length < 3) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco world create <名> [seed]"); return; }
+                Long seed = null;
+                if (args.length >= 4) {
+                    try { seed = Long.parseLong(args[3]); }
+                    catch (NumberFormatException e) { seed = (long) args[3].hashCode(); }
+                }
+                sender.sendMessage(P + ChatColor.GRAY + "创建世界中…");
+                String err = worlds.create(args[2], seed);
+                if (err != null) { sender.sendMessage(P + ChatColor.RED + err); return; }
+                long s = worlds.entry(args[2]).seed;
+                sender.sendMessage(P + ChatColor.GREEN + "世界 " + args[2] + " 已就绪（seed=" + s
+                        + "，平原画布）。" + ChatColor.GRAY + "tp 过去后 pos1/pos2 框选 → /miaeco terra gen；"
+                        + "或先 /miaeco terra scout 探测陆地分布。");
+            }
+            case "list" -> {
+                if (worlds.all().isEmpty()) { sender.sendMessage(P + ChatColor.GRAY + "暂无生态世界。"); return; }
+                sender.sendMessage(P + ChatColor.AQUA + "生态世界：");
+                for (var e : worlds.all().values()) {
+                    boolean loaded = org.bukkit.Bukkit.getWorld(e.name) != null;
+                    sender.sendMessage(ChatColor.YELLOW + " " + e.name + ChatColor.GRAY
+                            + " seed=" + e.seed + " 地形块=" + e.patches.size()
+                            + (loaded ? "" : ChatColor.RED + "（未加载）"));
+                }
+            }
+            case "tp" -> {
+                if (!(sender instanceof Player p)) { sender.sendMessage(P + ChatColor.RED + "只有玩家能传送。"); return; }
+                if (args.length < 3) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco world tp <名>"); return; }
+                org.bukkit.World w = org.bukkit.Bukkit.getWorld(args[2]);
+                if (w == null || !worlds.isManaged(args[2])) { sender.sendMessage(P + ChatColor.RED + "生态世界不存在: " + args[2]); return; }
+                p.teleport(w.getSpawnLocation());
+                sender.sendMessage(P + ChatColor.GREEN + "已传送到 " + args[2] + "。");
+            }
+            case "remove" -> {
+                if (args.length < 3) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco world remove <名> confirm"); return; }
+                if (args.length < 4 || !args[3].equalsIgnoreCase("confirm")) {
+                    sender.sendMessage(P + ChatColor.RED + "会连同世界文件夹一起删除！确认请加 confirm。");
+                    return;
+                }
+                String err = worlds.remove(args[2], ok -> sender.sendMessage(P + (ok
+                        ? ChatColor.GREEN + "世界 " + args[2] + " 已删除。"
+                        : ChatColor.RED + "世界文件夹删除不完整（可能被占用），请重启后手动清理。")));
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
+            default -> helpWorld(sender);
+        }
+    }
+
+    private void helpWorld(CommandSender s) {
+        msg(s, "/miaeco world create <名> [seed]", "新建专用生态世界（平原画布，不被打扰）");
+        msg(s, "/miaeco world list | tp <名>", "列出/传送");
+        msg(s, "/miaeco world remove <名> confirm", "卸载并删除世界文件");
+    }
+
+    // ---- terra（大地形生成） ----
+    private void terra(CommandSender sender, String[] args) {
+        if (args.length < 2) { helpTerra(sender); return; }
+        var terra = eco.terra();
+        switch (args[1].toLowerCase(Locale.ROOT)) {
+            case "gen" -> {
+                if (!(sender instanceof Player p)) { sender.sendMessage(P + ChatColor.RED + "只有玩家能框选生成。"); return; }
+                if (!eco.selection().hasBoth(p)) { sender.sendMessage(P + ChatColor.RED + "先用 pos1/pos2 设置选区。"); return; }
+                Region sel = Region.between(eco.selection().pos1(p), eco.selection().pos2(p));
+                org.bukkit.World w = org.bukkit.Bukkit.getWorld(sel.world());
+                if (w == null) { sender.sendMessage(P + ChatColor.RED + "选区世界未加载。"); return; }
+                boolean noeco = args.length >= 3 && args[2].equalsIgnoreCase("noeco");
+                String err = terra.start(sender, w, sel, !noeco);
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
+            case "scout" -> {
+                if (!(sender instanceof Player p)) { sender.sendMessage(P + ChatColor.RED + "只有玩家能探测。"); return; }
+                String err = terra.scout(sender, p.getWorld());
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
+            case "prefetch" -> {
+                String err = terra.prefetch(sender);
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
+            case "cancel" -> sender.sendMessage(P + (terra.cancel()
+                    ? ChatColor.GREEN + "已请求取消（当前阶段收尾后停止）。"
+                    : ChatColor.GRAY + "没有正在运行的任务。"));
+            case "status" -> sender.sendMessage(P + ChatColor.AQUA + terra.status());
+            default -> helpTerra(sender);
+        }
+    }
+
+    private void helpTerra(CommandSender s) {
+        msg(s, "/miaeco terra gen [noeco]", "在选区生成真实地形+群系+自动森林（noeco=只地形）");
+        msg(s, "/miaeco terra scout", "粗扫世界种子附近的陆地分布（选址用）");
+        msg(s, "/miaeco terra status | cancel", "查看/取消任务");
+        msg(s, "/miaeco terra prefetch", "预下载模型权重并装载（首次 2.2GB）");
+    }
+
     private void help(CommandSender s) {
-        s.sendMessage(P + ChatColor.AQUA + "参数化程序化森林");
+        s.sendMessage(P + ChatColor.AQUA + "参数化程序化森林 + 大世界地形");
+        msg(s, "/miaeco world …", "多世界管理（create/list/tp/remove）");
+        msg(s, "/miaeco terra …", "扩散地形生成（gen/scout/status/cancel/prefetch）");
         msg(s, "/miaeco test <树种> plant [giant]", "在脚下种一棵测试树（giant=巨木变异）");
         msg(s, "/miaeco test <树种> advance <月>", "推进这棵测试树的形态");
         msg(s, "/miaeco test <树种> clear", "移除测试树");
@@ -613,7 +715,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
             addMatches(out, args[0], "help", "test", "pos1", "pos2", "forest", "species", "atmo",
-                    "plant", "grow", "advance", "clear", "save");
+                    "plant", "grow", "advance", "clear", "save", "world", "terra");
         } else if (args.length == 2) {
             switch (args[0].toLowerCase(Locale.ROOT)) {
                 case "test" -> addMatches(out, args[1],
@@ -621,10 +723,24 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 case "forest" -> addMatches(out, args[1], "create", "list", "info", "remove", "density");
                 case "species" -> addMatches(out, args[1], "add", "list", "remove", "replace", "density");
                 case "atmo" -> addMatches(out, args[1], "set", "apply", "clear", "info", "feature", "themes");
+                case "world" -> addMatches(out, args[1], "create", "list", "tp", "remove");
+                case "terra" -> addMatches(out, args[1], "gen", "scout", "status", "cancel", "prefetch");
                 case "plant", "grow", "advance", "clear" -> addForests(out, args[1]);
                 default -> { }
             }
         } else if (args.length == 3) {
+            String w0 = args[0].toLowerCase(Locale.ROOT);
+            String w1 = args[1].toLowerCase(Locale.ROOT);
+            if (w0.equals("world") && (w1.equals("tp") || w1.equals("remove"))) {
+                for (String n : eco.worlds().all().keySet()) {
+                    if (n.toLowerCase(Locale.ROOT).startsWith(args[2].toLowerCase(Locale.ROOT))) out.add(n);
+                }
+                return out;
+            }
+            if (w0.equals("terra") && w1.equals("gen")) {
+                addMatches(out, args[2], "noeco");
+                return out;
+            }
             String a0 = args[0].toLowerCase(Locale.ROOT);
             String a1 = args[1].toLowerCase(Locale.ROOT);
             if (a0.equals("test")) {

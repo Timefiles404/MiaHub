@@ -51,23 +51,29 @@ public final class AtmosphereService {
 
     /** 生成/重铺氛围。msg 收进度与结果反馈（主线程回调）。 */
     public void apply(Forest f, World w, Consumer<String> msg) {
+        apply(f, w, msg, null);
+    }
+
+    /** 同上，可选完成回调（terra 自动生态链式推进用；失败/成功都会触发）。 */
+    public void apply(Forest f, World w, Consumer<String> msg, Runnable onDone) {
         AtmosphereSettings st = f.atmosphere();
         AtmosphereTheme th = AtmosphereTheme.get(st.theme());
         if (th == null) {
             msg.accept("先设置主题：/miaeco atmo set " + f.name() + " <主题>");
+            if (onDone != null) onDone.run();
             return;
         }
         if (st.applied()) {
             msg.accept("已有氛围，先恢复原地形再重铺…");
-            clear(f, w, n -> doApply(f, w, th, st, msg));
+            clear(f, w, n -> doApply(f, w, th, st, msg, onDone));
         } else {
-            doApply(f, w, th, st, msg);
+            doApply(f, w, th, st, msg, onDone);
         }
     }
 
     private void doApply(Forest f, World w, AtmosphereTheme th, AtmosphereSettings st,
-                         Consumer<String> msg) {
-        GroundSnapshot snap = GroundSnapshot.capture(w, f.region());
+                         Consumer<String> msg, Runnable onDone) {
+        GroundSnapshot snap = GroundSnapshot.capture(w, f.region(), f::inMask);
         List<int[]> bases = new ArrayList<>();
         for (TreeInstance t : f.trees()) {
             int r;
@@ -87,6 +93,7 @@ public final class AtmosphereService {
                     if (err != null) {
                         msg.accept("氛围生成失败: " + err.getMessage());
                         plugin.getLogger().log(Level.WARNING, "atmosphere generate", err);
+                        if (onDone != null) onDone.run();
                         return;
                     }
                     List<BlockEdit> list = edits;
@@ -94,6 +101,7 @@ public final class AtmosphereService {
                         st.applied(true);
                         executor.execute(() -> save(f.name(), undo));
                         msg.accept("氛围完成：" + list.size() + " 处地物/积水/小路/岩石/遗迹已铺开。");
+                        if (onDone != null) onDone.run();
                     });
                 }));
     }

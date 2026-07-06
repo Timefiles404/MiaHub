@@ -102,6 +102,15 @@ public final class GroundSnapshot {
 
     /** 在主线程构建快照（每列自顶向下穿透树体到地面）。 */
     public static GroundSnapshot capture(World world, Region region) {
+        return capture(world, region, null);
+    }
+
+    /**
+     * 掩码版：mask 判 false 的列标记为无效（不拍、不生成任何特征）——
+     * terra 生态分区的不规则森林区靠它把氛围约束在区域形状内。
+     */
+    public static GroundSnapshot capture(World world, Region region,
+                                         java.util.function.BiPredicate<Integer, Integer> mask) {
         int sx = region.sizeX();
         int sz = region.sizeZ();
         int n = sx * sz;
@@ -120,6 +129,7 @@ public final class GroundSnapshot {
         int minY = world.getMinHeight();
         for (int lz = 0; lz < sz; lz++) {
             for (int lx = 0; lx < sx; lx++) {
+                if (mask != null && !mask.test(lx, lz)) continue;   // 掩码外：invalid 列
                 int wx = region.minX() + lx;
                 int wz = region.minZ() + lz;
                 int i = lz * sx + lx;

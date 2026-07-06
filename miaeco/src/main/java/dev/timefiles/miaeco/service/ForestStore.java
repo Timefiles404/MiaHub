@@ -53,6 +53,15 @@ public final class ForestStore {
             forest.ageMonths(fs.getInt("ageMonths", 0));
             forest.densityScale(fs.getDouble("densityScale", 1.0));
 
+            String maskB64 = fs.getString("mask", null);
+            int maskW = fs.getInt("maskW", 0);
+            if (maskB64 != null && maskW > 0) {
+                try {
+                    forest.mask(java.util.BitSet.valueOf(
+                            java.util.Base64.getDecoder().decode(maskB64)), maskW);
+                } catch (IllegalArgumentException ignored) { }
+            }
+
             ConfigurationSection at = fs.getConfigurationSection("atmosphere");
             if (at != null) {
                 forest.atmosphere().theme(at.getString("theme", ""));
@@ -95,6 +104,11 @@ public final class ForestStore {
             yml.set(p + "region.z2", r.maxZ());
             yml.set(p + "ageMonths", forest.ageMonths());
             yml.set(p + "densityScale", forest.densityScale());
+            if (forest.mask() != null) {
+                yml.set(p + "mask", java.util.Base64.getEncoder()
+                        .encodeToString(forest.mask().toByteArray()));
+                yml.set(p + "maskW", forest.maskW());
+            }
 
             var atmo = forest.atmosphere();
             if (atmo.hasTheme() || atmo.applied()) {

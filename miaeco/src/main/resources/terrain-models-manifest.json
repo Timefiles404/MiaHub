@@ -1,0 +1,26 @@
+{
+  "repositorySlug": "xandergos/terrain-diffusion-30m-onnx",
+  "revision": "ad2df557eca5645f588766101cf3bc3682455c3e",
+  "assets": {
+    "world_pipeline_config.json": {
+      "sha256": "c60f0b74d89317e64cfc623fbfdd828f1b5b2e50aa75020ac4001103381853bd",
+      "sizeBytes": 774
+    },
+    "pipeline_data.json": {
+      "sha256": "e3132c3ef0c65d8613615f9278ffe23bbd9363ddcd87f1cc6f18456bcc9efe5c",
+      "sizeBytes": 12226
+    },
+    "coarse_model.onnx": {
+      "sha256": "d6ca15b21b2e35d5e594a9ac7a4249a2376590c0ad2b5b49a1e6e2d033450008",
+      "sizeBytes": 22497125
+    },
+    "decoder_model.onnx": {
+      "sha256": "6473ae47ca6ec4d743d30fe4f5d381fe4158899714eff09b762005bdbdef68c1",
+      "sizeBytes": 223854143
+    },
+    "base_model.onnx": {
+      "sha256": "543de788f73d0a4012685c908259f615601102aace4751aeccec64154ba145c0",
+      "sizeBytes": 2029994361
+    }
+  }
+}

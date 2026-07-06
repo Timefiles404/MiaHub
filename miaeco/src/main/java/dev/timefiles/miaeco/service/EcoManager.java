@@ -35,6 +35,8 @@ public final class EcoManager {
     private AtmosphereService atmosphereService;
     private final SelectionManager selectionManager = new SelectionManager();
     private ForestStore store;
+    private dev.timefiles.miaeco.world.EcoWorlds ecoWorlds;
+    private dev.timefiles.miaeco.terrain.TerraService terraService;
 
     private final Map<String, Forest> forests = new LinkedHashMap<>();
 
@@ -54,7 +56,8 @@ public final class EcoManager {
 
         int cores = Runtime.getRuntime().availableProcessors();
         int cfgThreads = cfg.getInt("engine.worker-threads", 0);
-        this.workerThreads = cfgThreads > 0 ? cfgThreads : Math.max(1, cores - 1);
+        // 下限 2：terra 任务线程会同步等待 plant/atmo（也在本池），1 线程会自锁
+        this.workerThreads = cfgThreads > 0 ? Math.max(2, cfgThreads) : Math.max(2, cores - 1);
         this.blocksPerTick = cfg.getInt("engine.blocks-per-tick", 400);
         this.maxCandidates = cfg.getInt("placement.max-candidates", 20000);
 
@@ -77,11 +80,40 @@ public final class EcoManager {
         this.store = new ForestStore(plugin, this);
 
         store.loadAll(forests);
+
+        // ---- 大地形：多世界管理 + 扩散地形服务 ----
+        this.ecoWorlds = new dev.timefiles.miaeco.world.EcoWorlds(plugin);
+        ecoWorlds.loadAll();
+        String tb = "terrain.";
+        dev.timefiles.miaeco.terrain.TerrainConfig.init(
+                new java.io.File(plugin.getDataFolder(), "models").toPath(),
+                cfg.getString(tb + "device", "cpu"),
+                cfg.getBoolean(tb + "offload-models", true),
+                cfg.getBoolean(tb + "validate-model", true),
+                cfg.getInt(tb + "inference-threads", 0),
+                cfg.getInt(tb + "scale", 2),
+                cfg.getStringList(tb + "download-endpoints"));
+        this.terraService = new dev.timefiles.miaeco.terrain.TerraService(plugin, this, ecoWorlds,
+                workerPool, new dev.timefiles.miaeco.terrain.TerraService.Settings(
+                cfg.getBoolean(tb + "enabled", true),
+                cfg.getInt(tb + "blocks-per-tick", 20000),
+                cfg.getInt(tb + "max-selection", 1024),
+                cfg.getInt(tb + "feather", 12),
+                cfg.getDouble(tb + "vertical-meters-per-block", 40.0),
+                cfg.getInt(tb + "soft-cap-y", 250),
+                cfg.getInt(tb + "max-y", 300),
+                cfg.getBoolean(tb + "auto-eco", true),
+                cfg.getInt(tb + "eco-region-min-cells", 300),
+                cfg.getInt(tb + "eco-region-cap", 24),
+                cfg.getLong(tb + "max-eco-footprint", 480000L)));
+
         plugin.getLogger().info("MiaEco 引擎就绪：" + workerThreads + " 工作线程，已加载 "
-                + forests.size() + " 片森林。");
+                + forests.size() + " 片森林、" + ecoWorlds.all().size() + " 个生态世界。");
     }
 
     public void shutdown() {
+        if (terraService != null) terraService.shutdown();
+        if (ecoWorlds != null) ecoWorlds.save();
         if (store != null) store.saveAll(forests);
         if (workerPool != null) {
             workerPool.shutdown();
@@ -147,4 +179,6 @@ public final class EcoManager {
     public SelectionManager selection() { return selectionManager; }
     public AsyncWorldEditor editor() { return editor; }
     public ForestStore store() { return store; }
+    public dev.timefiles.miaeco.world.EcoWorlds worlds() { return ecoWorlds; }
+    public dev.timefiles.miaeco.terrain.TerraService terra() { return terraService; }
 }

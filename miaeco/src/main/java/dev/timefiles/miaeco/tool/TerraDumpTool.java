@@ -1,0 +1,171 @@
+package dev.timefiles.miaeco.tool;
+
+import dev.timefiles.miaeco.terrain.EcoBiomes;
+import dev.timefiles.miaeco.terrain.HeightMapper;
+import dev.timefiles.miaeco.terrain.RegionSegmenter;
+import dev.timefiles.miaeco.terrain.pipeline.LocalTerrainProvider;
+
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 离线地形冒烟：真实权重跑扩散管线 → 高度/群系网格 → 高度映射/羽化 → 生态分区，
+ * 出 PNG（山体阴影/群系/分区）+ 硬校验（NaN/预算/未知群系/窗口计数标定）。
+ * 用法：gradle :miaeco:dumpTerra（权重目录经 -Dmiaeco.modelDir 注入）。
+ */
+public final class TerraDumpTool {
+
+    private static final int SIZE = 512;          // 方块边长（scale=2 → 256 原生像素）
+    private static final long SEED = 20260707L;
+
+    public static void main(String[] args) throws Exception {
+        File outDir = new File(args.length > 0 ? args[0] : "build/terradump");
+        outDir.mkdirs();
+
+        boolean fail = false;
+        for (int run = 0; run < 2; run++) {
+            long seed = SEED + run * 991L;
+            // 两个观察窗：原点附近 + 远处（验证任意坐标随机访问）
+            int bx = run == 0 ? 0 : 40960, bz = run == 0 ? 0 : -25600;
+            System.out.printf("== run %d: seed=%d block=(%d,%d)+%d ==%n", run, seed, bx, bz, SIZE);
+
+            long t0 = System.currentTimeMillis();
+            LocalTerrainProvider.init(seed);
+            long w0 = LocalTerrainProvider.windowCount();
+            LocalTerrainProvider.HeightmapData data = LocalTerrainProvider.getInstance()
+                    .fetchHeightmap(bz, bx, bz + SIZE, bx + SIZE);   // i=Z, j=X
+            long dt = System.currentTimeMillis() - t0;
+            long windows = LocalTerrainProvider.windowCount() - w0;
+            System.out.printf("inference: %.1fs, %d windows, grid %dx%d%n",
+                    dt / 1000.0, windows, data.width, data.height);
+
+            fail |= dumpAndCheck(outDir, "run" + run, data);
+        }
+        System.out.println(fail ? "TERRA CHECK: FAIL" : "TERRA CHECK: PASS");
+        if (fail) System.exit(1);
+    }
+
+    private static boolean dumpAndCheck(File outDir, String tag,
+                                        LocalTerrainProvider.HeightmapData data) throws Exception {
+        int w = data.width, h = data.height;
+        HeightMapper mapper = new HeightMapper(40, 250, 300);
+
+        boolean fail = false;
+        int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+        int oceanCells = 0;
+        Map<Short, Integer> biomeCount = new java.util.TreeMap<>();
+        short[] biomesFlat = new short[w * h];
+        int[][] ys = new int[h][w];
+
+        for (int z = 0; z < h; z++) {
+            for (int x = 0; x < w; x++) {
+                short m = data.heightmap[z][x];
+                short b = data.biomeIds[z][x];
+                biomesFlat[z * w + x] = b;
+                biomeCount.merge(b, 1, Integer::sum);
+                int y = mapper.feather(mapper.yOf(m), Math.min(Math.min(x, z), Math.min(w - 1 - x, h - 1 - z)), 12);
+                ys[z][x] = y;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+                if (m < 0) oceanCells++;
+                if (y > mapper.maxY() || y < -60) {
+                    System.out.println("BUDGET FAIL @" + x + "," + z + " y=" + y + " m=" + m);
+                    fail = true;
+                }
+                if (EcoBiomes.of(b) == null) fail = true;
+            }
+        }
+        System.out.printf("y range [%d, %d], ocean %.1f%%, biomes: %s%n",
+                minY, maxY, 100.0 * oceanCells / (w * h), biomeCount);
+
+        // 边界羽化校验：贴边一圈必须回到基底面 64（海也被羽化收拢上岸）
+        for (int x = 0; x < w; x++) {
+            if (ys[0][x] != HeightMapper.BASE_SURFACE || ys[h - 1][x] != HeightMapper.BASE_SURFACE) {
+                System.out.println("FEATHER FAIL @x=" + x + " y=" + ys[0][x] + "/" + ys[h - 1][x]);
+                fail = true;
+                break;
+            }
+        }
+
+        // 生态分区
+        List<RegionSegmenter.EcoRegion> regions = RegionSegmenter.segment(biomesFlat, w, h, 300, 24);
+        int forest = 0, open = 0;
+        for (var r : regions) {
+            if (EcoBiomes.of(r.biomeId()).kind() == EcoBiomes.KIND_FOREST) forest++;
+            else open++;
+        }
+        System.out.printf("regions: %d (forest %d, open %d) largest=%s%n", regions.size(), forest, open,
+                regions.isEmpty() ? "-" : regions.get(0).cells() + "c biome" + regions.get(0).biomeId());
+
+        // ---- PNG：山体阴影 / 群系 / 分区 ----
+        BufferedImage shade = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        BufferedImage biome = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        BufferedImage regionImg = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        for (int z = 0; z < h; z++) {
+            for (int x = 0; x < w; x++) {
+                int y = ys[z][x];
+                int yE = x + 1 < w ? ys[z][x + 1] : y;
+                int yS = z + 1 < h ? ys[z + 1][x] : y;
+                double light = 0.7 + 0.09 * ((y - yE) + (y - yS));
+                int base = Math.max(0, Math.min(255, (int) (40 + (y + 60) * 0.55)));
+                int v = Math.max(0, Math.min(255, (int) (base * light)));
+                shade.setRGB(x, z, y < HeightMapper.SEA_LEVEL && data.heightmap[z][x] < 0
+                        ? rgb(30, 60, Math.min(255, 120 + y)) : rgb(v, v, v));
+                biome.setRGB(x, z, biomeColor(biomesFlat[z * w + x]));
+                regionImg.setRGB(x, z, rgb(v / 2, v / 2, v / 2));
+            }
+        }
+        int[] palette = {0xE05050, 0x50C050, 0x5080E0, 0xE0C040, 0xB050D0, 0x40C8C8,
+                0xE08030, 0x80E060, 0x6060E0, 0xC0C0C0, 0xF090B0, 0x309060};
+        for (int i = 0; i < regions.size(); i++) {
+            var r = regions.get(i);
+            int c = palette[i % palette.length];
+            boolean isForest = EcoBiomes.of(r.biomeId()).kind() == EcoBiomes.KIND_FOREST;
+            for (int z = r.minLZ(); z <= r.maxLZ(); z++)
+                for (int x = r.minLX(); x <= r.maxLX(); x++)
+                    if (r.in(x, z)) regionImg.setRGB(x, z, isForest ? c : dim(c));
+        }
+        ImageIO.write(shade, "png", new File(outDir, tag + "_height.png"));
+        ImageIO.write(biome, "png", new File(outDir, tag + "_biome.png"));
+        ImageIO.write(regionImg, "png", new File(outDir, tag + "_regions.png"));
+        System.out.println("PNG -> " + outDir.getAbsolutePath());
+        return fail;
+    }
+
+    private static int dim(int c) {
+        return ((c >> 1) & 0x7F7F7F);
+    }
+
+    private static int rgb(int r, int g, int b) {
+        return (r << 16) | (g << 8) | b;
+    }
+
+    private static int biomeColor(short id) {
+        return switch (id) {
+            case 1 -> rgb(145, 190, 105);   // plains
+            case 3 -> rgb(230, 240, 245);   // snowy plains
+            case 5 -> rgb(225, 205, 130);   // desert
+            case 6 -> rgb(80, 110, 70);     // swamp
+            case 8, 108 -> rgb(60, 140, 60);  // forest
+            case 15, 115 -> rgb(45, 105, 75); // taiga
+            case 16, 116 -> rgb(150, 180, 165); // snowy taiga
+            case 17 -> rgb(190, 180, 90);   // savanna
+            case 19 -> rgb(130, 135, 120);  // windswept
+            case 23 -> rgb(35, 130, 35);    // jungle
+            case 26 -> rgb(200, 120, 70);   // badlands
+            case 29 -> rgb(120, 190, 130);  // meadow
+            case 31 -> rgb(190, 210, 200);  // grove
+            case 32 -> rgb(215, 225, 235);  // snowy slopes
+            case 33 -> rgb(235, 240, 250);  // frozen peaks
+            case 35 -> rgb(160, 160, 155);  // stony peaks
+            case 41 -> rgb(60, 140, 200);   // warm ocean
+            case 44 -> rgb(40, 90, 180);    // ocean
+            case 46 -> rgb(50, 80, 150);    // cold ocean
+            case 48 -> rgb(150, 180, 220);  // frozen ocean
+            default -> 0xFF00FF;            // 未知 id 亮紫报警
+        };
+    }
+}

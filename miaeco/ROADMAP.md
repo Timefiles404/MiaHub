@@ -26,7 +26,9 @@ MiaEco 是 MiaHub monorepo（`Timefiles404/MiaHub`）里的一个 Paper 1.21.x /
 | 氛围 | `atmosphere/AtmosphereGenerator.java`（核心，~1500 行纯函数） | 七特征：river(盆地湖+河道+月牙塘)/soil/paths/water/rocks/ruins/groundcover |
 | 氛围支撑 | `atmosphere/GroundSnapshot`（穿冠地表快照）`AtmosphereTheme`（8 主题调色板）`AtmosphereSettings`（density 0~5） | |
 | 异步写入 | `async/AsyncWorldEditor`（分 tick + undo）`BlockSpec` `TerrainSnapshot` | |
-| 离线验证 | `tool/AtmoDumpTool`（合成地形跑全主题）`tool/TreeDumpTool` | `gradle :miaeco:dumpAtmo` / `:miaeco:dumpTrees` |
+| 离线验证 | `tool/AtmoDumpTool`（合成地形跑全主题）`tool/TreeDumpTool`、`tool/TerraDumpTool`（真权重跑扩散管线） | `gradle :miaeco:dumpAtmo` / `:miaeco:dumpTrees` / `:miaeco:dumpTerra` |
+| 大地形 | `terrain/`（TerraService 编排、HeightMapper、EcoBiomes、RegionSegmenter、TerraProgress、TerrainConfig）+ `terrain/pipeline/`+`terrain/infinitetensor/`（terrain-diffusion-mc 移植，MIT） | 扩散推理→方块柱→群系→生态融合 |
+| 多世界 | `world/EcoWorlds`（注册表+生命周期）`world/PlainChunkGenerator`（平原画布） | worlds.yml 持久化 |
 | 渲染目检 | `tools/render_atmo.py`（顶视 PNG）`tools/check_water.py`（水体统计） | `python miaeco/tools/render_atmo.py` |
 | 树库参考 | `D:\Projects\MiaPlugins\references\treepark-analysis\`（999 棵建筑师树解析产物） | 见 memory `miaeco-treepark-reference` |
 
@@ -51,7 +53,44 @@ MiaEco 是 MiaHub monorepo（`Timefiles404/MiaHub`）里的一个 Paper 1.21.x /
   - **山侧月牙塘**：山肩选址（外向 3 格骤降≥4、背靠山体）→ 突出平台挖 1~2 格灌水，
     水面=双圆交集之补集的一半（月牙、凸弧朝崖外）；围水完整性预检防漏水
   - 特征间避让：湖/塘列 claimed，soil/树圈/paths 全部绕开
-- **0.17.0（本版）** 村落成熟版：广场水井 + 院落 + 路灯 + 箱子战利品：
+- **0.18.0（本版）** 大世界：扩散地形 + 多世界 + 自动生态融合：
+  - **推理管线内置**：terrain-diffusion-mc（MIT）的纯 Java+ONNX 三阶段级联
+    （coarse 20 步 DPM-Solver++ → base 2 步 flow-matching → decoder 超分）整体移植进
+    `terrain/pipeline/`+`terrain/infinitetensor/`（~6000 行，Fabric 触点已换 TerrainConfig）；
+    onnxruntime 1.20.0 打进 jar（win-x64+linux-x64，剔 .pdb 后 jar 12.5MB）；
+    权重 2.17GB **不进 jar**——首次使用按固定 revision 自动下载
+    （**分段并行 ×6 + 逐段断点续传 + SHA-256**；实测 hf-mirror 按连接限速：单连接 KB/s
+    级、并行段满带宽；sidecar 记录各段偏移，跨重启/跨端点均可续）
+  - **多世界管理**（multiverse 精简版）：`/miaeco world create/list/tp/remove`；
+    平原画布基底（y=64 草原、无洞穴无结构不刷怪、spawnChunkRadius=0、和平）；
+    worlds.yml 持久化（seed + 已生成选区列表），启动自动重载
+  - **选区生成** `/miaeco terra gen`：pos1/pos2 框选（64~1024 边）→ 推理（512² 块 CPU
+    实测 18~36s）→ **世界级固定高度映射**（40m/格线性 + >250 渐近压扁 + 海底 sqrt 压缩；
+    参数世界恒定 → 同种子相邻选区天然无缝）→ 条带式方块柱重建（16 行/带、chunk ticket
+    防卸载、20k 方块/tick）+ 群系按 4×4 quart 写入；边缘 12 格羽化回画布，
+    **贴旧选区的边自动外扩 14 格吞掉旧羽化环**实现拼图无缝
+  - **群系→皮肤**：23 群系 id（含 3 稀疏林变体）映射原版 Biome + 顶皮决策（峰岩
+    STONE/ANDESITE/TUFF、雪块、沙漠沙+砂岩、恶地红沙+陶瓦、滩涂沙、沼泽泥斑、
+    水底按深度沙/砾/黏土、坡度 ≥5 或高海拔陡坡裸岩）
+  - **自动生态融合**：群系网格 4 连通域分割不规则区（≥300 格、≤24 块）→ 每区建
+    **掩码 Forest**（BitSet 入 forests.yml；Placement/GroundSnapshot/Atmosphere 全掩码
+    感知）→ 森林区按表配主题+树种（temperate/taiga/snowy/rainforest/swamp/savanna；
+    温带 18% 金秋、小林班 8% 樱花；稀疏变体 densityScale 0.45）**instant 种树** →
+    开阔区（plains/meadow/grove/desert/badlands/雪坡）只铺氛围（强度按表：meadow
+    groundcover 2.2、荒漠 water 0.2/town 0 等）→ 逐区链式推进；生成的森林是常规
+    Forest，可继续 advance 演替/atmo 调参重铺
+  - **进度双通道**：聊天栏文本进度条（阶段切换+每 ≥10% 一行，3s 节流）+ BossBar 连续
+    百分比；阶段：权重下载（MB/s+ETA）→ 模型装载（首次图优化数分钟）→ 扩散推理
+    （窗口计数，估算 ×2.4 已标定）→ 地形铺设（操作数精确分母）→ 生态逐区
+  - **选址辅助** `/miaeco terra scout`：只跑 coarse 粗扫 ±16 单位报告陆地占比/最近陆地/
+    陆块质心（origin 可能在大洋腹地——冒烟 run0 实测 100% 海洋）；`terra prefetch`
+    预下载+装载；`terra status/cancel`
+  - **离线验证** `gradle :miaeco:dumpTerra`：真实权重双 seed 双窗跑管线 → 高度阴影/
+    群系/分区三张 PNG + 硬校验（NaN/高度预算/未知群系亮紫/边缘羽化归 64）——
+    本版 TERRA CHECK: PASS
+  - 运维：RAM 需 ~2.5GB（-Xmx 建议 +3G）、inference-threads 可限核；权重目录
+    plugins/MiaEco/models/（可手放跳过下载，terrain.validate-model=false 免校验）
+- **0.17.0** 村落成熟版：广场水井 + 院落 + 路灯 + 箱子战利品：
   - **村心广场**（≥3 户成村）：质心 ±8 搜 7×7 净空（起伏 ≤2 否则整体放弃）→ 中位数
     整平 + 斑驳铺装（径/砾/圆石/留草混合）→ 3×3 石井（圈石+中水+角双层石墙+石板顶）
     + 对角灯柱；小路以井口为汇点（不再是数学质心）
@@ -205,19 +244,18 @@ MiaEco 是 MiaHub monorepo（`Timefiles404/MiaHub`）里的一个 Paper 1.21.x /
 
 ## 当前阶段状态
 
-**地物氛围阶段**推进至 0.14.0（河流水文/驳岸/植株/簇聚落/冲刷/山体硬化/地表 v2 已成体系）。
-**下一阶段两条线已完成调研与设计**（见 `docs/settlement-terrain-design.md`）：
-- **人烟首版（建议 0.15.x）**：Epic Villages 152 件 NBT（已解包盘点，
-  `references/epic-villages/nbt_inventory.json`）+ 自研地形自适应 jigsaw 拼装器 +
-  村内街道/村外 A* 接路 + 程序化院落地基；整屋程序化评估为高风险，先不做。
-- **真实地形生成（mia-terrain 模块）**：terrain-diffusion-mc 已是纯 Java+ONNX 全本地
-  推理（MIT），提炼即用；调研全文 `references/terrain-diffusion/STUDY.md`。
+**大世界阶段已开工并落地首版（0.18.0）**：扩散地形推理内置（不再需要独立 mia-terrain
+模块——直接进了 miaeco `terrain/` 包）、多世界管理、选区生成+无缝拼图、自动生态融合
+（不规则掩码森林区 instant 种树+氛围）全链贯通；离线 dumpTerra 验证 PASS，
+服务器端体验（下载/推理耗时/铺设 TPS/生态效果）待远程实测反馈。
+人烟（town 特征）已在 0.16.0~0.17.0 成体系。
 河周/其他区域特殊地物（河心洲/砾石滩/倒木堆/岩拱/石柱林/温泉等）仍在池中，等用户排期。
 
 ## 后续任务（用户已排期，接手前先问用户从哪个开始）
 
-1. ~~研究 terrain diffusion mod~~ **已完成**：结论=路径 B（ONNX+Java 进程内，上游已做完
-   最难的 80%），设计与分期见 `docs/settlement-terrain-design.md` 第二节。
+1. ~~研究 terrain diffusion mod~~ → ~~落地~~ **0.18.0 已上线**（terrain/ 包 + world/terra
+   命令）。后续深化候选：GPU 加速文档化、探索者网页地图（explorer 移植）、
+   更大选区分批推理、旧选区羽化环重生成（当前靠外扩吞环）。
 2. **自定义导入图章（stamp）**：允许用户导入自己的 schematic/结构作为氛围地物图章，
    提升氛围可用性。
 3. **自定义导入树类型**：导入树 schematic 作为树种，用导入树构建 instant 森林

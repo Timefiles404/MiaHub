@@ -75,6 +75,7 @@ public final class PlacementService {
         for (double[] p : points) {
             int lx = (int) p[0];
             int lz = (int) p[1];
+            if (!forest.inMask(lx, lz)) continue;   // 不规则区掩码（terra 生态分区）
             int wx = region.minX() + lx;
             int wz = region.minZ() + lz;
 
