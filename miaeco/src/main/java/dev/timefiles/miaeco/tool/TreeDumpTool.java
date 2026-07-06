@@ -110,6 +110,7 @@ public final class TreeDumpTool {
             case LEVELLED -> "l" + s.aux;
             case PICKLES -> "p" + s.aux;
             case PETALS -> "f" + s.aux;
+            case FACING -> s.facing == null ? "" : s.facing.name().substring(0, 1).toLowerCase();
             case STAIR -> (s.facing == null ? "" : s.facing.name().substring(0, 1).toLowerCase())
                     + (s.aux == 1 ? "_top" : "");
             case BUTTON -> switch (s.aux) {

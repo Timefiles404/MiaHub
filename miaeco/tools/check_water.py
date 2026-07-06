@@ -103,7 +103,9 @@ for line in lines[1:]:
     comps = Counter(find(c) for c in graph_cols)
     sizes = sorted(comps.values(), reverse=True)
     big = [s for s in sizes if s >= 6]
-    # 真断裂：成对间隙且二者属不同大分量（各自 ≥6 格——排除装饰性小水潭）
+    # 真断裂：成对间隙且二者属不同"河湖级"大分量（各自 ≥40 格）。
+    # 小分量豁免：月牙塘等高位悬塘（~15-35 格）与下方河面本就是设计上的两个水体；
+    # 装饰性水潭亦然。被拦腰截断的河的任一半都远大于 40。
     breaks = 0
     break_samples = []
     for (x, z), (lo, hi) in wcols.items():
@@ -114,7 +116,7 @@ for line in lines[1:]:
                 continue
             lo2, hi2 = wcols[nb]
             if (lo > hi2 or lo2 > hi) and find((x, z)) != find(nb) \
-                    and comps[find((x, z))] >= 6 and comps[find(nb)] >= 6:
+                    and comps[find((x, z))] >= 40 and comps[find(nb)] >= 40:
                 breaks += 1
                 if len(break_samples) < 3:
                     break_samples.append(f"({x},{z})[{lo}..{hi}]x{nb}[{lo2}..{hi2}]")

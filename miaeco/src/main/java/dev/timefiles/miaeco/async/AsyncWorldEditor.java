@@ -126,8 +126,10 @@ public final class AsyncWorldEditor {
         if (data instanceof Leaves leaves) {
             leaves.setPersistent(true);
         }
-        if (spec.waterlogged && data instanceof org.bukkit.block.data.Waterlogged wl) {
-            wl.setWaterlogged(true);
+        if (data instanceof org.bukkit.block.data.Waterlogged wl) {
+            // 必须显式双向设置：海泡菜等方块的默认方块状态是 waterlogged=true，
+            // 只在 true 时设置会让"水上枯泡菜"带着一格默认水悬在空中
+            wl.setWaterlogged(spec.waterlogged);
         }
         switch (spec.state) {
             case AXIS -> {
@@ -179,6 +181,11 @@ public final class AsyncWorldEditor {
                 if (data instanceof org.bukkit.block.data.type.PinkPetals pp) {
                     pp.setFlowerAmount(Math.max(1, Math.min(pp.getMaximumFlowerAmount(), spec.aux)));
                 }
+                if (spec.facing != null && data instanceof Directional dir) {
+                    dir.setFacing(spec.facing);
+                }
+            }
+            case FACING -> {
                 if (spec.facing != null && data instanceof Directional dir) {
                     dir.setFacing(spec.facing);
                 }

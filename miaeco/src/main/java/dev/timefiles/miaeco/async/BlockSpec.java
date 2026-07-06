@@ -15,7 +15,7 @@ import java.util.Set;
 public final class BlockSpec {
 
     /** 附加状态类型。 */
-    public enum State { NONE, AXIS, VINE_FACES, SLAB_TOP, SNOW_LAYERS, HALF_UPPER, STAIR, BUTTON, AGE, LEVELLED, PICKLES, PETALS }
+    public enum State { NONE, AXIS, VINE_FACES, SLAB_TOP, SNOW_LAYERS, HALF_UPPER, STAIR, BUTTON, AGE, LEVELLED, PICKLES, PETALS, FACING }
 
     /** BUTTON 附着位置（aux 值）。 */
     public static final int ATTACH_FLOOR = 0;
@@ -97,7 +97,12 @@ public final class BlockSpec {
                 Math.max(1, Math.min(4, amount)), false);
     }
 
-    /** 本方块的含水（waterlogged）版本——玻璃板茎/浮水叶/珊瑚扇/水中台阶等用。 */
+    /** 有朝向的方块（大型垂滴叶等 Directional）：facing=朝向。 */
+    public static BlockSpec facing(Material m, BlockFace facing) {
+        return new BlockSpec(m, State.FACING, null, null, facing, 0, false);
+    }
+
+    /** 本方块的含水（waterlogged）版本——玻璃板茎/浮水叶/垂滴叶茎/水中台阶等用。 */
     public BlockSpec waterlogged() {
         return waterlogged ? this : new BlockSpec(material, state, axis, faces, facing, aux, true);
     }
