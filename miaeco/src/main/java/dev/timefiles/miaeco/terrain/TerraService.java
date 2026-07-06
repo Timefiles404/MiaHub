@@ -54,7 +54,6 @@ public final class TerraService {
     private final AsyncWorldEditor terraEditor;
     private final GrowthService terraGrowth;
     private final AtmosphereService terraAtmo;
-    private final HeightMapper mapper;
 
     private volatile Job job;
 
@@ -68,7 +67,6 @@ public final class TerraService {
         this.terraEditor = new AsyncWorldEditor(plugin, settings.blocksPerTick());
         this.terraGrowth = new GrowthService(plugin, pool, terraEditor);
         this.terraAtmo = new AtmosphereService(plugin, pool, terraEditor);
-        this.mapper = new HeightMapper(settings.vScale(), settings.softStartY(), settings.maxY());
     }
 
     // ============================ 对外 API ============================
@@ -84,7 +82,23 @@ public final class TerraService {
         if (w > st.maxSelection() || h > st.maxSelection()) {
             return "选区太大（单边上限 " + st.maxSelection() + "，当前 " + w + "×" + h + "）。";
         }
+        if (entry.map != null) return "这是地图世界（world create size=…），地形在创建时已自动生成。";
         Job j = new Job(sender, world.getName(), entry, sel, withEco && st.autoEco());
+        this.job = j;
+        pool.execute(j::run);
+        return null;
+    }
+
+    /** 地图世界创建后调用：以 (0,0) 为中心生成 size×size 地图 + 自动生态。 */
+    public String startMap(CommandSender sender, String worldName) {
+        if (!st.enabled()) return "地形生成未启用（config.yml terrain.enabled）。";
+        if (job != null) return "已有地形任务在跑（/miaeco terra status 查看）。";
+        EcoWorlds.Entry entry = worlds.entry(worldName);
+        if (entry == null || entry.map == null) return "不是地图世界: " + worldName;
+        if (!entry.patches.isEmpty()) return "该地图已生成过。";
+        int s = entry.map.size();
+        Region sel = new Region(worldName, -s / 2, 0, -s / 2, -s / 2 + s - 1, 0, -s / 2 + s - 1);
+        Job j = new Job(sender, worldName, entry, sel, st.autoEco());
         this.job = j;
         pool.execute(j::run);
         return null;
@@ -148,6 +162,9 @@ public final class TerraService {
         final EcoWorlds.Entry entry;
         final Region selRaw;
         final boolean withEco;
+        final boolean mapMode;
+        final int mpb;                 // 比例尺：每格米数（15/30/60/120）
+        final HeightMapper mapper;
         final AtomicBoolean cancelled = new AtomicBoolean(false);
         final TerraProgress progress;
         volatile String stageName = "准备";
@@ -158,6 +175,10 @@ public final class TerraService {
             this.entry = entry;
             this.selRaw = sel;
             this.withEco = withEco;
+            this.mapMode = entry != null && entry.map != null;
+            this.mpb = mapMode ? entry.map.metersPerBlock() : 0;   // 0=画布模式走 provider 默认路径
+            this.mapper = new HeightMapper(st.vScale(), st.softStartY(), st.maxY(),
+                    mapMode ? entry.map.seaLevel() : HeightMapper.SEA_LEVEL);
             this.progress = new TerraProgress(plugin, sender, world == null ? "" : world);
         }
 
@@ -227,14 +248,16 @@ public final class TerraService {
 
         void run() {
             try {
-                // 贴近旧选区的边自动外扩，吞掉旧羽化环实现无缝拼接
                 int x1 = selRaw.minX(), z1 = selRaw.minZ(), x2 = selRaw.maxX(), z2 = selRaw.maxZ();
                 List<EcoWorlds.Patch> old = List.copyOf(entry.patches);
-                int grow = st.feather() + 2;
-                if (touchesSide(old, x1 - 2, z1, x1 - 2, z2)) x1 -= grow;
-                if (touchesSide(old, x2 + 2, z1, x2 + 2, z2)) x2 += grow;
-                if (touchesSide(old, x1, z1 - 2, x2, z1 - 2)) z1 -= grow;
-                if (touchesSide(old, x1, z2 + 2, x2, z2 + 2)) z2 += grow;
+                if (!mapMode) {
+                    // 贴近旧选区的边自动外扩，吞掉旧羽化环实现无缝拼接
+                    int grow = st.feather() + 2;
+                    if (touchesSide(old, x1 - 2, z1, x1 - 2, z2)) x1 -= grow;
+                    if (touchesSide(old, x2 + 2, z1, x2 + 2, z2)) x2 += grow;
+                    if (touchesSide(old, x1, z1 - 2, x2, z1 - 2)) z1 -= grow;
+                    if (touchesSide(old, x1, z2 + 2, x2, z2 + 2)) z2 += grow;
+                }
                 final int fx1 = x1, fz1 = z1, fx2 = x2, fz2 = z2;
                 final int W = x2 - x1 + 1, H = z2 - z1 + 1;
 
@@ -242,22 +265,22 @@ public final class TerraService {
                 checkCancel();
 
                 // ---- 扩散推理 ----
-                stage("扩散推理（" + W + "×" + H + "）");
+                stage("扩散推理（" + W + "×" + H + (mapMode ? "，比例尺 " + mpb + "m/格" : "") + "）");
                 LocalTerrainProvider.init(entry.seed);
-                long expect = estimateWindows(H, W);
                 long w0 = LocalTerrainProvider.windowCount();
-                Thread poller = startInferencePoller(w0, expect);
+                Thread poller = startInferencePoller(w0, estimateWindowsFor(W, H));
                 LocalTerrainProvider.HeightmapData data;
                 long tInf = System.currentTimeMillis();
                 try {
-                    data = LocalTerrainProvider.getInstance().fetchHeightmap(fz1, fx1, fz1 + H, fx1 + W);
+                    data = fetchTerrain(fx1, fz1, W, H);
                 } finally {
                     poller.interrupt();
                 }
-                progress.update(1.0, (System.currentTimeMillis() - tInf) / 1000 + "s");
+                progress.update(1.0, (System.currentTimeMillis() - tInf) / 1000 + "s · "
+                        + (LocalTerrainProvider.windowCount() - w0) + " 窗口");
                 checkCancel();
 
-                // ---- 规划：高度映射 + 羽化 + 皮肤决策输入 ----
+                // ---- 规划：高度映射 + 边缘处理 + 皮肤决策输入 ----
                 Plan plan = buildPlan(data, fx1, fz1, W, H, old);
                 checkCancel();
 
@@ -268,24 +291,48 @@ public final class TerraService {
 
                 worlds.addPatch(world, new EcoWorlds.Patch(fx1, fz1, fx2, fz2));
                 maybeSetSpawn(fx1, fz1, W, H, plan);
+                if (mapMode) removeStagingPlatform();
                 progress.chat("地形完成：Y ∈ [" + plan.minY + ", " + plan.maxY + "]，海洋 "
-                        + plan.oceanPct + "%，已并入世界拼图（相邻选区自动无缝）。");
+                        + plan.oceanPct + "%" + (mapMode ? "（地图四周为海环+虚空）"
+                        : "，已并入世界拼图（相邻选区自动无缝）。"));
 
                 // ---- 生态 ----
                 if (withEco) {
                     runEco(plan, fx1, fz1, W, H);
                 } else {
-                    progress.chat("已跳过自动生态（terra gen noeco）。");
+                    progress.chat("已跳过自动生态。");
                 }
-                progress.done("大地形完成 @ " + world + " [" + fx1 + "," + fz1 + "]~[" + fx2 + "," + fz2 + "]");
+                progress.done((mapMode ? "地图世界生成完成 @ " : "大地形完成 @ ") + world
+                        + " [" + fx1 + "," + fz1 + "]~[" + fx2 + "," + fz2 + "]");
             } catch (CancelledException c) {
-                progress.fail("任务已取消（已铺设部分保留；可重新框选生成）。");
+                progress.fail("任务已取消（已铺设部分保留" + (mapMode ? "" : "；可重新框选生成") + "）。");
             } catch (Throwable t) {
                 fail("地形生成失败: " + rootMsg(t), t);
             } finally {
                 ModelAssetManager.setDownloadListener(null);
                 job = null;
             }
+        }
+
+        /** 取地形数据：画布走 provider 标准路径（scale=2 上采样+噪声）；地图按比例尺取原生/池化。 */
+        private LocalTerrainProvider.HeightmapData fetchTerrain(int x1, int z1, int W, int H) throws Exception {
+            if (!mapMode || mpb <= 15) {
+                return LocalTerrainProvider.getInstance().fetchHeightmap(z1, x1, z1 + H, x1 + W);
+            }
+            return fetchPooled(x1, z1, W, H, Math.max(1, mpb / 30));
+        }
+
+        /** 地图世界创建时在 (0,100) 放的临时玻璃站台，生成完拆掉。 */
+        private void removeStagingPlatform() {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                World w = Bukkit.getWorld(world);
+                if (w == null) return;
+                for (int dx = -1; dx <= 1; dx++)
+                    for (int dz = -1; dz <= 1; dz++) {
+                        var b = w.getBlockAt(dx, 99, dz);
+                        if (b.getType() == Material.GLASS) b.setType(Material.AIR, false);
+                    }
+            });
         }
 
         // ---- 阶段 1/2：权重 + 模型 ----
@@ -350,12 +397,33 @@ public final class TerraService {
 
         // ---- 阶段 3 进度轮询 ----
 
-        private Thread startInferencePoller(long base, long expect) {
+        /** 窗口数估算：面积项 ×2.4 标定 + 固定开销下限（小选区也要付整窗税——260×244 冷启动实测 ~100 窗）。 */
+        private long estimateWindowsFor(int W, int H) {
+            int nW, nH;
+            if (mapMode && mpb > 15) {
+                int p = Math.max(1, mpb / 30);
+                nW = W * p + 8;
+                nH = H * p + 8;
+            } else {
+                int sc = Math.max(1, TerrainConfig.scale());
+                nW = W / sc + 8;
+                nH = H / sc + 8;
+            }
+            long dec = tiles(nH, 256, 192) * tiles(nW, 256, 192);
+            long lat = 2L * tiles(nH / 8 + 8, 64, 32) * tiles(nW / 8 + 8, 64, 32);
+            long coarse = tiles(nH / 256 + 2, 64, 48) * tiles(nW / 256 + 2, 64, 48);
+            return (long) ((dec + lat + coarse) * 2.4) + 70;
+        }
+
+        /** 分母自适应：实际窗口逼近估算值时抬高估算——进度条变慢但永不冻在 97%。 */
+        private Thread startInferencePoller(long base, long expectInit) {
             Thread t = new Thread(() -> {
+                long expect = Math.max(1, expectInit);
                 while (!Thread.currentThread().isInterrupted()) {
                     long wnd = LocalTerrainProvider.windowCount() - base;
-                    progress.update(Math.min(0.97, wnd / (double) Math.max(1, expect)),
-                            wnd + " 窗口");
+                    if (wnd > expect * 0.92) expect = Math.max(expect + 8, (long) (wnd * 1.18));
+                    progress.update(Math.min(0.96, wnd / (double) expect),
+                            wnd + " 窗口 · base 批推理会成批跳变");
                     try {
                         Thread.sleep(700);
                     } catch (InterruptedException e) {
@@ -374,38 +442,49 @@ public final class TerraService {
                                int x1, int z1, int W, int H, List<EcoWorlds.Patch> old) {
             Plan p = new Plan(W, H);
             int F = st.feather();
-            // 各边逐行/列判定“朝外 2 格是否落在旧选区”→ 该投影位免羽化
+            // 画布：各边逐行/列判定“朝外 2 格是否落在旧选区”→ 该投影位免羽化
             boolean[] openW = new boolean[H], openE = new boolean[H], openN = new boolean[W], openS = new boolean[W];
-            for (int z = 0; z < H; z++) {
-                openW[z] = !inAnyPatch(old, x1 - 2, z1 + z);
-                openE[z] = !inAnyPatch(old, x1 + W + 1, z1 + z);
+            if (!mapMode) {
+                for (int z = 0; z < H; z++) {
+                    openW[z] = !inAnyPatch(old, x1 - 2, z1 + z);
+                    openE[z] = !inAnyPatch(old, x1 + W + 1, z1 + z);
+                }
+                for (int x = 0; x < W; x++) {
+                    openN[x] = !inAnyPatch(old, x1 + x, z1 - 2);
+                    openS[x] = !inAnyPatch(old, x1 + x, z1 + H + 1);
+                }
             }
-            for (int x = 0; x < W; x++) {
-                openN[x] = !inAnyPatch(old, x1 + x, z1 - 2);
-                openS[x] = !inAnyPatch(old, x1 + x, z1 + H + 1);
-            }
+            // 地图：边缘岛屿式衰减带宽（虚空接缝沉入海环之下）
+            int edgeBand = mapMode ? Math.max(24, Math.min(96, Math.min(W, H) / 8)) : 0;
             for (int z = 0; z < H; z++) {
                 for (int x = 0; x < W; x++) {
                     int i = z * W + x;
-                    short m = data.heightmap[z][x];
+                    float m = data.heightmap[z][x];
                     short b = data.biomeIds[z][x];
                     p.biome[i] = b;
-                    int dist = Integer.MAX_VALUE;
-                    if (openW[z]) dist = Math.min(dist, x);
-                    if (openE[z]) dist = Math.min(dist, W - 1 - x);
-                    if (openN[x]) dist = Math.min(dist, z);
-                    if (openS[x]) dist = Math.min(dist, H - 1 - z);
-                    int y = mapper.feather(mapper.yOf(m), dist, F);
+                    int y;
+                    if (mapMode) {
+                        int d = Math.min(Math.min(x, z), Math.min(W - 1 - x, H - 1 - z));
+                        m = edgeFalloff(m, d, edgeBand);
+                        y = mapper.yOf(m);
+                    } else {
+                        int dist = Integer.MAX_VALUE;
+                        if (openW[z]) dist = Math.min(dist, x);
+                        if (openE[z]) dist = Math.min(dist, W - 1 - x);
+                        if (openN[x]) dist = Math.min(dist, z);
+                        if (openS[x]) dist = Math.min(dist, H - 1 - z);
+                        y = mapper.feather(mapper.yOf(m), dist, F);
+                    }
                     p.y[i] = y;
                     p.rawOcean[i] = m < 0;
                     if (y < p.minY) p.minY = y;
                     if (y > p.maxY) p.maxY = y;
                 }
             }
-            // 水体列：原生海洋 且 羽化后地板仍在海平面下
+            // 水体列：海洋高程 且 处理后地板仍在海平面下
             int ocean = 0;
             for (int i = 0; i < W * H; i++) {
-                p.water[i] = p.rawOcean[i] && p.y[i] < HeightMapper.SEA_LEVEL;
+                p.water[i] = p.rawOcean[i] && p.y[i] < mapper.sea();
                 if (p.water[i]) ocean++;
             }
             p.oceanPct = Math.round(1000.0 * ocean / (W * H)) / 10.0;
@@ -413,7 +492,7 @@ public final class TerraService {
             for (int z = 0; z < H; z++) {
                 for (int x = 0; x < W; x++) {
                     int i = z * W + x;
-                    if (p.water[i] || p.y[i] > HeightMapper.SEA_LEVEL + 2) continue;
+                    if (p.water[i] || p.y[i] > mapper.sea() + 2) continue;
                     outer:
                     for (int dz = -3; dz <= 3; dz++) {
                         for (int dx = -3; dx <= 3; dx++) {
@@ -443,8 +522,8 @@ public final class TerraService {
             long ops = 0;
             for (int i = 0; i < W * H; i++) {
                 int y = p.y[i];
-                ops += Math.abs(y - PlainBase.SURFACE) + 5;
-                if (p.water[i]) ops += HeightMapper.SEA_LEVEL - y;
+                ops += mapMode ? 24 + 5 : Math.abs(y - PlainBase.SURFACE) + 5;
+                if (p.water[i]) ops += mapper.sea() - y;
                 ops += 12;   // biome 列近似
             }
             p.totalOps = ops;
@@ -480,7 +559,12 @@ public final class TerraService {
                     boolean water = p.water[i];
                     Material[] skin = skinFor(p, i, wx, wz);
 
-                    if (y >= PlainBase.SURFACE) {
+                    if (mapMode) {
+                        // 虚空画布：悬浮板块，柱厚 24 格
+                        for (int yy = y - 23; yy <= y - skin.length; yy++) {
+                            edits.add(new BlockEdit(wx, yy, wz, BlockSpec.of(Material.STONE)));
+                        }
+                    } else if (y >= PlainBase.SURFACE) {
                         for (int yy = PlainBase.SURFACE - 4; yy <= y - skin.length; yy++) {
                             edits.add(new BlockEdit(wx, yy, wz, BlockSpec.of(Material.STONE)));
                         }
@@ -494,8 +578,8 @@ public final class TerraService {
                     }
                     if (water) {
                         boolean frozen = EcoBiomes.isFrozenOcean(b);
-                        for (int yy = y + 1; yy <= HeightMapper.SEA_LEVEL; yy++) {
-                            boolean top = yy == HeightMapper.SEA_LEVEL;
+                        for (int yy = y + 1; yy <= mapper.sea(); yy++) {
+                            boolean top = yy == mapper.sea();
                             edits.add(new BlockEdit(wx, yy, wz,
                                     top && frozen ? BlockSpec.of(Material.ICE) : BlockSpec.of(Material.WATER)));
                         }
@@ -513,7 +597,7 @@ public final class TerraService {
                     int x = Math.min(W - 1, Math.max(0, wxq - x1 + 1));
                     int i = z * W + x;
                     int y = p.y[i];
-                    int lo = (p.water[i] ? y : Math.min(y, HeightMapper.SEA_LEVEL)) - 8;
+                    int lo = (p.water[i] ? y : Math.min(y, mapper.sea())) - 8;
                     int hi = y + 16;
                     biomeOps.add(new int[]{wxq, wzq, lo, hi, p.biome[i]});
                 }
@@ -600,7 +684,7 @@ public final class TerraService {
             int slope = p.slope[i];
             double hash = hash01(entry.seed, wx, wz);
             if (p.water[i]) {
-                int depth = HeightMapper.SEA_LEVEL - y;
+                int depth = mapper.sea() - y;
                 if (depth <= 4) return new Material[]{Material.SAND, Material.SAND, Material.GRAVEL};
                 return hash < 0.5
                         ? new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE}
@@ -841,18 +925,65 @@ public final class TerraService {
         return false;
     }
 
-    /** 推理窗口估算（进度分母；×2.4 为 dumpTerra 实测标定：512² 块估 28 实 65）。 */
-    static long estimateWindows(int blocksH, int blocksW) {
-        int scale = Math.max(1, TerrainConfig.scale());
-        int nH = blocksH / scale + 8, nW = blocksW / scale + 8;
-        long dec = tiles(nH, 256, 192) * tiles(nW, 256, 192);
-        long lat = 2L * tiles(nH / 8 + 8, 64, 32) * tiles(nW / 8 + 8, 64, 32);
-        long coarse = tiles(nH / 256 + 2, 64, 48) * tiles(nW / 256 + 2, 64, 48);
-        return (long) ((dec + lat + coarse) * 2.4);
-    }
-
     private static long tiles(int size, int tile, int stride) {
         return Math.max(1, (long) Math.ceil((size + tile * 0.5) / (double) stride));
+    }
+
+    /** 地图边缘岛屿式衰减：距边 d（<band）时把高程压向 -45m，边界必成浅海环。 */
+    public static float edgeFalloff(float meters, int d, int band) {
+        if (d >= band) return meters;
+        double s = Math.max(0, d) / (double) band;
+        s = s * s * (3 - 2 * s);
+        return (float) (-45 + (meters + 45) * s);
+    }
+
+    /**
+     * 比例尺 30/60/120（1 格 = p 原生像素 = 30p 米）：取原生高程/气候场，
+     * p×p 平均池化后按池化分辨率分类群系。静态纯函数，供离线 dumpTerra 复用验证。
+     */
+    public static LocalTerrainProvider.HeightmapData fetchPooled(int x1, int z1, int W, int H, int p) throws Exception {
+        int ni1 = (z1 - 1) * p, nj1 = (x1 - 1) * p;             // 各留 1 格（p px）边距做坡度 padding
+        int nH = (H + 2) * p, nW = (W + 2) * p;
+        float[][] out = LocalTerrainProvider.getPipelineData(ni1, nj1, ni1 + nH, nj1 + nW, true);
+        float[] elevN = out[0];
+        float[] climN = out[1];
+        int PW = W + 2, PH = H + 2;
+        float[] elevPad = new float[PH * PW];
+        float[] clim = new float[5 * H * W];
+        for (int r = 0; r < PH; r++) {
+            for (int c = 0; c < PW; c++) {
+                float sum = 0;
+                for (int dr = 0; dr < p; dr++)
+                    for (int dc = 0; dc < p; dc++) sum += elevN[(r * p + dr) * nW + c * p + dc];
+                elevPad[r * PW + c] = sum / (p * p);
+            }
+        }
+        for (int ch = 0; ch < 5 && climN != null; ch++) {
+            for (int r = 0; r < H; r++) {
+                for (int c = 0; c < W; c++) {
+                    float sum = 0;
+                    for (int dr = 0; dr < p; dr++)
+                        for (int dc = 0; dc < p; dc++)
+                            sum += climN[ch * nH * nW + ((r + 1) * p + dr) * nW + (c + 1) * p + dc];
+                    clim[ch * H * W + r * W + c] = sum / (p * p);
+                }
+            }
+        }
+        float[] elev = new float[H * W];
+        for (int r = 0; r < H; r++)
+            for (int c = 0; c < W; c++) elev[r * W + c] = elevPad[(r + 1) * PW + (c + 1)];
+        short[] biomes = dev.timefiles.miaeco.terrain.pipeline.BiomeClassifier.classify(
+                elev, climN == null ? null : clim, z1, x1, elevPad, H, W, 30f * p);
+        short[][] hm = new short[H][W];
+        short[][] bm = new short[H][W];
+        for (int r = 0; r < H; r++) {
+            for (int c = 0; c < W; c++) {
+                float e = elev[r * W + c];
+                hm[r][c] = (short) Math.max(-32768, Math.min(32767, (int) Math.floor(e)));
+                bm[r][c] = biomes[r * W + c];
+            }
+        }
+        return new LocalTerrainProvider.HeightmapData(hm, bm, W, H);
     }
 
     private final Map<Short, Biome> biomeCache = new HashMap<>();

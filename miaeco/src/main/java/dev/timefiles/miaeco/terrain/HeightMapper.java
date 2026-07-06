@@ -16,18 +16,27 @@ public final class HeightMapper {
     private final int softStartY;
     private final int maxY;
     private final int minFloorY;
+    private final int seaLevel;
 
     public HeightMapper(double vScale, int softStartY, int maxY) {
-        this.vScale = Math.max(5, vScale);
-        this.softStartY = softStartY;
-        this.maxY = maxY;
-        this.minFloorY = -50;
+        this(vScale, softStartY, maxY, SEA_LEVEL);
     }
+
+    /** seaLevel 可按世界配置（地图世界的 sea=… 参数）；画布世界固定 63。 */
+    public HeightMapper(double vScale, int softStartY, int maxY, int seaLevel) {
+        this.vScale = Math.max(5, vScale);
+        this.softStartY = Math.max(seaLevel + 20, softStartY);
+        this.maxY = Math.max(this.softStartY + 10, maxY);
+        this.seaLevel = seaLevel;
+        this.minFloorY = Math.max(-60, seaLevel - 113);
+    }
+
+    public int sea() { return seaLevel; }
 
     /** 高程（米）→ 地表方块 Y（该列最上一格固体）。 */
     public int yOf(float meters) {
         if (meters >= 0f) {
-            int y = BASE_SURFACE + (int) Math.floor(meters / vScale);
+            int y = seaLevel + 1 + (int) Math.floor(meters / vScale);
             if (y <= softStartY) return y;
             double over = y - softStartY;
             double span = Math.max(1, maxY - softStartY);
@@ -35,7 +44,7 @@ public final class HeightMapper {
         }
         // 海底：sqrt 压缩，浅海细腻、深海收敛
         int depth = (int) Math.floor(Math.sqrt(-meters + 10) - Math.sqrt(10.0)) + 1;
-        return Math.max(minFloorY, SEA_LEVEL - depth);
+        return Math.max(minFloorY, seaLevel - depth);
     }
 
     /**

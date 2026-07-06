@@ -44,8 +44,49 @@ public final class TerraDumpTool {
 
             fail |= dumpAndCheck(outDir, "run" + run, data);
         }
+        fail |= mapModeRun(outDir);
         System.out.println(fail ? "TERRA CHECK: FAIL" : "TERRA CHECK: PASS");
         if (fail) System.exit(1);
+    }
+
+    /** 地图世界路径：比例尺 60m/格（p=2 池化）+ 岛屿衰减；验证边环必水、预算、群系。 */
+    private static boolean mapModeRun(File outDir) throws Exception {
+        int size = 320;
+        int p = 2;
+        System.out.printf("== map run: size=%d scale=%dm/格 ==%n", size, 30 * p);
+        LocalTerrainProvider.init(SEED + 7777L);
+        long t0 = System.currentTimeMillis();
+        long w0 = LocalTerrainProvider.windowCount();
+        LocalTerrainProvider.HeightmapData data =
+                dev.timefiles.miaeco.terrain.TerraService.fetchPooled(-size / 2, -size / 2, size, size, p);
+        System.out.printf("pooled inference: %.1fs, %d windows%n",
+                (System.currentTimeMillis() - t0) / 1000.0,
+                LocalTerrainProvider.windowCount() - w0);
+
+        HeightMapper mapper = new HeightMapper(40, 250, 300, 63);
+        int band = Math.max(24, Math.min(96, size / 8));
+        boolean fail = false;
+        int landCells = 0;
+        BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_RGB);
+        for (int z = 0; z < size; z++) {
+            for (int x = 0; x < size; x++) {
+                int d = Math.min(Math.min(x, z), Math.min(size - 1 - x, size - 1 - z));
+                float m = dev.timefiles.miaeco.terrain.TerraService.edgeFalloff(data.heightmap[z][x], d, band);
+                int y = mapper.yOf(m);
+                if (y > mapper.maxY() || y < -60) fail = true;
+                if (d == 0 && (m >= 0 || y >= mapper.sea())) {
+                    System.out.println("EDGE FAIL @" + x + "," + z + " m=" + m + " y=" + y);
+                    fail = true;
+                }
+                boolean water = m < 0 && y < mapper.sea();
+                if (!water) landCells++;
+                int v = Math.max(0, Math.min(255, 40 + (y + 60)));
+                img.setRGB(x, z, water ? (30 << 16 | 60 << 8 | 170) : (v << 16 | v << 8 | v));
+            }
+        }
+        System.out.printf("map land %.1f%%, band=%d%n", 100.0 * landCells / (size * size), band);
+        ImageIO.write(img, "png", new File(outDir, "map_island.png"));
+        return fail;
     }
 
     private static boolean dumpAndCheck(File outDir, String tag,

@@ -81,27 +81,85 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         var worlds = eco.worlds();
         switch (args[1].toLowerCase(Locale.ROOT)) {
             case "create" -> {
-                if (args.length < 3) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco world create <名> [seed]"); return; }
+                if (args.length < 3) {
+                    sender.sendMessage(P + ChatColor.RED
+                            + "用法: /miaeco world create <名> [seed=N] [size=N] [scale=15|30|60|120] [sea=Y]");
+                    sender.sendMessage(P + ChatColor.GRAY
+                            + "带 size=地图世界：虚空画布+中心 size×size 自动地形+生态；scale=每格米数（比例尺）。");
+                    return;
+                }
                 Long seed = null;
-                if (args.length >= 4) {
-                    try { seed = Long.parseLong(args[3]); }
-                    catch (NumberFormatException e) { seed = (long) args[3].hashCode(); }
+                Integer size = null;
+                int scaleM = 30, sea = 63;
+                for (int i = 3; i < args.length; i++) {
+                    String a = args[i];
+                    int eq = a.indexOf('=');
+                    if (eq < 0) {   // 兼容旧用法：裸值当 seed
+                        try { seed = Long.parseLong(a); }
+                        catch (NumberFormatException e) { seed = (long) a.hashCode(); }
+                        continue;
+                    }
+                    String k = a.substring(0, eq).toLowerCase(Locale.ROOT);
+                    String v = a.substring(eq + 1);
+                    try {
+                        switch (k) {
+                            case "seed" -> {
+                                try { seed = Long.parseLong(v); }
+                                catch (NumberFormatException e) { seed = (long) v.hashCode(); }
+                            }
+                            case "size" -> size = Integer.parseInt(v);
+                            case "scale" -> scaleM = Integer.parseInt(v);
+                            case "sea" -> sea = Integer.parseInt(v);
+                            default -> { sender.sendMessage(P + ChatColor.RED + "未知参数 " + k); return; }
+                        }
+                    } catch (NumberFormatException e) {
+                        sender.sendMessage(P + ChatColor.RED + k + " 必须是数字。");
+                        return;
+                    }
+                }
+                dev.timefiles.miaeco.world.EcoWorlds.MapSpec map = null;
+                if (size != null) {
+                    if (size < 64 || size > 2048) { sender.sendMessage(P + ChatColor.RED + "size 需在 64~2048。"); return; }
+                    if (scaleM != 15 && scaleM != 30 && scaleM != 60 && scaleM != 120) {
+                        sender.sendMessage(P + ChatColor.RED + "scale 只支持 15/30/60/120（每格米数）。");
+                        return;
+                    }
+                    long nativeSpan = scaleM <= 15 ? size / 2L : (long) size * (scaleM / 30);
+                    if (nativeSpan > 2048) {
+                        sender.sendMessage(P + ChatColor.RED + "size×scale 过大（真实跨度 "
+                                + (nativeSpan * 30 / 1000) + "km > 61km），请减小 size 或 scale。");
+                        return;
+                    }
+                    if (sea < 0 || sea > 200) { sender.sendMessage(P + ChatColor.RED + "sea 需在 0~200。"); return; }
+                    map = new dev.timefiles.miaeco.world.EcoWorlds.MapSpec(size, scaleM, sea);
                 }
                 sender.sendMessage(P + ChatColor.GRAY + "创建世界中…");
-                String err = worlds.create(args[2], seed);
+                String err = worlds.create(args[2], seed, map);
                 if (err != null) { sender.sendMessage(P + ChatColor.RED + err); return; }
                 long s = worlds.entry(args[2]).seed;
-                sender.sendMessage(P + ChatColor.GREEN + "世界 " + args[2] + " 已就绪（seed=" + s
-                        + "，平原画布）。" + ChatColor.GRAY + "tp 过去后 pos1/pos2 框选 → /miaeco terra gen；"
-                        + "或先 /miaeco terra scout 探测陆地分布。");
+                if (map != null) {
+                    sender.sendMessage(P + ChatColor.GREEN + "地图世界 " + args[2] + " 已建（seed=" + s
+                            + " size=" + size + " 比例尺=" + scaleM + "m/格 海平面=" + sea
+                            + "，覆盖真实地貌约 " + (size * scaleM / 1000) + "×" + (size * scaleM / 1000)
+                            + "km），开始自动生成…");
+                    String e2 = eco.terra().startMap(sender, args[2]);
+                    if (e2 != null) sender.sendMessage(P + ChatColor.RED + e2);
+                } else {
+                    sender.sendMessage(P + ChatColor.GREEN + "世界 " + args[2] + " 已就绪（seed=" + s
+                            + "，平原画布）。" + ChatColor.GRAY + "tp 过去后 pos1/pos2 框选 → /miaeco terra gen；"
+                            + "或先 /miaeco terra scout 探测陆地分布。");
+                }
             }
             case "list" -> {
                 if (worlds.all().isEmpty()) { sender.sendMessage(P + ChatColor.GRAY + "暂无生态世界。"); return; }
                 sender.sendMessage(P + ChatColor.AQUA + "生态世界：");
                 for (var e : worlds.all().values()) {
                     boolean loaded = org.bukkit.Bukkit.getWorld(e.name) != null;
+                    String kind = e.map != null
+                            ? "地图 " + e.map.size() + "² @" + e.map.metersPerBlock() + "m/格"
+                            : "画布";
                     sender.sendMessage(ChatColor.YELLOW + " " + e.name + ChatColor.GRAY
-                            + " seed=" + e.seed + " 地形块=" + e.patches.size()
+                            + " [" + kind + "] seed=" + e.seed + " 地形块=" + e.patches.size()
                             + (loaded ? "" : ChatColor.RED + "（未加载）"));
                 }
             }
@@ -129,7 +187,9 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
     }
 
     private void helpWorld(CommandSender s) {
-        msg(s, "/miaeco world create <名> [seed]", "新建专用生态世界（平原画布，不被打扰）");
+        msg(s, "/miaeco world create <名> [seed=N]", "新建平原画布世界（选区式 terra gen）");
+        msg(s, "/miaeco world create <名> size=N [scale=15|30|60|120] [sea=Y]",
+                "新建地图世界：虚空+中心 N×N 自动地形与生态；scale=每格米数");
         msg(s, "/miaeco world list | tp <名>", "列出/传送");
         msg(s, "/miaeco world remove <名> confirm", "卸载并删除世界文件");
     }
@@ -758,6 +818,9 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             else if (a0.equals("atmo") && !a1.equals("themes")) addForests(out, args[2]);
             else if (a0.equals("advance")) addMatches(out, args[2], "1", "3", "6", "12");
             else if (a0.equals("plant")) addMatches(out, args[2], "instant");
+        } else if (args.length >= 4 && args[0].equalsIgnoreCase("world")
+                && args[1].equalsIgnoreCase("create")) {
+            addMatches(out, args[args.length - 1], "size=400", "scale=30", "scale=60", "sea=63", "seed=");
         } else if (args.length == 4) {
             String a0 = args[0].toLowerCase(Locale.ROOT);
             String a1 = args[1].toLowerCase(Locale.ROOT);

@@ -49,12 +49,19 @@
 <tr><td><code>/miaeco atmo set &lt;森林&gt; &lt;主题&gt;</code></td><td>设置氛围主题（<code>atmo themes</code> 列出全部 8 种）</td></tr>
 <tr><td><code>/miaeco atmo apply | clear | info &lt;森林&gt;</code></td><td>铺开氛围 / 精确恢复原地形 / 查看设置</td></tr>
 <tr><td><code>/miaeco atmo feature &lt;森林&gt; &lt;特征&gt; &lt;0~5&gt;</code></td><td>单项强度：river/town/groundcover/water/paths/soil/rocks/ruins（0=关，river 5 档水系尤其强烈，town=人烟）</td></tr>
-<tr><td><code>/miaeco world create &lt;名&gt; [seed] | list | tp &lt;名&gt; | remove &lt;名&gt; confirm</code></td><td>专用生态世界管理（平原画布，不被打扰；remove 连文件夹删除）</td></tr>
+<tr><td><code>/miaeco world create &lt;名&gt; [seed=N] | list | tp &lt;名&gt; | remove &lt;名&gt; confirm</code></td><td>专用生态世界管理（平原画布；remove 连文件夹删除）</td></tr>
+<tr><td><code>/miaeco world create &lt;名&gt; size=N [scale=15|30|60|120] [sea=Y]</code></td><td>地图世界：虚空+中心 N×N 自动地形与生态；scale=每格米数（比例尺），sea=海平面</td></tr>
 <tr><td><code>/miaeco terra gen [noeco]</code></td><td>在选区生成真实地形+自动群系+自动森林（noeco=只地形）</td></tr>
 <tr><td><code>/miaeco terra scout | prefetch | status | cancel</code></td><td>陆地探测 / 预下载模型 / 任务状态 / 取消</td></tr>
 <tr><td><code>/miaeco clear &lt;森林&gt;</code></td><td>清除该森林所有树方块</td></tr>
 <tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（147 棵建筑师设计树）</td></tr>
 </table>
+
+<h2>0.19.0 地图世界 · 一条命令生成有限世界</h2>
+<p><b>一步到位：</b><code>/miaeco world create &lt;名&gt; size=400 scale=60 sea=63</code>——不再需要先建世界再框选：带 <code>size</code> 参数即为<b>地图世界</b>，以中央 (0,0) 向四周延展 size×size 的完整地形+群系+森林自动生成，<b>地图之外全是虚空</b>；四周以岛屿式浅海环收边（虚空接缝藏在水下）。生成期间出生点有临时玻璃站台，完成自动拆除并把出生点设到地图最高处。</p>
+<p><b>比例尺（scale，每格米数）：</b>这是"小地图显平"的答案——15 是原版精细尺度（200×200 只覆盖 3km 真实地貌，当然平），30 为模型原生 1:1，<b>60/120 把 2~4 倍的真实地貌压进同样的方块数</b>（200×200 @scale60 = 12×12km，山脉丘陵海岸尽收），且垂直高度不压缩，山势天然更险峻。</p>
+<p><b>海平面（sea）：</b>可按世界指定海平面 Y（默认 63），水面、滩涂、雪线、水底材质全部跟随。</p>
+<p><b>进度条修复：</b>0.18 的推理进度会卡在 97%——根因是小选区也要支付推理管线的"整窗固定开销"（窗口数远超面积估算）。现在估算加入固定项且分母自适应增长，进度条永不冻结；base 大模型是分批计算的，窗口计数成批跳变属正常。</p>
 
 <h2>0.18.0 大世界 · 扩散地形与自动生态</h2>
 <p><b>真实地形生成：</b>MiaEco 现在内置一套本地 AI 地形推理管线（terrain-diffusion 的纯 Java 移植，MIT）：在专用世界里用 <code>pos1/pos2</code> 框两个点、<code>/miaeco terra gen</code>，即可生成一块以真实地球 30m 高程数据训练出来的完整地貌——山脉、丘陵、海岸、荒漠自动成形，并自动写入原版群系（雪峰/针叶林/丛林/沼泽/草原/海洋等 20 余种）。同一世界内多次框选，块与块<b>天然无缝拼接</b>（世界种子决定一切，边缘自动缝合）。</p>

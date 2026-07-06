@@ -42,14 +42,20 @@ public final class EcoWorlds {
         }
     }
 
+    /** 地图世界规格：size>0 表示"虚空画布 + 中心 size×size 自动地形"。 */
+    public record MapSpec(int size, int metersPerBlock, int seaLevel) { }
+
     public static final class Entry {
         public final String name;
         public final long seed;
+        /** null=经典平原画布（选区式 terra gen）；非 null=有限地图世界。 */
+        public final MapSpec map;
         public final List<Patch> patches = new ArrayList<>();
 
-        Entry(String name, long seed) {
+        Entry(String name, long seed, MapSpec map) {
             this.name = name;
             this.seed = seed;
+            this.map = map;
         }
     }
 
@@ -71,7 +77,11 @@ public final class EcoWorlds {
             if (sec != null) {
                 for (String name : sec.getKeys(false)) {
                     long seed = sec.getLong(name + ".seed");
-                    Entry e = new Entry(name, seed);
+                    int size = sec.getInt(name + ".map.size", 0);
+                    MapSpec map = size > 0 ? new MapSpec(size,
+                            sec.getInt(name + ".map.mpb", 30),
+                            sec.getInt(name + ".map.sea", 63)) : null;
+                    Entry e = new Entry(name, seed, map);
                     for (String s : sec.getStringList(name + ".patches")) {
                         String[] p = s.trim().split("\\s*,\\s*");
                         if (p.length == 4) {
@@ -87,7 +97,7 @@ public final class EcoWorlds {
         }
         for (Entry e : worlds.values()) {
             if (Bukkit.getWorld(e.name) == null) {
-                World w = creator(e.name, e.seed).createWorld();
+                World w = creator(e.name, e.seed, e.map != null).createWorld();
                 if (w != null) {
                     tuneWorld(w);
                     plugin.getLogger().info("已加载生态世界 " + e.name + "（seed=" + e.seed + "）");
@@ -103,6 +113,11 @@ public final class EcoWorlds {
         for (Entry e : worlds.values()) {
             String base = "worlds." + e.name + ".";
             yml.set(base + "seed", e.seed);
+            if (e.map != null) {
+                yml.set(base + "map.size", e.map.size());
+                yml.set(base + "map.mpb", e.map.metersPerBlock());
+                yml.set(base + "map.sea", e.map.seaLevel());
+            }
             List<String> ps = new ArrayList<>(e.patches.size());
             for (Patch p : e.patches) ps.add(p.minX() + "," + p.minZ() + "," + p.maxX() + "," + p.maxZ());
             yml.set(base + "patches", ps);
@@ -118,11 +133,11 @@ public final class EcoWorlds {
         return new File(plugin.getDataFolder(), "worlds.yml");
     }
 
-    private WorldCreator creator(String name, long seed) {
+    private WorldCreator creator(String name, long seed, boolean voidCanvas) {
         return new WorldCreator(name)
                 .environment(World.Environment.NORMAL)
                 .seed(seed)
-                .generator(new PlainChunkGenerator())
+                .generator(new PlainChunkGenerator(voidCanvas))
                 .generateStructures(false);
     }
 
@@ -150,16 +165,22 @@ public final class EcoWorlds {
 
     // ============================ 操作 ============================
 
-    /** 创建并注册新世界；名字非法/占用返回错误信息，成功返回 null。主线程调用。 */
-    public String create(String name, Long seedOrNull) {
+    /** 创建并注册新世界；map 非 null=虚空画布地图世界。错误返回文案，成功返回 null。主线程调用。 */
+    public String create(String name, Long seedOrNull, MapSpec map) {
         if (!NAME_OK.matcher(name).matches()) return "世界名只能用字母/数字/下划线/横线（≤32 字符）。";
         if (worlds.containsKey(name) || Bukkit.getWorld(name) != null) return "世界已存在: " + name;
         if (new File(Bukkit.getWorldContainer(), name).exists()) return "服务器目录下已有同名世界文件夹: " + name;
         long seed = seedOrNull != null ? seedOrNull : new Random().nextLong();
-        World w = creator(name, seed).createWorld();
+        World w = creator(name, seed, map != null).createWorld();
         if (w == null) return "世界创建失败（见后台日志）。";
         tuneWorld(w);
-        worlds.put(name, new Entry(name, seed));
+        if (map != null) {
+            // 虚空画布：出生点下放 3×3 临时玻璃站台（地形生成完由 terra 任务拆除）
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dz = -1; dz <= 1; dz++)
+                    w.getBlockAt(dx, 99, dz).setType(org.bukkit.Material.GLASS, false);
+        }
+        worlds.put(name, new Entry(name, seed, map));
         save();
         return null;
     }
