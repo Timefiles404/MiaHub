@@ -133,6 +133,7 @@ public final class AtmoDumpTool {
 
             List<String> runs = new ArrayList<>(AtmosphereTheme.ids());
             runs.add("temperate!boost");     // 小测试区里放大岩石/遗迹强度做外观验证
+            runs.add("temperate!town5");     // 人烟 density=5：练村落模式（多户+村心路网）
             runs.add("temperate!river3");    // 中强度真实水文式（支流/瀑布/驳岸/植株）
             runs.add("rainforest!river5");   // 河流 density=5 的 fierce 档验证
             runs.add("swamp!river5");
@@ -147,15 +148,27 @@ public final class AtmoDumpTool {
                     st.density("rocks", 3);
                     st.density("ruins", 3);
                     st.density("paths", 2);
+                } else if (mode.equals("town5")) {
+                    st.density("town", 5);
                 } else if (mode.equals("river5")) {
                     st.density("river", 5);
                 } else if (mode.equals("river3")) {
                     st.density("river", 3);
                 }
                 List<BlockEdit> edits = AtmosphereGenerator.generate(snap, th, st, 987654321L, bases);
+                var towns = dev.timefiles.miaeco.atmosphere.TownWorks.drainDebug();
                 String label = mode.isEmpty() ? id : id + "_" + mode;
                 StringBuilder b = new StringBuilder(edits.size() * 24 + 64);
-                b.append("{\"type\":\"atmo\",\"theme\":\"").append(label).append("\",\"blocks\":[");
+                b.append("{\"type\":\"atmo\",\"theme\":\"").append(label).append("\",\"towns\":[");
+                for (int ti = 0; ti < towns.size(); ti++) {
+                    var t = towns.get(ti);
+                    if (ti > 0) b.append(',');
+                    b.append('[').append(t.minX()).append(',').append(t.minZ()).append(',')
+                            .append(t.maxX()).append(',').append(t.maxZ()).append(',')
+                            .append(t.padY()).append(",\"").append(t.piece())
+                            .append("\",\"").append(t.mode()).append("\"]");
+                }
+                b.append("],\"blocks\":[");
                 boolean first = true;
                 for (BlockEdit e : edits) {
                     if (!first) b.append(',');

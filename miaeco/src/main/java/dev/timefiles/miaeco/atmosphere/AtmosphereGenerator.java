@@ -36,6 +36,7 @@ public final class AtmosphereGenerator {
     private AtmosphereGenerator() { }
 
     private static final long S_SOIL = 0x51A7B00CAB1EL;
+    static final long S_TOWN = 0x70FFBEEFCAFEL;
     private static final long S_PATH = 0x9A7F00DDEAD1L;
     private static final long S_WATER = 0x3C0FFEE5EA11L;
     private static final long S_ROCK = 0x0DDBA11F00D5L;
@@ -72,6 +73,7 @@ public final class AtmosphereGenerator {
         }
 
         if (st.densityOf("river") > 0) river(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
+        if (st.densityOf("town") > 0) TownWorks.town(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
         if (st.densityOf("soil") > 0) soil(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
         if (st.densityOf("paths") > 0) paths(g, th, st, seed, treeBases, edits, claimed, pool);
         if (st.densityOf("water") > 0) water(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
@@ -90,14 +92,14 @@ public final class AtmosphereGenerator {
 
     // ============================ A* 成本寻路（河流/小路共用） ============================
 
-    private interface StepCost {
+    interface StepCost {
         /** 走进 (lx,lz) 的代价；正无穷 = 不可走。 */
         double enter(int lx, int lz, int fromLx, int fromLz);
     }
 
     /** 4 邻域 A*；返回途经格序列（含两端），找不到/超预算返回 null。 */
-    private static List<int[]> route(GroundSnapshot g, int sx, int sz, int tx, int tz,
-                                     StepCost cost) {
+    static List<int[]> route(GroundSnapshot g, int sx, int sz, int tx, int tz,
+                             StepCost cost) {
         int w = g.width(), d = g.depth(), n = w * d;
         double[] best = new double[n];
         Arrays.fill(best, Double.MAX_VALUE);
@@ -1820,9 +1822,9 @@ public final class AtmosphereGenerator {
     }
 
     /** 沿寻路结果铺小径：混材质、零散断续、坡面楼梯坡道、踏石台阶。 */
-    private static void stampTrail(GroundSnapshot g, AtmosphereTheme th, Random rng,
-                                   List<int[]> routed, List<int[]> treeBases,
-                                   Map<Long, BlockEdit> edits, boolean[] claimed, boolean[] pool) {
+    static void stampTrail(GroundSnapshot g, AtmosphereTheme th, Random rng,
+                           List<int[]> routed, List<int[]> treeBases,
+                           Map<Long, BlockEdit> edits, boolean[] claimed, boolean[] pool) {
         Material accentFull = null, accentStair = null, accentSlab = null;
         if (th.pathAccent().length > 0) {
             Material acc = th.pathAccent()[rng.nextInt(th.pathAccent().length)];

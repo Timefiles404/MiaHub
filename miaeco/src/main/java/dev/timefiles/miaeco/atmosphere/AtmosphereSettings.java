@@ -10,9 +10,9 @@ import java.util.Map;
  */
 public final class AtmosphereSettings {
 
-    /** 七类氛围特征（river 最优先生成，会重塑地形与湿度场）。 */
+    /** 八类氛围特征（river 最优先生成，会重塑地形与湿度场；town=人烟）。 */
     public static final List<String> FEATURES =
-            List.of("river", "groundcover", "water", "paths", "soil", "rocks", "ruins");
+            List.of("river", "town", "groundcover", "water", "paths", "soil", "rocks", "ruins");
 
     private String theme = "";
     private final Map<String, Double> density = new LinkedHashMap<>();

@@ -48,10 +48,16 @@
 <tr><td><code>/miaeco advance &lt;森林&gt; &lt;月&gt;</code></td><td>推进演替</td></tr>
 <tr><td><code>/miaeco atmo set &lt;森林&gt; &lt;主题&gt;</code></td><td>设置氛围主题（<code>atmo themes</code> 列出全部 8 种）</td></tr>
 <tr><td><code>/miaeco atmo apply | clear | info &lt;森林&gt;</code></td><td>铺开氛围 / 精确恢复原地形 / 查看设置</td></tr>
-<tr><td><code>/miaeco atmo feature &lt;森林&gt; &lt;特征&gt; &lt;0~5&gt;</code></td><td>单项强度：river/groundcover/water/paths/soil/rocks/ruins（0=关，river 5 档水系尤其强烈）</td></tr>
+<tr><td><code>/miaeco atmo feature &lt;森林&gt; &lt;特征&gt; &lt;0~5&gt;</code></td><td>单项强度：river/town/groundcover/water/paths/soil/rocks/ruins（0=关，river 5 档水系尤其强烈，town=人烟）</td></tr>
 <tr><td><code>/miaeco clear &lt;森林&gt;</code></td><td>清除该森林所有树方块</td></tr>
 <tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（147 棵建筑师设计树）</td></tr>
 </table>
+
+<h2>0.16.0 人烟首版 · 房屋与小路</h2>
+<p><b>新特征 town（人烟）：</b>森林里开始有人住了。75 件精选村庄建筑（平原/针叶/雪原三套，铁匠铺/农舍/图书馆/集会点/民居……）以结构文件形式随插件分发，按主题自动选套；<code>/miaeco atmo feature &lt;森林&gt; town 0~5</code> 调强度（0=无人烟）。</p>
+<p><b>按地形和大小自动分档：</b>生成前先扫描"净空垫台"（无水、无树、够平整的空地）——区域太小或没有净空则<b>不出房屋</b>；只有零星空地则出<b>单房屋+一条小路</b>；大区域且空地成群则聚成<b>小村落</b>：门都朝着村心，户间小路在村心汇合再接出森林。</p>
+<p><b>房屋与地面的接触做到平缓优雅：</b>台面高度按脚印分位数取值（宁可下挖嵌进坡地、不堆土台）、削填超限直接换址；建筑自带的地皮层（草地/小径/菜畦）原样落在台面上；填方外露处以圆石勒脚收边；台缘向外 1~4 圈按"每圈最多一格"的坡度预算把地形揉回自然并还草——房子像长在地里，不是摆在地上。门前三格引道自动压平铺径，遇一格落差嵌台阶，四成人家门口立一盏栅栏灯笼。</p>
+<p><b>硬验证：</b>全主题台缘接缝落差 ≤1 占绝对多数、零接缝失败、房下零空洞；楼梯/门/床等全部方块状态随房屋朝向正确旋转。</p>
 
 <h2>0.15.0 地表聚落化 · 微生境选点</h2>
 <p><b>全部地表地物告别随机散列：</b>河岸带之外的林床植被同样改为"锚点 + 连通生长 + 自疏留隙"的聚落体系——每个锚点长出一片<b>同一物种</b>的连通斑块（边缘不规则、内部留孔隙），锚点之间强制留白；原先的逐格随机散点压到低配作为背景（聚与散共存，花朵总量不减，只是从"撒胡椒"变成"花田"）。</p>

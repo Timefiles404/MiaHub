@@ -122,6 +122,13 @@ public final class AsyncWorldEditor {
     /** 在主线程把 BlockSpec 具体化为 BlockData。 */
     private static BlockData toData(BlockSpec spec) {
         Material m = spec.material;
+        if (spec.state == BlockSpec.State.RAW && spec.raw != null) {
+            // 结构件直录 blockstate：以原始串为准（含全部属性）；坏串回退纯材质
+            try {
+                return org.bukkit.Bukkit.createBlockData(spec.raw);
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
         BlockData data = m.createBlockData();
         if (data instanceof Leaves leaves) {
             leaves.setPersistent(true);

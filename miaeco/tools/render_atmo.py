@@ -90,6 +90,32 @@ def color_of(mat: str):
         return (96, 150, 66)
     if "BUTTON" in mat:
         return (150, 150, 150)
+    # ---- 0.16.0 人烟（房屋件材质大类兜底）----
+    if ("PLANKS" in mat or "LOG" in mat or "WOOD" in mat or "FENCE" in mat
+            or "DOOR" in mat or "TRAPDOOR" in mat or "BARREL" in mat or "CHEST" in mat
+            or "CRAFTING" in mat or "LECTERN" in mat or "COMPOSTER" in mat or "SIGN" in mat
+            or "BOOKSHELF" in mat or "LOOM" in mat or "SMOKER" in mat or "TABLE" in mat
+            or "STRIPPED" in mat or "BAMBOO" in mat or "LADDER" in mat):
+        return (168, 132, 84)
+    if "WOOL" in mat or "BED" in mat or "CARPET" in mat or "TERRACOTTA" in mat or "BANNER" in mat:
+        return (196, 120, 108)
+    if "GLASS" in mat or "PANE" in mat:
+        return (168, 208, 224)
+    if "LANTERN" in mat or "TORCH" in mat or "CAMPFIRE" in mat:
+        return (250, 200, 90)
+    if ("WALL" in mat or "ANDESITE" in mat or "DEEPSLATE" in mat or "STONE" in mat
+            or "FURNACE" in mat or "SMITHING" in mat or "GRINDSTONE" in mat
+            or "STONECUTTER" in mat or "ANVIL" in mat or "CAULDRON" in mat
+            or "BELL" in mat or "MUD_BRICK" in mat):
+        return (158, 154, 148)
+    if "HAY" in mat or "WHEAT" in mat or "CARROT" in mat or "POTATO" in mat or "BEETROOT" in mat:
+        return (214, 190, 92)
+    if "PUMPKIN" in mat or "MELON" in mat:
+        return (216, 144, 48)
+    if "SNOW" in mat or "ICE" in mat:
+        return (235, 241, 246)
+    if "POT" in mat or "CANDLE" in mat or "SKULL" in mat or "HEAD" in mat:
+        return (180, 160, 140)
     return (255, 0, 255)   # 未知材质亮紫报警
 
 

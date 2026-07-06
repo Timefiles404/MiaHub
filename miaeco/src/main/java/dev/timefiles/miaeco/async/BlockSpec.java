@@ -15,7 +15,7 @@ import java.util.Set;
 public final class BlockSpec {
 
     /** 附加状态类型。 */
-    public enum State { NONE, AXIS, VINE_FACES, SLAB_TOP, SNOW_LAYERS, HALF_UPPER, STAIR, BUTTON, AGE, LEVELLED, PICKLES, PETALS, FACING }
+    public enum State { NONE, AXIS, VINE_FACES, SLAB_TOP, SNOW_LAYERS, HALF_UPPER, STAIR, BUTTON, AGE, LEVELLED, PICKLES, PETALS, FACING, RAW }
 
     /** BUTTON 附着位置（aux 值）。 */
     public static final int ATTACH_FLOOR = 0;
@@ -37,9 +37,17 @@ public final class BlockSpec {
     public final int aux;
     /** true = 置为含水（waterlogged）——水下玻璃板茎、贴水面的浮水叶/珊瑚扇、水中台阶等。 */
     public final boolean waterlogged;
+    /** 完整 blockstate 原始串（结构 NBT 直录，如 "minecraft:oak_stairs[facing=east,...]"）；
+     *  state==RAW 时有效，写入端经 Bukkit.createBlockData 构建。 */
+    public final String raw;
 
     private BlockSpec(Material material, State state, Axis axis, Set<BlockFace> faces,
                       BlockFace facing, int aux, boolean waterlogged) {
+        this(material, state, axis, faces, facing, aux, waterlogged, null);
+    }
+
+    private BlockSpec(Material material, State state, Axis axis, Set<BlockFace> faces,
+                      BlockFace facing, int aux, boolean waterlogged, String raw) {
         this.material = material;
         this.state = state;
         this.axis = axis;
@@ -47,6 +55,7 @@ public final class BlockSpec {
         this.facing = facing;
         this.aux = aux;
         this.waterlogged = waterlogged;
+        this.raw = raw;
     }
 
     public static BlockSpec of(Material m) { return new BlockSpec(m, State.NONE, null, null, null, 0, false); }
@@ -105,8 +114,13 @@ public final class BlockSpec {
         return new BlockSpec(m, State.FACING, null, null, facing, 0, false);
     }
 
+    /** 结构件原始 blockstate：material 仅供撤销/渲染记账，写入以 raw 串为准。 */
+    public static BlockSpec raw(Material m, String raw) {
+        return new BlockSpec(m, State.RAW, null, null, null, 0, false, raw);
+    }
+
     /** 本方块的含水（waterlogged）版本——玻璃板茎/浮水叶/垂滴叶茎/水中台阶等用。 */
     public BlockSpec waterlogged() {
-        return waterlogged ? this : new BlockSpec(material, state, axis, faces, facing, aux, true);
+        return waterlogged ? this : new BlockSpec(material, state, axis, faces, facing, aux, true, raw);
     }
 }

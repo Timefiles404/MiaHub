@@ -129,6 +129,7 @@ public final class TreeDumpTool {
                 }
                 yield f.toString();
             }
+            case RAW -> "r";
             case NONE -> "";
         };
         return s.waterlogged ? tag + "~w" : tag;
