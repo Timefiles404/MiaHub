@@ -72,7 +72,7 @@ public final class AtmosphereGenerator {
         }
 
         if (st.densityOf("river") > 0) river(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
-        if (st.densityOf("soil") > 0) soil(g, th, st, seed, treeBases, edits, claimed);
+        if (st.densityOf("soil") > 0) soil(g, th, st, seed, treeBases, edits, claimed, wetDist);
         if (st.densityOf("paths") > 0) paths(g, th, st, seed, treeBases, edits, claimed, pool);
         if (st.densityOf("water") > 0) water(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
         if (st.densityOf("rocks") > 0) rocks(g, th, st, seed, treeBases, edits, claimed);
@@ -168,6 +168,8 @@ public final class AtmosphereGenerator {
         WaterWorks.WaterField wf = new WaterWorks.WaterField(w, d);
         FloodResult flood = floodLevels(g);
         int[] fill = flood.fill();   // 每格"外流须越过的最低水位"（湖/河共用）
+        int[] groundOv = new int[w * d];   // 有效地面高度（漫滩削坡后写入）
+        Arrays.fill(groundOv, Integer.MIN_VALUE);
 
         // ① 封闭洼地 → 盆地湖
         boolean lake = basinLakes(g, th, rng, ns, fill, strength, fierce, edits, claimed, pool, wf);
@@ -208,7 +210,7 @@ public final class AtmosphereGenerator {
                 truncated = true;
             }
             carveRiver(g, th, rng, ns ^ (made * 0x5DL), plan, strength, fierce, made == 0,
-                    truncated, treeBases, carved, edits, claimed, pool, wf);
+                    truncated, treeBases, carved, edits, claimed, pool, wf, groundOv);
             made++;
         }
 
@@ -221,8 +223,11 @@ public final class AtmosphereGenerator {
         // ⑤ 山侧月牙塘（独立于河湖，找不到合适山肩就不放）
         crescentPonds(g, th, rng, strength, fierce, treeBases, edits, claimed, pool, wf);
 
-        // ⑥ 水生植株：挺水/浮水/沉水（含天然浅水并入水场）
-        WaterWorks.placeWaterFlora(g, th, st, seed, wf, edits, claimed);
+        // ⑥ 水路连通：对角相邻却无正交连接的水列，其共用侧块低者转水（水路不断裂）
+        connectDiagonals(g, th, rng, ns, edits, claimed, pool, wf);
+
+        // ⑦ 水生植株分带铺设：近岸挺水→中带浮水→底层沉水 + 岸带植被（含天然浅水）
+        WaterWorks.placeWaterFlora(g, th, st, seed, wf, edits, claimed, groundOv);
 
         // 新水体并入湿度场（多源 BFS 松弛）
         if (!wf.cols.isEmpty()) {
@@ -458,6 +463,8 @@ public final class AtmosphereGenerator {
             for (int[] c : cells) {
                 int lx = c[0], lz = c[1];
                 int i = lz * w + lx;
+                // 已被漫滩等改造过的岸列不淹（否则残留的滩涂/植被编辑会悬在水里）
+                if (claimed[i] && !pool[i]) continue;
                 int wx = g.region().minX() + lx;
                 int wz = g.region().minZ() + lz;
                 int gy = g.groundY(lx, lz);
@@ -507,7 +514,8 @@ public final class AtmosphereGenerator {
                                    CoursePlan plan, double strength, boolean fierce,
                                    boolean main, boolean truncated, List<int[]> treeBases,
                                    Set<Long> carved, Map<Long, BlockEdit> edits,
-                                   boolean[] claimed, boolean[] pool, WaterWorks.WaterField wf) {
+                                   boolean[] claimed, boolean[] pool, WaterWorks.WaterField wf,
+                                   int[] groundOv) {
         List<int[]> course = plan.course();
         int[] waterY = plan.waterY();
         boolean[] fall = plan.fall();
@@ -558,7 +566,7 @@ public final class AtmosphereGenerator {
                         if (!claimed[idx] && !g.water(lx, lz) && !pool[idx]
                                 && !nearTree(g, lx, lz, treeBases, 1)) {
                             WaterWorks.floodplainColumn(g, th, ns, rng, lx, lz, waterY[i],
-                                    (dist - half) / 2.8, edits, claimed);
+                                    (dist - half) / 2.8, edits, claimed, groundOv);
                         }
                     }
                 }
@@ -568,6 +576,42 @@ public final class AtmosphereGenerator {
         endCap(g, th, rng, ns, course.get(0), waterY[0], 2, edits, claimed, pool, wf, carved);
         endCap(g, th, rng, ns, course.get(len - 1), waterY[len - 1], truncated ? 4 : 3,
                 edits, claimed, pool, wf, carved);
+        // 河岸切面衬砌：河道旁裸露的竖直岸壁不保留原方块（低壁根土、高壁峡谷石）
+        Set<Long> lined = new HashSet<>();
+        int[][] dirs4 = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (int i = 0; i < len; i++) {
+            int[] c = course.get(i);
+            int r = (int) Math.ceil(halfW[i] + 1.2);
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    int lx = c[0] + dx, lz = c[1] + dz;
+                    if (!g.inBounds(lx, lz) || !g.valid(lx, lz)) continue;
+                    if (!pool[lz * g.width() + lx]) continue;          // 只看水列
+                    for (int[] dd : dirs4) {
+                        int nx = lx + dd[0], nz = lz + dd[1];
+                        if (!g.inBounds(nx, nz) || !g.valid(nx, nz)) continue;
+                        int ni = nz * g.width() + nx;
+                        long nk = ((long) nx << 20) | nz;
+                        if (pool[ni] || g.water(nx, nz) || !lined.add(nk)) continue;
+                        WaterWorks.bankLining(g, th, ns, rng, nx, nz, waterY[i],
+                                groundOv, edits);
+                    }
+                }
+            }
+        }
+        // 瀑布跌水改造：冲刷潭（碗形深潭+石砾潭底+潭缘边框防溢）+ 崖面受冲刷湿石
+        for (int i = 1; i < len; i++) {
+            if (!fall[i]) continue;
+            int f0 = i;
+            while (i + 1 < len && fall[i + 1]) i++;
+            int upperY = waterY[f0 - 1];
+            int lowerY = waterY[i];
+            int drop = upperY - lowerY;
+            plungePool(g, th, rng, course.get(Math.min(len - 1, i + 1)), lowerY,
+                    Math.min(3, 1 + drop / 2), drop, edits, claimed, pool, wf);
+            fallFace(g, th, rng, course, f0, i, upperY, lowerY, halfW,
+                    edits, wf, claimed);
+        }
         // 倒木天然桥：1~2 座，在窄段（用 carved 集识别真实河宽）
         int bridges = len > 60 ? 2 : 1;
         for (int b = 0; b < bridges; b++) {
@@ -576,28 +620,39 @@ public final class AtmosphereGenerator {
                 logBridge(g, th, rng, course, at, waterY[at], carved, edits);
             }
         }
-        // 驳岸石组 + 岸顶灌木：沿程稀布在贴水岸带（教程：驳岸放置石块→随机分布灌木）
-        for (int i = 4; i < len - 4; i += 5 + rng.nextInt(6)) {
+        // 驳岸小品：沿程两侧较密布设——水线石组打底、岸带灌木顺坡、草花点缀
+        // （教程施工序：驳岸放置石块 → 随机分布灌木 → 随机分布草本花卉）
+        for (int i = 3; i < len - 3; i += 2 + rng.nextInt(3)) {
             if (fall[i]) continue;
             int[] c = course.get(i);
             int[] p = course.get(Math.max(0, i - 2));
             int[] q = course.get(Math.min(len - 1, i + 2));
-            int side = rng.nextBoolean() ? 1 : -1;
-            double nx = -(q[1] - p[1]) * side, nz = (q[0] - p[0]) * side;
-            double nl = Math.hypot(nx, nz);
+            double vx = -(q[1] - p[1]), vz = q[0] - p[0];
+            double nl = Math.hypot(vx, vz);
             if (nl < 0.5) continue;
-            if (rng.nextDouble() < 0.55) {
-                int ox = c[0] + (int) Math.round(nx / nl * (halfW[i] + 0.7));
-                int oz = c[1] + (int) Math.round(nz / nl * (halfW[i] + 0.7));
-                if (g.inBounds(ox, oz)) {
-                    WaterWorks.revetmentRocks(g, th, rng, ox, oz, waterY[i],
-                            edits, claimed, wf);
-                }
-            } else {
-                int bx = c[0] + (int) Math.round(nx / nl * (halfW[i] + 2.4));
-                int bz = c[1] + (int) Math.round(nz / nl * (halfW[i] + 2.4));
-                if (g.inBounds(bx, bz) && !nearTree(g, bx, bz, treeBases, 0)) {
-                    WaterWorks.bankShrub(g, th, rng, bx, bz, edits, claimed);
+            for (int side = -1; side <= 1; side += 2) {
+                if (rng.nextDouble() < 0.35) continue;
+                double ux = vx / nl * side, uz = vz / nl * side;
+                double roll = rng.nextDouble();
+                if (roll < 0.32) {
+                    int ox = c[0] + (int) Math.round(ux * (halfW[i] + 0.7));
+                    int oz = c[1] + (int) Math.round(uz * (halfW[i] + 0.7));
+                    if (g.inBounds(ox, oz)) {
+                        WaterWorks.revetmentRocks(g, th, rng, ox, oz, waterY[i],
+                                edits, claimed, groundOv, wf);
+                    }
+                } else if (roll < 0.68) {
+                    int bx = c[0] + (int) Math.round(ux * (halfW[i] + 1.6 + rng.nextInt(2)));
+                    int bz = c[1] + (int) Math.round(uz * (halfW[i] + 1.6 + rng.nextInt(2)));
+                    if (g.inBounds(bx, bz) && !nearTree(g, bx, bz, treeBases, 0)) {
+                        WaterWorks.bankShrub(g, th, rng, bx, bz, edits, claimed, groundOv);
+                    }
+                } else {
+                    int bx = c[0] + (int) Math.round(ux * (halfW[i] + 1.3 + rng.nextInt(3)));
+                    int bz = c[1] + (int) Math.round(uz * (halfW[i] + 1.3 + rng.nextInt(3)));
+                    if (g.inBounds(bx, bz) && !nearTree(g, bx, bz, treeBases, 0)) {
+                        WaterWorks.bankHerb(g, th, rng, bx, bz, edits, claimed, groundOv);
+                    }
                 }
             }
         }
@@ -619,8 +674,157 @@ public final class AtmosphereGenerator {
                 if (fx == 0 && fz == 0) continue;
                 if (Math.abs(fx) >= Math.abs(fz)) { fx = Integer.signum(fx); fz = 0; }
                 else { fz = Integer.signum(fz); fx = 0; }
-                WaterWorks.steppingRun(g, th, rng, wf, course.get(at), fx, fz, edits, claimed);
+                WaterWorks.steppingRun(g, th, rng, wf, course.get(at), fx, fz,
+                        edits, claimed, groundOv);
                 laid.add(at);
+            }
+        }
+    }
+
+    /**
+     * 瀑布冲刷潭：跌水点碗形挖深（石/砾受冲刷潭底），并给潭缘围一圈<b>不低于水面</b>的
+     * 边框——低于水面的缘列垫湿石到水面高（防溢流），持平/略高的缘列换受冲刷石面。
+     * 潭内列计为 FALL（湍流，不长植株）。
+     */
+    private static void plungePool(GroundSnapshot g, AtmosphereTheme th, Random rng,
+                                   int[] c, int waterY, int radius, int drop,
+                                   Map<Long, BlockEdit> edits, boolean[] claimed,
+                                   boolean[] pool, WaterWorks.WaterField wf) {
+        int w = g.width();
+        int depthCore = Math.min(4, 2 + drop / 2);
+        for (int dx = -radius - 1; dx <= radius + 1; dx++) {
+            for (int dz = -radius - 1; dz <= radius + 1; dz++) {
+                int lx = c[0] + dx, lz = c[1] + dz;
+                if (!g.inBounds(lx, lz) || !g.valid(lx, lz)) continue;
+                double dist = Math.hypot(dx, dz);
+                int i = lz * w + lx;
+                int wx = g.region().minX() + lx;
+                int wz = g.region().minZ() + lz;
+                if (dist <= radius + 0.2) {
+                    if (g.water(lx, lz)) continue;                     // 天然水面不动
+                    double dt = dist / (radius + 0.4);
+                    int dep = Math.max(1, (int) Math.round(depthCore * (1 - dt * dt)));
+                    int floorY = waterY - dep;
+                    put(edits, wx, floorY, wz, BlockSpec.of(rng.nextDouble() < 0.4
+                            ? Material.GRAVEL : WaterWorks.wetRock(th, rng)));
+                    for (int y = floorY + 1; y <= waterY; y++) {
+                        put(edits, wx, y, wz, y == waterY && th.frozen()
+                                ? BlockSpec.of(Material.ICE) : BlockSpec.of(Material.WATER));
+                    }
+                    int gy = g.groundY(lx, lz);
+                    for (int y = waterY + 1; y <= gy; y++) {
+                        put(edits, wx, y, wz, BlockSpec.AIR);
+                    }
+                    claimed[i] = true;
+                    pool[i] = true;
+                    wf.add(lx, lz, waterY, floorY, WaterWorks.WaterField.FALL);
+                } else {
+                    // 潭缘边框
+                    if (wf.has(i) || g.water(lx, lz)) continue;
+                    int gy = g.groundY(lx, lz);
+                    if (gy < waterY) {
+                        int top = waterY + (rng.nextDouble() < 0.3 ? 1 : 0);
+                        for (int y = Math.max(gy, waterY - 2); y <= top; y++) {
+                            put(edits, wx, y, wz, BlockSpec.of(WaterWorks.wetRock(th, rng)));
+                        }
+                        claimed[i] = true;
+                    } else if (gy <= waterY + 1 && rng.nextDouble() < 0.6) {
+                        put(edits, wx, gy, wz, BlockSpec.of(WaterWorks.wetRock(th, rng)));
+                        claimed[i] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 瀑布崖面与水幕侧壁：贴水的岸体从下级水位衬到上级水位+1，换受冲刷湿石
+     * （苔圆石/圆石/石头），不保留原方块；上沿偶置苔石点缀。
+     */
+    private static void fallFace(GroundSnapshot g, AtmosphereTheme th, Random rng,
+                                 List<int[]> course, int f0, int f1, int upperY, int lowerY,
+                                 double[] halfW, Map<Long, BlockEdit> edits,
+                                 WaterWorks.WaterField wf, boolean[] claimed) {
+        int w = g.width();
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (int k = Math.max(0, f0 - 1); k <= f1; k++) {
+            int[] c = course.get(k);
+            int r = (int) Math.ceil(halfW[k]) + 1;
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    int lx = c[0] + dx, lz = c[1] + dz;
+                    if (!g.inBounds(lx, lz) || !g.valid(lx, lz)) continue;
+                    int i = lz * w + lx;
+                    if (wf.has(i) || g.water(lx, lz)) continue;
+                    boolean adjWater = false;
+                    for (int[] dd : dirs) {
+                        int nx = lx + dd[0], nz = lz + dd[1];
+                        if (g.inBounds(nx, nz) && wf.has(nz * w + nx)) {
+                            adjWater = true;
+                            break;
+                        }
+                    }
+                    if (!adjWater) continue;
+                    int gy = g.groundY(lx, lz);
+                    int top = Math.min(gy, upperY + 1);
+                    int wx = g.region().minX() + lx;
+                    int wz = g.region().minZ() + lz;
+                    for (int y = lowerY; y <= top; y++) {
+                        put(edits, wx, y, wz, BlockSpec.of(WaterWorks.wetRock(th, rng)));
+                    }
+                    if (top < gy && !th.frozen() && rng.nextDouble() < 0.35) {
+                        put(edits, wx, top + 1, wz, BlockSpec.of(Material.MOSSY_COBBLESTONE));
+                    }
+                    claimed[i] = true;
+                }
+            }
+        }
+    }
+
+    /**
+     * 水路连通：两水列仅对角相接（正交公共邻列皆为岸）时，把公共邻列中<b>较低</b>的
+     * 一格转成水（床置一格、上方破岸）——宁牺牲一块岸体也让水面连续不断裂。
+     */
+    private static void connectDiagonals(GroundSnapshot g, AtmosphereTheme th, Random rng,
+                                         long ns, Map<Long, BlockEdit> edits,
+                                         boolean[] claimed, boolean[] pool,
+                                         WaterWorks.WaterField wf) {
+        int w = g.width();
+        List<int[]> snapshot = new ArrayList<>(wf.cols);
+        for (int[] c : snapshot) {
+            int lx = c[0], lz = c[1];
+            int i = lz * w + lx;
+            if (!wf.has(i)) continue;
+            for (int[] dd : new int[][]{{1, 1}, {1, -1}}) {
+                int qx = lx + dd[0], qz = lz + dd[1];
+                if (!g.inBounds(qx, qz)) continue;
+                int j = qz * w + qx;
+                if (!wf.has(j)) continue;
+                int ax = lx + dd[0], az = lz;      // 正交公共邻列 A
+                int bx = lx, bz = lz + dd[1];      // 正交公共邻列 B
+                boolean aWater = wf.has(az * w + ax) || g.water(ax, az);
+                boolean bWater = wf.has(bz * w + bx) || g.water(bx, bz);
+                if (aWater || bWater) continue;
+                int ga = g.valid(ax, az) ? g.groundY(ax, az) : Integer.MAX_VALUE;
+                int gb = g.valid(bx, bz) ? g.groundY(bx, bz) : Integer.MAX_VALUE;
+                if (ga == Integer.MAX_VALUE && gb == Integer.MAX_VALUE) continue;
+                int px = ga <= gb ? ax : bx;
+                int pz = ga <= gb ? az : bz;
+                int gy = Math.min(ga, gb);
+                int surf = Math.min(wf.surf[i], wf.surf[j]);
+                int wx = g.region().minX() + px;
+                int wz = g.region().minZ() + pz;
+                put(edits, wx, surf - 1, wz, BlockSpec.of(
+                        WaterWorks.bedMaterial(th, ns, wx, wz, 0.7, false)));
+                put(edits, wx, surf, wz, th.frozen()
+                        ? BlockSpec.of(Material.ICE) : BlockSpec.of(Material.WATER));
+                for (int y = surf + 1; y <= gy; y++) {
+                    put(edits, wx, y, wz, BlockSpec.AIR);
+                }
+                int pi = pz * w + px;
+                claimed[pi] = true;
+                pool[pi] = true;
+                wf.add(px, pz, surf, surf - 1, WaterWorks.WaterField.RUN);
             }
         }
     }
@@ -1202,26 +1406,60 @@ public final class AtmosphereGenerator {
         return true;
     }
 
-    // ============================ 土壤斑块 ============================
+    // ============================ 全地表改造 + 土壤斑块 ============================
 
+    /**
+     * 全森林地表改造：所有露天地面按<b>坡度</b>与<b>湿度</b>成片重铺——
+     * 陡坡（≥4）裸出砂土/泥土/夯泥、中坡混砂土斑、近水湿带铺主题湿土/细沙，
+     * 平缓地叠主题土壤斑块（原逻辑）；全部经低频噪声成片、坡面过渡自然（岩石面暂不做）。
+     * 最后保留大树缠根泥土圈。
+     */
     private static void soil(GroundSnapshot g, AtmosphereTheme th, AtmosphereSettings st,
                              long seed, List<int[]> treeBases, Map<Long, BlockEdit> edits,
-                             boolean[] claimed) {
-        if (th.soils().length == 0) return;
-        double cover = Math.min(0.85, th.soilCover() * st.densityOf("soil"));
-        if (cover <= 0) return;
+                             boolean[] claimed, int[] wetDist) {
+        double dens = st.densityOf("soil");
+        if (dens <= 0) return;
+        Material[] soils = th.soils().length > 0 ? th.soils()
+                : new Material[]{Material.COARSE_DIRT};
+        double cover = Math.min(0.85, th.soilCover() * dens);
         long s = seed ^ S_SOIL;
         for (int lz = 0; lz < g.depth(); lz++) {
             for (int lx = 0; lx < g.width(); lx++) {
-                if (!g.valid(lx, lz) || g.water(lx, lz) || claimed[lz * g.width() + lx]) continue;
+                int i = lz * g.width() + lx;
+                if (!g.valid(lx, lz) || g.water(lx, lz) || claimed[i]) continue;
                 if (!replaceableSoil(g.ground(lx, lz))) continue;
                 int wx = g.region().minX() + lx;
                 int wz = g.region().minZ() + lz;
-                double n = Math.pow(noise(s, wx, wz, 9.0), 1.3);
-                if (n > cover) continue;
-                Material m = th.soils()[(int) (hash01(s ^ 0xA5, wx, wz) * th.soils().length)
-                        % th.soils().length];
-                put(edits, wx, g.groundY(lx, lz), wz, BlockSpec.of(m));
+                int slope = g.slope(lx, lz);
+                double patch = noise(s ^ 0x50BEL, wx, wz, 7.0);
+                double m = hash01(s ^ 0xA7L, wx, wz);
+                double wet = wetOf(wetDist, i);
+                Material top = null;
+                if (slope >= 4) {
+                    // 陡坡裸土（山体坡面）：砂土为主、泥土/夯泥成片点缀
+                    top = patch < 0.5 ? Material.COARSE_DIRT
+                            : patch < 0.8 ? Material.DIRT : Material.PACKED_MUD;
+                } else if (slope == 3 && patch > 0.35) {
+                    top = m < 0.6 ? Material.COARSE_DIRT : Material.DIRT;
+                } else if (slope == 2 && patch > 0.62) {
+                    top = Material.COARSE_DIRT;
+                } else if (wet > 0.55 && slope <= 1 && patch > 0.5) {
+                    // 近水湿地带：湿主题铺首选土（泥/苔），旱主题细沙
+                    top = soils[0] == Material.SNOW_BLOCK ? Material.GRAVEL : soils[0];
+                    if (top != Material.MUD && top != Material.MOSS_BLOCK && m < 0.4) {
+                        top = Material.SAND;
+                    }
+                } else {
+                    // 平缓地：主题土壤斑块（原逻辑）
+                    double n = Math.pow(noise(s, wx, wz, 9.0), 1.3);
+                    if (n <= cover) {
+                        top = soils[(int) (hash01(s ^ 0xA5, wx, wz) * soils.length)
+                                % soils.length];
+                    }
+                }
+                if (top == null) continue;
+                if (dens < 1 && m > dens) continue;   // 低密度稀释改造强度
+                put(edits, wx, g.groundY(lx, lz), wz, BlockSpec.of(top));
             }
         }
         // 大树脚下的缠根泥土圈
@@ -1768,7 +2006,7 @@ public final class AtmosphereGenerator {
                 boolean canopy = g.canopy(lx, lz);
                 AtmosphereTheme.PlantEntry e = pickPlant(th, rng, wet, canopy);
                 if (e == null) continue;
-                emitPlant(g, e, lx, lz, wx, wz, rng, edits);
+                emitPlant(g, e, lx, lz, wx, wz, rng, edits, claimed, pool);
             }
         }
     }
@@ -1799,7 +2037,8 @@ public final class AtmosphereGenerator {
     /** 地物落地：不同 kind 产出 1~4 个方块。 */
     private static void emitPlant(GroundSnapshot g, AtmosphereTheme.PlantEntry e,
                                   int lx, int lz, int wx, int wz, Random rng,
-                                  Map<Long, BlockEdit> edits) {
+                                  Map<Long, BlockEdit> edits,
+                                  boolean[] claimed, boolean[] pool) {
         int gy = g.groundY(lx, lz);
         Material gm = g.ground(lx, lz);
         String kind = e.kind();
@@ -1862,13 +2101,19 @@ public final class AtmosphereGenerator {
                     Material leaves = Material.matchMaterial(
                             kind.substring(6).toUpperCase() + "_LEAVES");
                     if (leaves == null) return;
-                    // 微灌木：2~5 块叶团贴地小丘
+                    // 微灌木：2~5 块叶团贴地小丘（邻格校验水面/占位/高差，防叶浮水上）
                     put(edits, wx, gy + 1, wz, BlockSpec.of(leaves));
                     int[][] around = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
                     for (int[] o : around) {
-                        if (rng.nextDouble() < 0.45) {
-                            put(edits, wx + o[0], gy + 1, wz + o[1], BlockSpec.of(leaves));
-                        }
+                        if (rng.nextDouble() >= 0.45) continue;
+                        int nlx = lx + o[0], nlz = lz + o[1];
+                        if (!g.inBounds(nlx, nlz) || !g.valid(nlx, nlz)
+                                || g.water(nlx, nlz)) continue;
+                        int ni = nlz * g.width() + nlx;
+                        if (pool[ni] || claimed[ni]) continue;
+                        int ngy = g.groundY(nlx, nlz);
+                        if (Math.abs(ngy - gy) > 1) continue;
+                        put(edits, wx + o[0], ngy + 1, wz + o[1], BlockSpec.of(leaves));
                     }
                     if (rng.nextDouble() < 0.5) put(edits, wx, gy + 2, wz, BlockSpec.of(leaves));
                 }

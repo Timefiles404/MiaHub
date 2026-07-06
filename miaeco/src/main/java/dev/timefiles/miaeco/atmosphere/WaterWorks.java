@@ -4,6 +4,7 @@ import dev.timefiles.miaeco.async.BlockEdit;
 import dev.timefiles.miaeco.async.BlockSpec;
 import org.bukkit.Material;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -11,14 +12,15 @@ import java.util.Map;
 import java.util.Random;
 
 /**
- * 水系细部词汇库：河床材质（横向泥沙分选+噪声斑块）、河漫滩缓坡驳岸、驳岸石组与
- * 岸顶灌木、三类水生植株固定结构（挺水：荷花/芦苇；浮水：睡莲/王莲/水葫芦；沉水：
- * 高海草/海带柱/狐尾藻草甸/金鱼藻/海菜花/海泡菜床）、跨溪汀步。
- * 全部纯函数，由 {@link AtmosphereGenerator} 的河流水系调用。
+ * 水系细部词汇库：河床材质（横向泥沙分选+噪声斑块）、河漫滩缓坡驳岸（含<b>有效地面
+ * 覆盖层</b>——削坡后的真实高度）、河岸切面<b>衬砌</b>、驳岸石组与岸顶灌木/草花、
+ * 三类水生植株的<b>分带铺设</b>（近岸挺水 → 中带浮水 → 底层沉水，物种斑块噪声成片）、
+ * 跨溪汀步。全部纯函数，由 {@link AtmosphereGenerator} 的河流水系调用。
  *
  * <p>植株用块参照建筑教程：玻璃板（淡/深绿，单块不相连、水下含水）作茎秆；
  * 杜鹃叶（persistent）作荷叶/王莲浮叶（贴水面时含水）；海泡菜 1~4 颗/格作莲蓬与
- * 水底泡菜床；高海草/海带柱补足"只有一格高"的藻类；角珊瑚（含水恒活）作金鱼藻。
+ * 泡菜床；高海草/海带柱补足"只有一格高"的藻类；角珊瑚（含水恒活）作金鱼藻。
+ * 瀑布/浅滩等湍流处不长水生植物。
  */
 final class WaterWorks {
 
@@ -30,7 +32,7 @@ final class WaterWorks {
 
     // ============================ 水场 ============================
 
-    /** 新造水体的逐列记录（水面高/床底高/类型）——湖-河-塘连通与植株选址的依据。 */
+    /** 新造水体的逐列记录（水面高/床底高/类型）——湖-河-塘连通与植株分带的依据。 */
     static final class WaterField {
         static final byte LAKE = 0, POOL = 1, RUN = 2, RIFFLE = 3, FALL = 4,
                 POND = 5, CRESCENT = 6, NATURAL = 7;
@@ -62,28 +64,23 @@ final class WaterWorks {
             kind[i] = k;
         }
 
-        /** r 范围内是否有岸（非水的有效列）。 */
-        boolean nearShore(GroundSnapshot g, int lx, int lz, int r) {
-            for (int dx = -r; dx <= r; dx++) {
-                for (int dz = -r; dz <= r; dz++) {
-                    int nx = lx + dx, nz = lz + dz;
-                    if (!g.inBounds(nx, nz)) continue;
-                    if (!g.valid(nx, nz)) continue;
-                    if (!has(nz * w + nx) && !g.water(nx, nz)) return true;
-                }
-            }
-            return false;
+        /** 缓水（湖/潭/塘/深潭/天然）；RUN 湍、RIFFLE/FALL 急。 */
+        boolean calm(int i) {
+            return kind[i] != RIFFLE && kind[i] != FALL && kind[i] != RUN;
         }
+    }
 
-        /** 缓流水（可放浮水/挺水植物）。 */
-        boolean slow(int i) { return kind[i] != RIFFLE && kind[i] != FALL; }
+    /** 有效地面高度：漫滩削坡后写入 groundOv，未削的列用快照高度。 */
+    static int ov(GroundSnapshot g, int[] groundOv, int lx, int lz) {
+        int v = groundOv[lz * g.width() + lx];
+        return v == Integer.MIN_VALUE ? g.groundY(lx, lz) : v;
     }
 
     // ============================ 河床材质 ============================
 
     /**
      * 河床材质：横向泥沙分选（中线泥/黏土 → 中带砾 → 缘沙）+ 低频噪声斑块使同材成片、
-     * 过渡自然——替代旧版单块随机散列。riffle（浅滩）与冻结主题整体偏砾石。
+     * 过渡自然。riffle（浅滩）与冻结主题整体偏砾石。
      *
      * @param edgeT 0=中线/深处 → 1=河缘/浅处
      */
@@ -100,53 +97,54 @@ final class WaterWorks {
         return Material.SAND;
     }
 
+    /** 受冲刷的湿石（瀑布崖面/冲刷潭底/潭缘）。 */
+    static Material wetRock(AtmosphereTheme th, Random rng) {
+        double r = rng.nextDouble();
+        if (!th.frozen() && r < 0.35) return Material.MOSSY_COBBLESTONE;
+        if (r < 0.6) return Material.COBBLESTONE;
+        if (r < 0.85) return Material.STONE;
+        return Material.ANDESITE;
+    }
+
     // ============================ 河漫滩驳岸 ============================
 
     /**
      * 河漫滩整列：把贴水岸带削成缓坡滩涂（贴水 +1 → 外缘 +3），修复垂直切岸。
-     * 只削不垫；原生高差 &gt;4 的陡壁保留（峡谷崖感）。削过的列 claim
-     * （快照高度已失真，后续特征不得再用旧地面高度）。自带轻量滩涂植被。
+     * 只削不垫；原生高差 &gt;4 的陡壁保留（峡谷崖，由衬砌处理面）。削过的列 claim
+     * 并写入 groundOv（后续驳岸石/灌木/汀步/植株按新高度落位）。
+     * 贴水带统一细沙滩（甘蔗可长），外带草地。
      *
      * @param t 0=贴水缘 → 1=外缘
      */
     static void floodplainColumn(GroundSnapshot g, AtmosphereTheme th, long ns, Random rng,
                                  int lx, int lz, int waterY, double t,
-                                 Map<Long, BlockEdit> edits, boolean[] claimed) {
+                                 Map<Long, BlockEdit> edits, boolean[] claimed, int[] groundOv) {
         int gy = g.groundY(lx, lz);
         int wx = g.region().minX() + lx;
         int wz = g.region().minZ() + lz;
+        int i = lz * g.width() + lx;
         int target = waterY + 1 + (int) Math.floor(t * 2.2 + 0.25);
         double p = AtmosphereGenerator.noise(ns ^ 0xF00DL, wx, wz, 6.5);
         if (gy <= target) {
             // 本就平缓：贴水带偶换滩涂面（不动高度，不 claim）
-            if (t < 0.35 && gy <= waterY + 2 && p > 0.66 && replaceableShore(g.ground(lx, lz))) {
-                put(edits, wx, gy, wz, BlockSpec.of(p > 0.85 ? Material.GRAVEL : Material.SAND));
+            if (t < 0.35 && gy <= waterY + 2 && p > 0.6 && replaceableShore(g.ground(lx, lz))) {
+                put(edits, wx, gy, wz, BlockSpec.of(Material.SAND));
             }
             return;
         }
-        if (gy - target > 4) return;   // 原生陡崖保留
+        if (gy - target > 4) return;   // 原生陡崖保留（衬砌负责面材）
         for (int y = target + 1; y <= gy; y++) put(edits, wx, y, wz, BlockSpec.AIR);
         Material top;
         if (th.frozen()) {
             top = t < 0.4 ? Material.GRAVEL : Material.SNOW_BLOCK;
         } else if (t < 0.4) {
-            top = p < 0.5 ? Material.SAND : Material.GRAVEL;
+            top = Material.SAND;                       // 贴水细沙滩（甘蔗/滩涂植物可长）
         } else {
             top = p < 0.22 ? Material.COARSE_DIRT : Material.GRASS_BLOCK;
         }
         put(edits, wx, target, wz, BlockSpec.of(top));
-        claimed[lz * g.width() + lx] = true;
-        // 轻量滩涂植被（claim 后其他特征不会再来）
-        if (th.frozen()) return;
-        double r = rng.nextDouble();
-        if (top == Material.GRASS_BLOCK && r < 0.16) {
-            put(edits, wx, target + 1, wz, BlockSpec.of(Material.SHORT_GRASS));
-        } else if (top == Material.SAND && r < 0.05) {
-            put(edits, wx, target + 1, wz, BlockSpec.of(Material.DEAD_BUSH));
-        } else if (r < 0.035) {
-            put(edits, wx, target + 1, wz, BlockSpec.button(Material.STONE_BUTTON,
-                    org.bukkit.block.BlockFace.NORTH, BlockSpec.ATTACH_FLOOR));
-        }
+        claimed[i] = true;
+        groundOv[i] = target;
     }
 
     private static boolean replaceableShore(Material m) {
@@ -155,12 +153,47 @@ final class WaterWorks {
     }
 
     /**
+     * 河岸切面衬砌：河道旁裸露的竖直岸壁（水位以上到岸顶以下的截面块）不保留原方块——
+     * 低壁换根土质感（砂土/泥土/砾石/偶苔卵石），高壁（&gt;3，峡谷崖）换石质
+     * （石头/圆石/苔圆石），顶面不动（草皮/滩涂已就位）。
+     */
+    static void bankLining(GroundSnapshot g, AtmosphereTheme th, long ns, Random rng,
+                           int lx, int lz, int waterY, int[] groundOv,
+                           Map<Long, BlockEdit> edits) {
+        int top = ov(g, groundOv, lx, lz);
+        if (top - waterY < 2) return;                   // 低缘无裸面
+        int wx = g.region().minX() + lx;
+        int wz = g.region().minZ() + lz;
+        boolean cliff = top - waterY > 3;
+        for (int y = waterY; y < top; y++) {
+            double r = AtmosphereGenerator.hash01(ns ^ 0x11AEL ^ (y * 0x9E5L), wx, wz);
+            Material m;
+            if (cliff) {
+                m = r < 0.45 ? Material.STONE : r < 0.75 ? Material.COBBLESTONE
+                        : r < 0.9 ? Material.MOSSY_COBBLESTONE : Material.ANDESITE;
+            } else {
+                m = r < 0.40 ? Material.COARSE_DIRT : r < 0.70 ? Material.DIRT
+                        : r < 0.88 ? Material.GRAVEL : Material.MOSSY_COBBLESTONE;
+            }
+            if (th.frozen() && m == Material.MOSSY_COBBLESTONE) m = Material.COBBLESTONE;
+            put(edits, wx, y, wz, BlockSpec.of(m));
+        }
+    }
+
+    /** 允许在此落岸上小品？未占用，或是漫滩削出的滩地（groundOv 已写）。 */
+    private static boolean fixtureOk(GroundSnapshot g, boolean[] claimed, int[] groundOv,
+                                     int lx, int lz) {
+        int i = lz * g.width() + lx;
+        return !claimed[i] || groundOv[i] != Integer.MIN_VALUE;
+    }
+
+    /**
      * 驳岸石组：贴水线 2~5 块混石游走（水缘内半浸、岸上贴地），偶叠 2 层、顶苔毯——
-     * 参考教程"驳岸放置石块→细化溪岸石头纹理与形态"。
+     * 参考教程"驳岸放置石块→细化溪岸石头纹理与形态"。岸上落位用有效地面高度。
      */
     static void revetmentRocks(GroundSnapshot g, AtmosphereTheme th, Random rng,
-                               int lx, int lz, int waterY,
-                               Map<Long, BlockEdit> edits, boolean[] claimed, WaterField wf) {
+                               int lx, int lz, int waterY, Map<Long, BlockEdit> edits,
+                               boolean[] claimed, int[] groundOv, WaterField wf) {
         Material[] pool = th.rocks().length > 0 ? th.rocks() : STEP_STONES;
         int k = 2 + rng.nextInt(4);
         int cx = lx, cz = lz;
@@ -183,8 +216,8 @@ final class WaterWorks {
                     }
                     claimed[i] = true;
                 }
-            } else if (!g.water(cx, cz) && !claimed[i]) {
-                int gy = g.groundY(cx, cz);
+            } else if (!g.water(cx, cz) && fixtureOk(g, claimed, groundOv, cx, cz)) {
+                int gy = ov(g, groundOv, cx, cz);
                 if (gy <= waterY + 3) {
                     int h = rng.nextDouble() < 0.22 ? 2 : 1;
                     for (int y = 1; y <= h; y++) put(edits, wx, gy + y, wz, BlockSpec.of(
@@ -200,13 +233,17 @@ final class WaterWorks {
         }
     }
 
-    /** 岸顶灌木团：1~3 块杜鹃叶贴地（偶开花/双层）——"随机分布灌木"软化岸线。 */
+    /**
+     * 岸顶灌木团：1~4 块杜鹃叶贴地（偶开花/双层），可落在漫滩滩地上——教程"随机分布
+     * 灌木"顺坡垂到水线的意象。
+     */
     static void bankShrub(GroundSnapshot g, AtmosphereTheme th, Random rng, int lx, int lz,
-                          Map<Long, BlockEdit> edits, boolean[] claimed) {
+                          Map<Long, BlockEdit> edits, boolean[] claimed, int[] groundOv) {
         if (th.frozen()) return;
+        if (!g.inBounds(lx, lz) || !g.valid(lx, lz) || g.water(lx, lz)) return;
+        if (!fixtureOk(g, claimed, groundOv, lx, lz)) return;
         int i0 = lz * g.width() + lx;
-        if (!g.inBounds(lx, lz) || !g.valid(lx, lz) || g.water(lx, lz) || claimed[i0]) return;
-        int gy = g.groundY(lx, lz);
+        int gy = ov(g, groundOv, lx, lz);
         int wx = g.region().minX() + lx;
         int wz = g.region().minZ() + lz;
         Material leaf = rng.nextDouble() < 0.22
@@ -216,283 +253,40 @@ final class WaterWorks {
         if (rng.nextDouble() < 0.35) put(edits, wx, gy + 2, wz, BlockSpec.of(leaf));
         int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
         for (int[] d : dirs) {
-            if (rng.nextDouble() > 0.4) continue;
+            if (rng.nextDouble() > 0.45) continue;
             int nx = lx + d[0], nz = lz + d[1];
             if (!g.inBounds(nx, nz) || !g.valid(nx, nz) || g.water(nx, nz)) continue;
-            int ni = nz * g.width() + nx;
-            if (claimed[ni] || Math.abs(g.groundY(nx, nz) - gy) > 1) continue;
-            put(edits, g.region().minX() + nx, g.groundY(nx, nz) + 1,
-                    g.region().minZ() + nz, BlockSpec.of(
-                            rng.nextDouble() < 0.15 ? Material.FLOWERING_AZALEA_LEAVES : leaf));
-            claimed[ni] = true;
+            if (!fixtureOk(g, claimed, groundOv, nx, nz)) continue;
+            int ny = ov(g, groundOv, nx, nz);
+            if (Math.abs(ny - gy) > 1) continue;
+            put(edits, g.region().minX() + nx, ny + 1, g.region().minZ() + nz,
+                    BlockSpec.of(rng.nextDouble() < 0.15
+                            ? Material.FLOWERING_AZALEA_LEAVES : leaf));
+            claimed[nz * g.width() + nx] = true;
         }
     }
 
-    // ============================ 挺水植物 ============================
-
-    /**
-     * 荷花丛：3~7 茎散布 5×5——淡/深绿玻璃板茎自床底出水（水下段含水），顶为杜鹃叶
-     * 荷叶（水面 +0~+2 错落，教程"❌平铺密排 ✅错落有高差"）或海泡菜莲蓬，偶开花叶。
-     */
-    static void lotusCluster(GroundSnapshot g, Random rng, WaterField wf, int lx, int lz,
-                             Map<Long, BlockEdit> edits) {
-        int n = 3 + rng.nextInt(5);
-        int placed = 0, guard = n * 7;
-        while (placed < n && guard-- > 0) {
-            int cx = lx + rng.nextInt(5) - 2, cz = lz + rng.nextInt(5) - 2;
-            if (!g.inBounds(cx, cz)) continue;
-            int i = cz * wf.w + cx;
-            if (!wf.has(i) || !wf.slow(i)) continue;
-            int depth = wf.depth(i);
-            if (depth < 1 || depth > 3) continue;
-            int surf = wf.surf[i];
-            int wx = g.region().minX() + cx;
-            int wz = g.region().minZ() + cz;
-            Material stem = rng.nextDouble() < 0.55
-                    ? Material.GREEN_STAINED_GLASS_PANE : Material.LIME_STAINED_GLASS_PANE;
-            double hr = rng.nextDouble();
-            int topY = surf + (hr < 0.4 ? 0 : hr < 0.8 ? 1 : 2);
-            for (int y = wf.bed[i] + 1; y < topY; y++) {
-                BlockSpec s = BlockSpec.of(stem);
-                put(edits, wx, y, wz, y <= surf ? s.waterlogged() : s);
-            }
-            if (rng.nextDouble() < 0.22) {
-                put(edits, wx, topY, wz, BlockSpec.pickles(1 + rng.nextInt(2), topY <= surf));
-            } else {
-                Material pad = rng.nextDouble() < 0.18
-                        ? Material.FLOWERING_AZALEA_LEAVES : Material.AZALEA_LEAVES;
-                BlockSpec ps = BlockSpec.of(pad);
-                put(edits, wx, topY, wz, topY == surf ? ps.waterlogged() : ps);
-            }
-            placed++;
+    /** 岸带草花点缀：绣球葱/丁香/草丛/蕨（教程"随机分布草本和花卉"），落在灌木间。 */
+    static void bankHerb(GroundSnapshot g, AtmosphereTheme th, Random rng, int lx, int lz,
+                         Map<Long, BlockEdit> edits, boolean[] claimed, int[] groundOv) {
+        if (th.frozen()) return;
+        if (!g.inBounds(lx, lz) || !g.valid(lx, lz) || g.water(lx, lz)) return;
+        if (!fixtureOk(g, claimed, groundOv, lx, lz)) return;
+        int gy = ov(g, groundOv, lx, lz);
+        int wx = g.region().minX() + lx;
+        int wz = g.region().minZ() + lz;
+        double r = rng.nextDouble();
+        if (r < 0.30) {
+            put(edits, wx, gy + 1, wz, BlockSpec.of(Material.ALLIUM));
+        } else if (r < 0.48) {
+            put(edits, wx, gy + 1, wz, BlockSpec.of(Material.LILAC));
+            put(edits, wx, gy + 2, wz, BlockSpec.upperHalf(Material.LILAC));
+        } else if (r < 0.75) {
+            put(edits, wx, gy + 1, wz, BlockSpec.of(Material.SHORT_GRASS));
+        } else {
+            put(edits, wx, gy + 1, wz, BlockSpec.of(Material.FERN));
         }
-    }
-
-    /**
-     * 芦苇荡：水缘岸上甘蔗丛（2~3 高，支撑块须贴水）+ 浅水玻璃板秆顶海泡菜穗——
-     * 挺水芦苇的岸/水两态混栽。
-     */
-    static void reedBed(GroundSnapshot g, Random rng, WaterField wf, int lx, int lz,
-                        Map<Long, BlockEdit> edits, boolean[] claimed) {
-        int n = 4 + rng.nextInt(5);
-        int placed = 0, guard = n * 9;
-        while (placed < n && guard-- > 0) {
-            int cx = lx + rng.nextInt(7) - 3, cz = lz + rng.nextInt(7) - 3;
-            if (!g.inBounds(cx, cz) || !g.valid(cx, cz)) continue;
-            int i = cz * wf.w + cx;
-            int wx = g.region().minX() + cx;
-            int wz = g.region().minZ() + cz;
-            if (wf.has(i)) {
-                if (wf.depth(i) != 1 || !wf.slow(i)) continue;
-                int surf = wf.surf[i];
-                put(edits, wx, surf, wz,
-                        BlockSpec.of(Material.LIME_STAINED_GLASS_PANE).waterlogged());
-                put(edits, wx, surf + 1, wz, BlockSpec.pickles(1 + rng.nextInt(3), false));
-                placed++;
-            } else if (!g.water(cx, cz) && !claimed[i]) {
-                Material gm = g.ground(cx, cz);
-                if (gm != Material.GRASS_BLOCK && gm != Material.DIRT && gm != Material.SAND
-                        && gm != Material.MUD && gm != Material.COARSE_DIRT
-                        && gm != Material.PODZOL) continue;
-                boolean shore = false;
-                for (int[] d : new int[][]{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
-                    int nx = cx + d[0], nz = cz + d[1];
-                    if (!g.inBounds(nx, nz)) continue;
-                    int ni = nz * wf.w + nx;
-                    // 甘蔗存活要求：支撑块四邻有水面（天然水或新水面恰在地面高）
-                    if ((g.water(nx, nz) && g.groundY(nx, nz) >= g.groundY(cx, cz) - 1)
-                            || (wf.has(ni) && wf.surf[ni] >= g.groundY(cx, cz) - 1)) {
-                        shore = true;
-                        break;
-                    }
-                }
-                if (!shore) continue;
-                int gy = g.groundY(cx, cz);
-                int h = 2 + (rng.nextDouble() < 0.45 ? 1 : 0);
-                for (int y = 1; y <= h; y++) {
-                    put(edits, wx, gy + y, wz, BlockSpec.of(Material.SUGAR_CANE));
-                }
-                claimed[i] = true;
-                placed++;
-            }
-        }
-    }
-
-    // ============================ 浮水植物 ============================
-
-    /** 睡莲组：2~5 片错落浮于水面上方（间隙留白，不密排）。 */
-    static void lilyPatch(GroundSnapshot g, Random rng, WaterField wf, int lx, int lz,
-                          Map<Long, BlockEdit> edits) {
-        int n = 2 + rng.nextInt(4);
-        int placed = 0, guard = n * 6;
-        while (placed < n && guard-- > 0) {
-            int cx = lx + rng.nextInt(5) - 2, cz = lz + rng.nextInt(5) - 2;
-            if (!g.inBounds(cx, cz)) continue;
-            int i = cz * wf.w + cx;
-            if (!wf.has(i) || !wf.slow(i) || wf.depth(i) < 1) continue;
-            put(edits, g.region().minX() + cx, wf.surf[i] + 1, g.region().minZ() + cz,
-                    BlockSpec.of(Material.LILY_PAD));
-            placed++;
-        }
-    }
-
-    /**
-     * 王莲：含水杜鹃叶平贴水面成大浮叶，1~3 片、彼此拉开 ≥3 格（教程 ❌密排 ✅疏散），
-     * 只落开阔缓水。
-     */
-    static void giantLilies(GroundSnapshot g, Random rng, WaterField wf, int lx, int lz,
-                            Map<Long, BlockEdit> edits) {
-        int n = 1 + rng.nextInt(3);
-        List<int[]> used = new ArrayList<>();
-        int guard = n * 10;
-        while (used.size() < n && guard-- > 0) {
-            int cx = lx + rng.nextInt(7) - 3, cz = lz + rng.nextInt(7) - 3;
-            if (!g.inBounds(cx, cz)) continue;
-            int i = cz * wf.w + cx;
-            if (!wf.has(i) || !wf.slow(i) || wf.depth(i) < 2) continue;
-            boolean far = true;
-            for (int[] u : used) {
-                if (Math.abs(u[0] - cx) + Math.abs(u[1] - cz) < 3) { far = false; break; }
-            }
-            if (!far) continue;
-            Material pad = rng.nextDouble() < 0.25
-                    ? Material.FLOWERING_AZALEA_LEAVES : Material.AZALEA_LEAVES;
-            put(edits, g.region().minX() + cx, wf.surf[i], g.region().minZ() + cz,
-                    BlockSpec.of(pad).waterlogged());
-            used.add(new int[]{cx, cz});
-        }
-    }
-
-    /**
-     * 水葫芦簇：含水开花杜鹃叶贴水面成粉花浮团（3~6 片近岸聚生）+ 睡莲点缀——
-     * 开花叶的粉色花穗即水葫芦花。
-     */
-    static void hyacinthPatch(GroundSnapshot g, Random rng, WaterField wf, int lx, int lz,
-                              Map<Long, BlockEdit> edits) {
-        int n = 3 + rng.nextInt(4);
-        int placed = 0, guard = n * 6;
-        while (placed < n && guard-- > 0) {
-            int cx = lx + rng.nextInt(5) - 2, cz = lz + rng.nextInt(5) - 2;
-            if (!g.inBounds(cx, cz)) continue;
-            int i = cz * wf.w + cx;
-            if (!wf.has(i) || !wf.slow(i) || wf.depth(i) < 1) continue;
-            if (rng.nextDouble() < 0.75) {
-                put(edits, g.region().minX() + cx, wf.surf[i], g.region().minZ() + cz,
-                        BlockSpec.of(Material.FLOWERING_AZALEA_LEAVES).waterlogged());
-            } else {
-                put(edits, g.region().minX() + cx, wf.surf[i] + 1, g.region().minZ() + cz,
-                        BlockSpec.of(Material.LILY_PAD));
-            }
-            placed++;
-        }
-    }
-
-    // ============================ 沉水植物 ============================
-
-    /** 狐尾藻草甸：海草+高海草（双层）成片铺床——比单格海草更像成群水草。 */
-    static void milfoilMeadow(GroundSnapshot g, Random rng, WaterField wf, int lx, int lz,
-                              Map<Long, BlockEdit> edits) {
-        int rx = 2 + rng.nextInt(3), rz = 2 + rng.nextInt(3);
-        for (int dx = -rx; dx <= rx; dx++) {
-            for (int dz = -rz; dz <= rz; dz++) {
-                double e = (double) dx * dx / (rx * rx) + (double) dz * dz / (rz * rz);
-                if (e > 1) continue;
-                int cx = lx + dx, cz = lz + dz;
-                if (!g.inBounds(cx, cz)) continue;
-                int i = cz * wf.w + cx;
-                if (!wf.has(i) || wf.kind[i] == WaterField.FALL) continue;
-                if (rng.nextDouble() > 0.62 - 0.25 * e) continue;
-                int wx = g.region().minX() + cx;
-                int wz = g.region().minZ() + cz;
-                int bed = wf.bed[i];
-                if (wf.depth(i) >= 2 && rng.nextDouble() < 0.45) {
-                    put(edits, wx, bed + 1, wz, BlockSpec.of(Material.TALL_SEAGRASS));
-                    put(edits, wx, bed + 2, wz, BlockSpec.upperHalf(Material.TALL_SEAGRASS));
-                } else {
-                    put(edits, wx, bed + 1, wz, BlockSpec.of(Material.SEAGRASS));
-                }
-            }
-        }
-    }
-
-    /** 高藻柱：2~4 根海带（KELP_PLANT 柱 + KELP 顶，age 25 停长），只落深水。 */
-    static void kelpColumns(GroundSnapshot g, Random rng, WaterField wf, int lx, int lz,
-                            Map<Long, BlockEdit> edits) {
-        int n = 2 + rng.nextInt(3);
-        int placed = 0, guard = n * 6;
-        while (placed < n && guard-- > 0) {
-            int cx = lx + rng.nextInt(3) - 1, cz = lz + rng.nextInt(3) - 1;
-            if (!g.inBounds(cx, cz)) continue;
-            int i = cz * wf.w + cx;
-            if (!wf.has(i) || wf.depth(i) < 3 || !wf.slow(i)) continue;
-            int wx = g.region().minX() + cx;
-            int wz = g.region().minZ() + cz;
-            int bed = wf.bed[i];
-            int h = 2 + rng.nextInt(Math.min(3, wf.depth(i) - 1));
-            for (int y = 1; y < h; y++) {
-                put(edits, wx, bed + y, wz, BlockSpec.of(Material.KELP_PLANT));
-            }
-            put(edits, wx, bed + h, wz, BlockSpec.aged(Material.KELP, 25));
-            placed++;
-        }
-    }
-
-    /** 金鱼藻簇：角珊瑚（含水恒活，黄绿羽状）2~4 株贴床。 */
-    static void hornwortTuft(GroundSnapshot g, Random rng, WaterField wf, int lx, int lz,
-                             Map<Long, BlockEdit> edits) {
-        int n = 2 + rng.nextInt(3);
-        int placed = 0, guard = n * 6;
-        while (placed < n && guard-- > 0) {
-            int cx = lx + rng.nextInt(3) - 1, cz = lz + rng.nextInt(3) - 1;
-            if (!g.inBounds(cx, cz)) continue;
-            int i = cz * wf.w + cx;
-            if (!wf.has(i) || wf.depth(i) < 2) continue;
-            put(edits, g.region().minX() + cx, wf.bed[i] + 1, g.region().minZ() + cz,
-                    BlockSpec.of(Material.HORN_CORAL).waterlogged());
-            placed++;
-        }
-    }
-
-    /** 海菜花：淡绿玻璃板长茎自深床直抵水面，顶浮海泡菜花（2~3 株）。 */
-    static void otteliaStalks(GroundSnapshot g, Random rng, WaterField wf, int lx, int lz,
-                              Map<Long, BlockEdit> edits) {
-        int n = 2 + rng.nextInt(2);
-        int placed = 0, guard = n * 6;
-        while (placed < n && guard-- > 0) {
-            int cx = lx + rng.nextInt(3) - 1, cz = lz + rng.nextInt(3) - 1;
-            if (!g.inBounds(cx, cz)) continue;
-            int i = cz * wf.w + cx;
-            if (!wf.has(i) || !wf.slow(i)) continue;
-            int depth = wf.depth(i);
-            if (depth < 2 || depth > 4) continue;
-            int wx = g.region().minX() + cx;
-            int wz = g.region().minZ() + cz;
-            int surf = wf.surf[i];
-            for (int y = wf.bed[i] + 1; y < surf; y++) {
-                put(edits, wx, y, wz,
-                        BlockSpec.of(Material.LIME_STAINED_GLASS_PANE).waterlogged());
-            }
-            put(edits, wx, surf, wz, BlockSpec.pickles(1 + rng.nextInt(2), true));
-            placed++;
-        }
-    }
-
-    /** 海泡菜床：2~5 格、每格 1~4 颗（同格多颗随机造型），浅水床发光。 */
-    static void pickleBed(GroundSnapshot g, Random rng, WaterField wf, int lx, int lz,
-                          Map<Long, BlockEdit> edits) {
-        int n = 2 + rng.nextInt(4);
-        int placed = 0, guard = n * 6;
-        while (placed < n && guard-- > 0) {
-            int cx = lx + rng.nextInt(5) - 2, cz = lz + rng.nextInt(5) - 2;
-            if (!g.inBounds(cx, cz)) continue;
-            int i = cz * wf.w + cx;
-            if (!wf.has(i)) continue;
-            int depth = wf.depth(i);
-            if (depth < 1 || depth > 3) continue;
-            put(edits, g.region().minX() + cx, wf.bed[i] + 1, g.region().minZ() + cz,
-                    BlockSpec.pickles(1 + rng.nextInt(4), true));
-            placed++;
-        }
+        claimed[lz * g.width() + lx] = true;
     }
 
     // ============================ 汀步 ============================
@@ -500,14 +294,12 @@ final class WaterWorks {
     /**
      * 汀步：自河道中心 (c) 沿垂直河向 (fx,fz) 两侧铺跨溪石列——步距 1~2、横向 ±1 抖动、
      * 疏密错落无规整排布；石顶与水面平或高一格、混材、偶苔毯；两端各延 1~3 块上岸
-     * （草坪汀步，与地面齐平）；中段旁置一组大石点缀。参考教程"汀步石定位置草稿→
-     * 细化汀步石→旁置大石头"。
+     * （草坪汀步，与地面齐平）；中段旁置一组大石点缀。
      */
     static void steppingRun(GroundSnapshot g, AtmosphereTheme th, Random rng, WaterField wf,
                             int[] c, int fx, int fz,
-                            Map<Long, BlockEdit> edits, boolean[] claimed) {
+                            Map<Long, BlockEdit> edits, boolean[] claimed, int[] groundOv) {
         Material[] mats = th.rocks().length > 0 ? th.rocks() : STEP_STONES;
-        // 两个方向各走到岸再多延几步
         boolean any = false;
         for (int dir = -1; dir <= 1; dir += 2) {
             int cx = c[0], cz = c[1];
@@ -547,9 +339,9 @@ final class WaterWorks {
                     claimed[i] = true;
                     any = true;
                 } else if (!g.water(cx, cz)) {
-                    // 上岸延伸：与草坪齐平的嵌地汀步
-                    if (claimed[i]) break;
-                    int gy = g.groundY(cx, cz);
+                    // 上岸延伸：与草坪/滩地齐平的嵌地汀步
+                    if (!fixtureOk(g, claimed, groundOv, cx, cz)) break;
+                    int gy = ov(g, groundOv, cx, cz);
                     put(edits, wx, gy, wz, BlockSpec.of(m));
                     claimed[i] = true;
                     onLand++;
@@ -580,8 +372,8 @@ final class WaterWorks {
                         if (wf.depth(i) > 3) continue;
                         base = wf.bed[i] + 1;
                         top = wf.surf[i] + 1 + (rng.nextDouble() < 0.4 ? 1 : 0);
-                    } else if (!g.water(cx, cz) && !claimed[i]) {
-                        base = g.groundY(cx, cz) + 1;
+                    } else if (!g.water(cx, cz) && fixtureOk(g, claimed, groundOv, cx, cz)) {
+                        base = ov(g, groundOv, cx, cz) + 1;
                         top = base + (rng.nextDouble() < 0.4 ? 1 : 0);
                     } else {
                         continue;
@@ -599,107 +391,255 @@ final class WaterWorks {
         }
     }
 
-    // ============================ 植株统一放置 ============================
+    // ============================ 水生植株：分带铺设 ============================
 
     /**
-     * 水生植株统一放置：并入天然浅水后，按类型的水深/流态/离岸条件贪心选址
-     * （类内间距），调用各植株结构。冻结主题不放。
+     * 水生植株分带铺设（参考教程"岸边→河心"的组合分布）：
+     * <ul>
+     * <li><b>挺水带</b>（离岸 ≤1、水深 ≤2）：芦苇秆（板茎+泡菜穗）/ 荷花（板茎+荷叶
+     *     高差 0~2/莲蓬）/ 浅滩泡菜；</li>
+     * <li><b>浮水带</b>（离岸 1~6、深 ≥1）：睡莲田 / 水葫芦团（含水开花杜鹃叶）/
+     *     王莲（离岸 ≥3、疏散）；</li>
+     * <li><b>沉水层</b>（深 ≥2，独立于水面层）：海草甸（混双层高海草）/ 金鱼藻（角珊瑚）/
+     *     海带柱（深 ≥3）/ 海菜花（深 2~4）/ 泡菜床；</li>
+     * <li><b>岸带</b>（贴水陆地）：芦苇丛（甘蔗）+ 灌木/草花斑块——湖塘的岸线植被
+     *     （河道岸带另由雕刻期驳岸小品负责，二者叠加）。</li>
+     * </ul>
+     * <b>物种斑块噪声</b>让同种连片（芦苇荡/荷花丛/睡莲田），避免杂乱混拼与聚团；
+     * 逐列概率 × 主题丰富度（沼泽/雨林茂盛、稀树草原稀疏）。
+     * <b>湍流不长</b>：RIFFLE/FALL 及其 2 格邻域全禁；RUN（行水段）只许稀疏沉水。
      */
     static void placeWaterFlora(GroundSnapshot g, AtmosphereTheme th, AtmosphereSettings st,
-                                long seed, WaterField wf,
-                                Map<Long, BlockEdit> edits, boolean[] claimed) {
+                                long seed, WaterField wf, Map<Long, BlockEdit> edits,
+                                boolean[] claimed, int[] groundOv) {
         if (th.frozen()) return;
-        double rich = th.waterFlora() * Math.min(1.4, 0.45 + 0.28 * st.densityOf("river"));
+        double rich = th.waterFlora() * Math.min(1.25, 0.55 + 0.22 * st.densityOf("river"));
         if (rich <= 0.06) return;
         Random rng = new Random(seed ^ 0x0F10AAL);
-        // 天然浅水并入水场（surf=水面 y，bed=水底方块 y）
-        for (int lz = 0; lz < g.depth(); lz++) {
-            for (int lx = 0; lx < g.width(); lx++) {
-                int i = lz * wf.w + lx;
+        long ns = seed ^ 0x0F10AAL;
+        int w = wf.w, d = wf.d;
+
+        // 天然浅水并入水场
+        for (int lz = 0; lz < d; lz++) {
+            for (int lx = 0; lx < w; lx++) {
+                int i = lz * w + lx;
                 if (wf.has(i) || !g.water(lx, lz)) continue;
                 int depth = g.waterDepth(lx, lz);
-                if (depth < 1 || depth > 6) continue;
-                wf.add(lx, lz, g.groundY(lx, lz), g.groundY(lx, lz) - depth, WaterField.NATURAL);
+                if (depth < 1 || depth > 8) continue;
+                wf.add(lx, lz, g.groundY(lx, lz), g.groundY(lx, lz) - depth,
+                        WaterField.NATURAL);
             }
         }
-        List<int[]> sites = new ArrayList<>(wf.cols);
-        int waterN = sites.size();
-        if (waterN < 10) return;
-        java.util.Collections.shuffle(sites, rng);
+        if (wf.cols.size() < 8) return;
 
-        int lotusN = cap(rich * waterN / 190, 8);
-        int reedN = cap(rich * waterN / 150, 9);
-        int lilyN = cap(rich * waterN / 140 * Math.max(0.4, th.lilyPad() * 4), 10);
-        int giantN = waterN > 90 ? cap(rich * waterN / 300, 4) : 0;
-        int hyaN = cap(rich * waterN / 260, 5);
-        int meadowN = cap(rich * waterN / 150, 9);
-        int kelpN = cap(rich * waterN / 230, 6);
-        int hornN = rich > 0.55 ? cap(rich * waterN / 320, 4) : 0;
-        int ottN = rich > 0.45 ? cap(rich * waterN / 300, 4) : 0;
-        int pickN = cap(rich * waterN / 200, 7);
-
-        for (int[] s : pickSites(sites, wf, lotusN, 10, (i, lx, lz) ->
-                wf.slow(i) && wf.depth(i) >= 1 && wf.depth(i) <= 3 && wf.nearShore(g, lx, lz, 2))) {
-            lotusCluster(g, rng, wf, s[0], s[1], edits);
-        }
-        for (int[] s : pickSites(sites, wf, reedN, 9, (i, lx, lz) ->
-                wf.slow(i) && wf.depth(i) <= 2 && wf.nearShore(g, lx, lz, 1))) {
-            reedBed(g, rng, wf, s[0], s[1], edits, claimed);
-        }
-        for (int[] s : pickSites(sites, wf, lilyN, 7, (i, lx, lz) ->
-                wf.slow(i) && wf.depth(i) >= 1)) {
-            lilyPatch(g, rng, wf, s[0], s[1], edits);
-        }
-        for (int[] s : pickSites(sites, wf, giantN, 9, (i, lx, lz) ->
-                wf.slow(i) && wf.depth(i) >= 2 && !wf.nearShore(g, lx, lz, 2))) {
-            giantLilies(g, rng, wf, s[0], s[1], edits);
-        }
-        for (int[] s : pickSites(sites, wf, hyaN, 10, (i, lx, lz) ->
-                wf.slow(i) && wf.depth(i) >= 1 && wf.nearShore(g, lx, lz, 3))) {
-            hyacinthPatch(g, rng, wf, s[0], s[1], edits);
-        }
-        for (int[] s : pickSites(sites, wf, meadowN, 8, (i, lx, lz) ->
-                wf.slow(i) && wf.depth(i) >= 2)) {
-            milfoilMeadow(g, rng, wf, s[0], s[1], edits);
-        }
-        for (int[] s : pickSites(sites, wf, kelpN, 8, (i, lx, lz) ->
-                wf.slow(i) && wf.depth(i) >= 3)) {
-            kelpColumns(g, rng, wf, s[0], s[1], edits);
-        }
-        for (int[] s : pickSites(sites, wf, hornN, 9, (i, lx, lz) ->
-                wf.slow(i) && wf.depth(i) >= 2)) {
-            hornwortTuft(g, rng, wf, s[0], s[1], edits);
-        }
-        for (int[] s : pickSites(sites, wf, ottN, 9, (i, lx, lz) ->
-                wf.slow(i) && wf.depth(i) >= 2 && wf.depth(i) <= 4)) {
-            otteliaStalks(g, rng, wf, s[0], s[1], edits);
-        }
-        for (int[] s : pickSites(sites, wf, pickN, 8, (i, lx, lz) ->
-                wf.depth(i) >= 1 && wf.depth(i) <= 3)) {
-            pickleBed(g, rng, wf, s[0], s[1], edits);
-        }
-    }
-
-    private static int cap(double v, int max) { return (int) Math.min(max, Math.round(v)); }
-
-    private interface SitePick { boolean ok(int i, int lx, int lz); }
-
-    /** 从打乱的水列里按谓词 + 类内间距贪心取 count 个锚点。 */
-    private static List<int[]> pickSites(List<int[]> shuffled, WaterField wf, int count,
-                                         int minDist, SitePick p) {
-        List<int[]> out = new ArrayList<>();
-        if (count <= 0) return out;
-        for (int[] c : shuffled) {
-            if (out.size() >= count) break;
-            int i = c[1] * wf.w + c[0];
-            if (!p.ok(i, c[0], c[1])) continue;
-            boolean far = true;
-            for (int[] u : out) {
-                if (Math.abs(u[0] - c[0]) + Math.abs(u[1] - c[1]) < minDist) { far = false; break; }
+        // 离岸距离（水内 BFS：岸缘水列 = 0）与湍流邻域
+        int[] shoreDist = new int[w * d];
+        Arrays.fill(shoreDist, Integer.MAX_VALUE);
+        boolean[] turbulent = new boolean[w * d];
+        ArrayDeque<int[]> front = new ArrayDeque<>();
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (int[] c : wf.cols) {
+            int i = c[1] * w + c[0];
+            for (int[] dd : dirs) {
+                int nx = c[0] + dd[0], nz = c[1] + dd[1];
+                if (!g.inBounds(nx, nz)) continue;
+                int ni = nz * w + nx;
+                if (!wf.has(ni) && !g.water(nx, nz) && g.valid(nx, nz)) {
+                    shoreDist[i] = 0;
+                    front.add(c);
+                    break;
+                }
             }
-            if (far) out.add(c);
+            if (wf.kind[i] == WaterField.RIFFLE || wf.kind[i] == WaterField.FALL) {
+                turbulent[i] = true;
+                for (int dx = -2; dx <= 2; dx++) {
+                    for (int dz = -2; dz <= 2; dz++) {
+                        int nx = c[0] + dx, nz = c[1] + dz;
+                        if (g.inBounds(nx, nz)) turbulent[nz * w + nx] = true;
+                    }
+                }
+            }
         }
-        return out;
+        while (!front.isEmpty()) {
+            int[] c = front.poll();
+            int base = shoreDist[c[1] * w + c[0]];
+            for (int[] dd : dirs) {
+                int nx = c[0] + dd[0], nz = c[1] + dd[1];
+                if (nx < 0 || nx >= w || nz < 0 || nz >= d) continue;
+                int ni = nz * w + nx;
+                if ((wf.has(ni) || g.water(nx, nz)) && shoreDist[ni] > base + 1) {
+                    shoreDist[ni] = base + 1;
+                    front.add(new int[]{nx, nz});
+                }
+            }
+        }
+
+        // 逐水列分带铺设
+        for (int[] c : wf.cols) {
+            int lx = c[0], lz = c[1];
+            int i = lz * w + lx;
+            if (turbulent[i]) continue;
+            int depth = wf.depth(i);
+            if (depth < 1) continue;
+            int sd = shoreDist[i];
+            int surf = wf.surf[i];
+            int bed = wf.bed[i];
+            int wx = g.region().minX() + lx;
+            int wz = g.region().minZ() + lz;
+            boolean run = wf.kind[i] == WaterField.RUN;
+            double sp = AtmosphereGenerator.noise(ns ^ 0x51AL, wx, wz, 9.5);   // 水面层物种斑块
+            double micro = AtmosphereGenerator.hash01(ns ^ 0x717L, wx, wz);
+
+            boolean surfaceTaken = false;
+            if (!run) {
+                if (sd <= 1 && depth <= 2) {
+                    // ---- 挺水带 ----
+                    if (sp < 0.30) {            // 芦苇荡：板秆+泡菜穗（深 1）
+                        if (depth == 1 && micro < 0.5 * rich) {
+                            put(edits, wx, surf, wz,
+                                    BlockSpec.of(Material.LIME_STAINED_GLASS_PANE).waterlogged());
+                            put(edits, wx, surf + 1, wz,
+                                    BlockSpec.pickles(1 + rng.nextInt(3), false));
+                            surfaceTaken = true;
+                        }
+                    } else if (sp < 0.62) {     // 荷花丛：板茎+荷叶（高差）/莲蓬
+                        if (micro < 0.44 * rich) {
+                            Material stem = micro < 0.2
+                                    ? Material.GREEN_STAINED_GLASS_PANE
+                                    : Material.LIME_STAINED_GLASS_PANE;
+                            double hr = rng.nextDouble();
+                            int topY = surf + (hr < 0.4 ? 0 : hr < 0.8 ? 1 : 2);
+                            for (int y = bed + 1; y < topY; y++) {
+                                BlockSpec s = BlockSpec.of(stem);
+                                put(edits, wx, y, wz, y <= surf ? s.waterlogged() : s);
+                            }
+                            if (rng.nextDouble() < 0.2) {
+                                put(edits, wx, topY, wz,
+                                        BlockSpec.pickles(1 + rng.nextInt(2), topY <= surf));
+                            } else {
+                                Material pad = rng.nextDouble() < 0.18
+                                        ? Material.FLOWERING_AZALEA_LEAVES
+                                        : Material.AZALEA_LEAVES;
+                                BlockSpec ps = BlockSpec.of(pad);
+                                put(edits, wx, topY, wz, topY == surf ? ps.waterlogged() : ps);
+                            }
+                            surfaceTaken = true;
+                        }
+                    } else if (sp > 0.75 && depth <= 2 && micro < 0.3 * rich) {
+                        // 近岸泡菜浅床
+                        put(edits, wx, bed + 1, wz, BlockSpec.pickles(1 + rng.nextInt(4), true));
+                        surfaceTaken = depth == 1;
+                    }
+                }
+                if (!surfaceTaken && sd >= 1 && sd <= 6) {
+                    // ---- 浮水带 ----
+                    if (sp < 0.42) {            // 睡莲田
+                        if (micro < 0.30 * rich) {
+                            put(edits, wx, surf + 1, wz, BlockSpec.of(Material.LILY_PAD));
+                        }
+                    } else if (sp < 0.62) {     // 水葫芦团（含水开花杜鹃叶，偶睡莲）
+                        if (micro < 0.24 * rich) {
+                            if (micro < 0.19 * rich) {
+                                put(edits, wx, surf, wz,
+                                        BlockSpec.of(Material.FLOWERING_AZALEA_LEAVES)
+                                                .waterlogged());
+                            } else {
+                                put(edits, wx, surf + 1, wz, BlockSpec.of(Material.LILY_PAD));
+                            }
+                        }
+                    } else if (sp < 0.72 && sd >= 3 && depth >= 2) {   // 王莲：疏散大浮叶
+                        if (micro > 1 - 0.10 * rich) {
+                            Material pad = rng.nextDouble() < 0.25
+                                    ? Material.FLOWERING_AZALEA_LEAVES : Material.AZALEA_LEAVES;
+                            put(edits, wx, surf, wz, BlockSpec.of(pad).waterlogged());
+                        }
+                    }
+                }
+            }
+            // ---- 沉水层（独立于水面层；行水段稀疏） ----
+            double sv = AtmosphereGenerator.noise(ns ^ 0x5EBL, wx, wz, 8.0);
+            double runScale = run ? 0.35 : 1.0;
+            double m2 = AtmosphereGenerator.hash01(ns ^ 0xD1BL, wx, wz);
+            if (depth >= 2) {
+                if (sv < 0.45) {                // 海草甸（混高海草）
+                    if (m2 < 0.55 * rich * runScale) {
+                        if (depth >= 2 && m2 < 0.25 * rich * runScale) {
+                            put(edits, wx, bed + 1, wz, BlockSpec.of(Material.TALL_SEAGRASS));
+                            put(edits, wx, bed + 2, wz,
+                                    BlockSpec.upperHalf(Material.TALL_SEAGRASS));
+                        } else {
+                            put(edits, wx, bed + 1, wz, BlockSpec.of(Material.SEAGRASS));
+                        }
+                    }
+                } else if (sv < 0.58) {         // 金鱼藻：角珊瑚（含水恒活）
+                    if (m2 < 0.30 * rich * runScale && !run) {
+                        put(edits, wx, bed + 1, wz,
+                                BlockSpec.of(Material.HORN_CORAL).waterlogged());
+                    }
+                } else if (sv < 0.72) {         // 海带柱（深水）
+                    if (depth >= 3 && m2 < 0.32 * rich * runScale) {
+                        int h = 2 + rng.nextInt(Math.min(3, depth - 1));
+                        for (int y = 1; y < h; y++) {
+                            put(edits, wx, bed + y, wz, BlockSpec.of(Material.KELP_PLANT));
+                        }
+                        put(edits, wx, bed + h, wz, BlockSpec.aged(Material.KELP, 25));
+                    }
+                } else if (sv < 0.82) {         // 海菜花：板茎+泡菜浮花
+                    if (!run && depth >= 2 && depth <= 4 && m2 < 0.16 * rich && !surfaceTaken) {
+                        for (int y = bed + 1; y < surf; y++) {
+                            put(edits, wx, y, wz,
+                                    BlockSpec.of(Material.LIME_STAINED_GLASS_PANE).waterlogged());
+                        }
+                        put(edits, wx, surf, wz, BlockSpec.pickles(1 + rng.nextInt(2), true));
+                    }
+                } else {                        // 泡菜床
+                    if (depth <= 3 && m2 < 0.28 * rich * runScale) {
+                        put(edits, wx, bed + 1, wz,
+                                BlockSpec.pickles(1 + rng.nextInt(4), true));
+                    }
+                }
+            } else if (sd > 1 && m2 < 0.10 * rich * runScale) {
+                put(edits, wx, bed + 1, wz, BlockSpec.pickles(1 + rng.nextInt(3), true));
+            }
+        }
+
+        // ---- 岸带（贴缓水的陆列）：芦苇丛/灌木/草花斑块——湖塘岸线也有植被 ----
+        for (int[] c : wf.cols) {
+            int i = c[1] * w + c[0];
+            if (shoreDist[i] != 0 || turbulent[i] || !wf.calm(i)) continue;
+            for (int[] dd : dirs) {
+                int nx = c[0] + dd[0], nz = c[1] + dd[1];
+                if (!g.inBounds(nx, nz) || !g.valid(nx, nz)) continue;
+                int ni = nz * w + nx;
+                if (wf.has(ni) || g.water(nx, nz)) continue;
+                if (!fixtureOk(g, claimed, groundOv, nx, nz)) continue;
+                int wxn = g.region().minX() + nx;
+                int wzn = g.region().minZ() + nz;
+                double sp = AtmosphereGenerator.noise(ns ^ 0x0BA2L, wxn, wzn, 8.0);
+                double m3 = AtmosphereGenerator.hash01(ns ^ 0x0BA3L, wxn, wzn);
+                if (sp < 0.34) {
+                    // 芦苇丛：甘蔗 2~3 高（支撑贴水 ✓；滩地为沙、岸地为草土均合法）
+                    if (m3 < 0.5 * rich) {
+                        int gy = ov(g, groundOv, nx, nz);
+                        if (wf.surf[i] >= gy - 1) {
+                            int h = 2 + (m3 < 0.22 * rich ? 1 : 0);
+                            for (int y = 1; y <= h; y++) {
+                                put(edits, wxn, gy + y, wzn, BlockSpec.of(Material.SUGAR_CANE));
+                            }
+                            claimed[ni] = true;
+                        }
+                    }
+                } else if (sp < 0.55) {
+                    if (m3 < 0.35 * rich) {
+                        bankShrub(g, th, rng, nx, nz, edits, claimed, groundOv);
+                    }
+                } else if (sp < 0.72) {
+                    if (m3 < 0.4 * rich) {
+                        bankHerb(g, th, rng, nx, nz, edits, claimed, groundOv);
+                    }
+                }
+            }
+        }
     }
 
     private static void put(Map<Long, BlockEdit> edits, int x, int y, int z, BlockSpec spec) {
