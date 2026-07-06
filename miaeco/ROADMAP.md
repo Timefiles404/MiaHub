@@ -51,7 +51,23 @@ MiaEco 是 MiaHub monorepo（`Timefiles404/MiaHub`）里的一个 Paper 1.21.x /
   - **山侧月牙塘**：山肩选址（外向 3 格骤降≥4、背靠山体）→ 突出平台挖 1~2 格灌水，
     水面=双圆交集之补集的一半（月牙、凸弧朝崖外）；围水完整性预检防漏水
   - 特征间避让：湖/塘列 claimed，soil/树圈/paths 全部绕开
-- **0.16.0（本版）** 人烟首版：房屋 NBT + 分档选址 + 优雅落地 + 小路（town 特征）：
+- **0.17.0（本版）** 村落成熟版：广场水井 + 院落 + 路灯 + 箱子战利品：
+  - **村心广场**（≥3 户成村）：质心 ±8 搜 7×7 净空（起伏 ≤2 否则整体放弃）→ 中位数
+    整平 + 斑驳铺装（径/砾/圆石/留草混合）→ 3×3 石井（圈石+中水+角双层石墙+石板顶）
+    + 对角灯柱；小路以井口为汇点（不再是数学质心）
+  - **院落系统**（程序化）：每户 0~2 元素，避开门侧、|高差|≤1 才落、全部占位——
+    <b>栅栏菜畦</b>（外圈栅栏+朝房栅栏门、内圈 moisture=7 耕地成行作物
+    小麦/胡萝卜/土豆/甜菜、中央一格水）、<b>柴堆</b>（横放原木 2~3+顶 1，轴向沿长边）、
+    <b>干草垛</b>；按件名分派：farm 必配菜畦、shepherd/animal_pen/butcher 配草垛
+  - **村道灯柱**：小路每 ~8 格侧向 1 格立栅栏+灯笼（村内 50%/干道 30%，封顶 10 盏，
+    地面平顺 ±1 才立）
+  - **箱子战利品**：BlockSpec 新增 loot 字段——CHEST/BARREL 写入后挂原版村庄
+    战利品表（职业件按职业 weaponsmith/toolsmith/cartographer/mason/shepherd/butcher/
+    fletcher/tannery/temple/fisher，民居按群系 plains/taiga/snowy_house）；undo 连表
+    一起消失（表在方块实体上）
+  - temperate_river3 实测聚出 3 户<b>村落</b>（广场+井+路网全链路）；全主题
+    SEAM_FAIL=0、FLOAT_FAIL=0、水系验证器全绿（菜畦水/井水均为受控 1×1 含界水体）
+- **0.16.0** 人烟首版：房屋 NBT + 分档选址 + 优雅落地 + 小路（town 特征）：
   - **件库**：Epic Villages 精选 75 件独立房屋（plains 35/taiga 26/snowy 14，脚印 ≤26、
     必带 building_entrance）打进 jar（`structures/village/` + index.txt，~1.25MB）；
     自带 gzip-NBT 迷你解析器 `StructNbt`（Bukkit Jigsaw 接口不暴露元数据，纯函数保

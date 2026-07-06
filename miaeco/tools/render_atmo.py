@@ -32,6 +32,7 @@ COLORS = {
     "MOSS_BLOCK": (90, 140, 62),
     "MOSS_CARPET": (110, 168, 74),
     "GLOW_LICHEN": (116, 176, 158),
+    "FARMLAND": (150, 108, 62),
     "MOSSY_COBBLESTONE": (100, 128, 92),
     "COBBLESTONE": (122, 122, 122),
     "STONE": (140, 140, 140),

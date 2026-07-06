@@ -30,6 +30,10 @@ public final class TownWorks {
     public record Placement(int minX, int minZ, int maxX, int maxZ, int padY,
                             String piece, int doorX, int doorZ, String mode) { }
 
+    /** 已落成的一户（后续院落/小路用）：局部坐标盒 + 台面 + 门端 + 门朝向。 */
+    private record Housed(int ox, int oz, int rsx, int rsz, int padY,
+                          int doorEndLx, int doorEndLz, String doorFacing, String pieceId) { }
+
     private static final List<Placement> DEBUG = Collections.synchronizedList(new ArrayList<>());
 
     /** 取走上一次生成的放置记录（AtmoDumpTool 离线验证用）。 */
@@ -126,35 +130,56 @@ public final class TownWorks {
         ccx /= members.size();
         ccz /= members.size();
 
-        List<int[]> doors = new ArrayList<>();      // {lx, lz}（门前引道尽头）
+        List<Housed> houses = new ArrayList<>();
         List<int[]> placedRects = new ArrayList<>();
-        int placed = 0;
         for (int[] site : members) {
-            TownPieces.Piece p = pickPiece(pieces, rng, mode, placed, site[2]);
+            TownPieces.Piece p = pickPiece(pieces, rng, mode, houses.size(), site[2]);
             if (p == null) continue;
-            int[] door = placeHouse(g, th, p, site[0], site[1], ccx, ccz, mode, rng,
+            Housed h = placeHouse(g, th, p, site[0], site[1], ccx, ccz, mode, rng,
                     treeBlk, edits, claimed, pool, placedRects);
-            if (door != null) {
-                doors.add(door);
-                placed++;
+            if (h != null) houses.add(h);
+        }
+        if (houses.isEmpty()) return;
+
+        // 4) 院落：每户 0~2 个元素（菜畦/柴堆/干草垛，按件名分派），避开门侧
+        for (Housed h : houses) {
+            yard(g, th, rng, h, treeBlk, edits, claimed, pool);
+        }
+
+        // 5) 村心广场（≥3 户成村才有）：铺装 + 水井 + 灯柱；先占位，小路自然停在广场边
+        int pcx = 0, pcz = 0;
+        for (Housed h : houses) {
+            pcx += h.ox() + h.rsx() / 2;
+            pcz += h.oz() + h.rsz() / 2;
+        }
+        pcx /= houses.size();
+        pcz /= houses.size();
+        boolean village = houses.size() >= 3;
+        if (village) {
+            int[] pc = plaza(g, th, rng, pcx, pcz, treeBlk, edits, claimed, pool);
+            if (pc != null) {
+                pcx = pc[0];
+                pcz = pc[1];
             }
         }
-        if (placed == 0) return;
 
-        // 4) 小路：各户门前 → 村心；村心（或独户门前）→ 区域边缘（接外界）
+        // 6) 小路：各户门前 → 村心；村心（或独户门前）→ 区域边缘（接外界）；沿途灯柱
         long ns = seed ^ AtmosphereGenerator.S_TOWN ^ 0x77L;
-        int exitLx = doors.get(0)[0], exitLz = doors.get(0)[1];
-        if (placed > 1) {
-            for (int[] dr : doors) {
-                trail(g, th, rng, ns, dr[0], dr[1], ccx, ccz, treeBases, edits, claimed, pool);
+        Material fence = biomeOf(th).equals("plains") ? Material.OAK_FENCE : Material.SPRUCE_FENCE;
+        int exitLx = houses.get(0).doorEndLx(), exitLz = houses.get(0).doorEndLz();
+        if (houses.size() > 1) {
+            for (Housed h : houses) {
+                trail(g, th, rng, ns, h.doorEndLx(), h.doorEndLz(), pcx, pcz,
+                        treeBases, treeBlk, fence, 0.5, edits, claimed, pool);
             }
-            exitLx = ccx;
-            exitLz = ccz;
+            exitLx = pcx;
+            exitLz = pcz;
         }
         boolean alongX = rng.nextBoolean();
         int tx = alongX ? (exitLx < w / 2 ? w - 2 : 1) : exitLx;
         int tz = alongX ? exitLz : (exitLz < d / 2 ? d - 2 : 1);
-        trail(g, th, rng, ns ^ 0x5L, exitLx, exitLz, tx, tz, treeBases, edits, claimed, pool);
+        trail(g, th, rng, ns ^ 0x5L, exitLx, exitLz, tx, tz,
+                treeBases, treeBlk, fence, village ? 0.3 : 0.0, edits, claimed, pool);
     }
 
     // ============================ 选址 ============================
@@ -233,13 +258,13 @@ public final class TownWorks {
 
     /**
      * 在候选中心附近放一件房：旋转（门朝村心）→ 垫台（分位取高、削填上限）→
-     * 铺件（y=0 地皮层落台面、y≥1 全量含空气）→ 勒脚 → 缘坡 → 门前引道。
-     * 返回门前引道尽头 {lx,lz}；失败 null。
+     * 铺件（y=0 地皮层落台面、y≥1 全量含空气；箱子/木桶挂战利品表）→ 勒脚 → 缘坡 →
+     * 门前引道。失败返回 null。
      */
-    private static int[] placeHouse(GroundSnapshot g, AtmosphereTheme th, TownPieces.Piece p,
-                                    int clx, int clz, int ccx, int ccz, String mode, Random rng,
-                                    boolean[] treeBlk, Map<Long, BlockEdit> edits,
-                                    boolean[] claimed, boolean[] pool, List<int[]> placedRects) {
+    private static Housed placeHouse(GroundSnapshot g, AtmosphereTheme th, TownPieces.Piece p,
+                                     int clx, int clz, int ccx, int ccz, String mode, Random rng,
+                                     boolean[] treeBlk, Map<Long, BlockEdit> edits,
+                                     boolean[] claimed, boolean[] pool, List<int[]> placedRects) {
         int w = g.width(), d = g.depth();
         // 期望门朝向：指向村心（独户随机）
         String want;
@@ -332,7 +357,12 @@ public final class TownWorks {
                 AtmosphereGenerator.put(edits, wx, padY + by, wz, BlockSpec.AIR);
             } else {
                 String rawSt = TownPieces.rawState(name, p.palProps.get(s), rot);
-                AtmosphereGenerator.put(edits, wx, padY + by, wz, BlockSpec.raw(mat, rawSt));
+                if (mat == Material.CHEST || mat == Material.BARREL) {
+                    AtmosphereGenerator.put(edits, wx, padY + by, wz,
+                            BlockSpec.raw(mat, rawSt, lootFor(biomeOf(th), p.id)));
+                } else {
+                    AtmosphereGenerator.put(edits, wx, padY + by, wz, BlockSpec.raw(mat, rawSt));
+                }
             }
         }
 
@@ -408,7 +438,29 @@ public final class TownWorks {
         placedRects.add(new int[]{ox, oz, ox + rsx, oz + rsz});
         DEBUG.add(new Placement(minWx, minWz, minWx + rsx - 1, minWz + rsz - 1, padY,
                 p.id, g.region().minX() + lastLx, g.region().minZ() + lastLz, mode));
-        return new int[]{lastLx, lastLz};
+        return new Housed(ox, oz, rsx, rsz, padY, lastLx, lastLz, df, p.id);
+    }
+
+    /** 容器战利品表：职业件按职业、其余按群系民居表。 */
+    private static String lootFor(String biome, String pieceId) {
+        String n = pieceId.toLowerCase(java.util.Locale.ROOT);
+        if (n.contains("weaponsmith") || n.contains("weapon_smith") || n.contains("armorer")) {
+            return "chests/village/village_weaponsmith";
+        }
+        if (n.contains("tool_smith") || n.contains("toolsmith")) return "chests/village/village_toolsmith";
+        if (n.contains("cartographer")) return "chests/village/village_cartographer";
+        if (n.contains("mason")) return "chests/village/village_mason";
+        if (n.contains("shepherd")) return "chests/village/village_shepherd";
+        if (n.contains("butcher")) return "chests/village/village_butcher";
+        if (n.contains("fletcher")) return "chests/village/village_fletcher";
+        if (n.contains("tannery")) return "chests/village/village_tannery";
+        if (n.contains("temple")) return "chests/village/village_temple";
+        if (n.contains("fisher")) return "chests/village/village_fisher";
+        return switch (biome) {
+            case "taiga" -> "chests/village/village_taiga_house";
+            case "snowy" -> "chests/village/village_snowy_house";
+            default -> "chests/village/village_plains_house";
+        };
     }
 
     /** 台缘外 1~4 圈：目标高度 = padY ± 圈号，超出则削/填并还草；只对改动格占位。 */
@@ -448,9 +500,10 @@ public final class TownWorks {
         }
     }
 
-    /** 村内/对外小路：A* 成本与全区小路一致（避水绕树贴地形），沿途小径盖印。 */
+    /** 村内/对外小路：A* 成本与全区小路一致（避水绕树贴地形），沿途小径盖印 + 灯柱。 */
     private static void trail(GroundSnapshot g, AtmosphereTheme th, Random rng, long wiggle,
                               int sx, int sz, int tx, int tz, List<int[]> treeBases,
+                              boolean[] treeBlk, Material fence, double lanternRate,
                               Map<Long, BlockEdit> edits, boolean[] claimed, boolean[] pool) {
         int w = g.width();
         List<int[]> routed = AtmosphereGenerator.route(g, sx, sz, tx, tz, (lx, lz, fx, fz) -> {
@@ -466,5 +519,285 @@ public final class TownWorks {
         });
         if (routed == null) return;
         AtmosphereGenerator.stampTrail(g, th, rng, routed, treeBases, edits, claimed, pool);
+        if (lanternRate <= 0) return;
+        // 路灯：每 ~8 格路侧一盏（垂直于路向偏一格），最多 10 盏
+        int lit = 0;
+        for (int idx = 4; idx + 1 < routed.size() && lit < 10; idx += 7 + rng.nextInt(4)) {
+            if (rng.nextDouble() > lanternRate) continue;
+            int lx = routed.get(idx)[0], lz = routed.get(idx)[1];
+            boolean xMajor = routed.get(idx + 1)[0] != lx;
+            int side = rng.nextBoolean() ? 1 : -1;
+            int nlx = lx + (xMajor ? 0 : side), nlz = lz + (xMajor ? side : 0);
+            int refY = g.groundY(lx, lz);
+            if (lanternPost(g, nlx, nlz, refY, fence, treeBlk, edits, claimed, pool)) lit++;
+        }
+    }
+
+    /** 栅栏灯柱（路旁/广场角）：地面平顺（±1 内）才立，落成后占位。 */
+    private static boolean lanternPost(GroundSnapshot g, int lx, int lz, int refY, Material fence,
+                                       boolean[] treeBlk, Map<Long, BlockEdit> edits,
+                                       boolean[] claimed, boolean[] pool) {
+        int w = g.width(), d = g.depth();
+        if (lx < 1 || lz < 1 || lx >= w - 1 || lz >= d - 1) return false;
+        int i = lz * w + lx;
+        if (!g.valid(lx, lz) || g.water(lx, lz) || pool[i] || claimed[i] || treeBlk[i]) return false;
+        int gy = g.groundY(lx, lz);
+        if (Math.abs(gy - refY) > 1) return false;
+        int wx = g.region().minX() + lx, wz = g.region().minZ() + lz;
+        AtmosphereGenerator.put(edits, wx, gy + 1, wz, BlockSpec.of(fence));
+        AtmosphereGenerator.put(edits, wx, gy + 2, wz, BlockSpec.of(Material.LANTERN));
+        claimed[i] = true;
+        return true;
+    }
+
+    // ============================ 院落 ============================
+
+    /** 每户 0~2 个院落元素：farm 件必配菜畦、畜牧件配干草垛，其余随机；一律避开门侧。 */
+    private static void yard(GroundSnapshot g, AtmosphereTheme th, Random rng, Housed h,
+                             boolean[] treeBlk, Map<Long, BlockEdit> edits,
+                             boolean[] claimed, boolean[] pool) {
+        String n = h.pieceId().toLowerCase(java.util.Locale.ROOT);
+        List<String> want = new ArrayList<>();
+        if (n.contains("farm")) {
+            want.add("crop");
+        } else if (n.contains("shepherd") || n.contains("animal_pen") || n.contains("butcher")) {
+            want.add("hay");
+        } else {
+            double r = rng.nextDouble();
+            if (r < 0.45) want.add("crop");
+            else if (r < 0.75) want.add("log");
+        }
+        if (rng.nextDouble() < 0.35) want.add(rng.nextBoolean() ? "hay" : "log");
+        // 可用侧：门侧留给引道
+        List<String> sides = new ArrayList<>(List.of("north", "south", "east", "west"));
+        sides.remove(h.doorFacing());
+        Collections.shuffle(sides, rng);
+        int si = 0;
+        for (String kind : want) {
+            if (si >= sides.size()) break;
+            int ew = kind.equals("crop") ? 5 + (rng.nextBoolean() ? 2 : 0) : 3;
+            int el = kind.equals("crop") ? 4 + rng.nextInt(2) : 2;
+            for (; si < sides.size(); si++) {
+                if (placeYardRect(g, th, rng, h, sides.get(si), kind, ew, el,
+                        treeBlk, edits, claimed, pool)) {
+                    si++;
+                    break;
+                }
+            }
+        }
+    }
+
+    /** 在指定侧找一块 |gy-padY|≤1 的净地放元素；成功返回 true。 */
+    private static boolean placeYardRect(GroundSnapshot g, AtmosphereTheme th, Random rng,
+                                         Housed h, String side, String kind, int ew, int el,
+                                         boolean[] treeBlk, Map<Long, BlockEdit> edits,
+                                         boolean[] claimed, boolean[] pool) {
+        int w = g.width(), d = g.depth();
+        // 元素矩形：贴墙外 1 格空隙，沿墙向随机滑动
+        int rx, rz, rw, rl;
+        boolean horiz = side.equals("north") || side.equals("south");
+        rw = horiz ? ew : el;
+        rl = horiz ? el : ew;
+        int slide = rng.nextInt(Math.max(1, (horiz ? h.rsx() : h.rsz()) - (horiz ? rw : rl) + 1));
+        rx = horiz ? h.ox() + slide
+                : side.equals("east") ? h.ox() + h.rsx() + 1 : h.ox() - rw - 1;
+        rz = horiz ? (side.equals("south") ? h.oz() + h.rsz() + 1 : h.oz() - rl - 1)
+                : h.oz() + slide;
+        if (rx < 1 || rz < 1 || rx + rw > w - 1 || rz + rl > d - 1) return false;
+        for (int z = rz; z < rz + rl; z++) {
+            for (int x = rx; x < rx + rw; x++) {
+                int i = z * w + x;
+                if (!g.valid(x, z) || g.water(x, z) || pool[i] || claimed[i] || treeBlk[i]) {
+                    return false;
+                }
+                if (Math.abs(g.groundY(x, z) - h.padY()) > 1) return false;
+            }
+        }
+        switch (kind) {
+            case "crop" -> cropPlot(g, th, rng, rx, rz, rw, rl, h, edits, claimed);
+            case "hay" -> pile(g, rng, rx, rz, rw, rl, Material.HAY_BLOCK, edits, claimed);
+            case "log" -> pile(g, rng, rx, rz, rw, rl,
+                    biomeOf(th).equals("plains") ? Material.OAK_LOG : Material.SPRUCE_LOG,
+                    edits, claimed);
+            default -> {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 栅栏菜畦：外圈栅栏（朝房一侧开门），内圈耕地成行作物，中央一格水。 */
+    private static void cropPlot(GroundSnapshot g, AtmosphereTheme th, Random rng,
+                                 int rx, int rz, int rw, int rl, Housed h,
+                                 Map<Long, BlockEdit> edits, boolean[] claimed) {
+        int w = g.width();
+        Material fence = biomeOf(th).equals("plains") ? Material.OAK_FENCE : Material.SPRUCE_FENCE;
+        String[] crops = {"minecraft:wheat[age=%d]", "minecraft:carrots[age=%d]",
+                "minecraft:potatoes[age=%d]", "minecraft:beetroots[age=3]"};
+        Material[] cropMat = {Material.WHEAT, Material.CARROTS, Material.POTATOES, Material.BEETROOTS};
+        int ci = rng.nextInt(crops.length);
+        int pad = h.padY();
+        int gateX = rx + rw / 2, gateZ = rz + rl / 2;   // 朝房侧中点开门
+        boolean gateOnX = h.doorFacing().equals("north") || h.doorFacing().equals("south");
+        // 门开在贴房那条边
+        if (rz + rl <= h.oz()) gateZ = rz + rl - 1;
+        else if (rz >= h.oz() + h.rsz()) gateZ = rz;
+        else gateX = rx + rw <= h.ox() ? rx + rw - 1 : rx;
+        for (int z = rz; z < rz + rl; z++) {
+            for (int x = rx; x < rx + rw; x++) {
+                int i = z * w + x;
+                int gy = g.groundY(x, z);
+                int wx = g.region().minX() + x, wz = g.region().minZ() + z;
+                // 统一整平到 pad：高削低垫（±1 已由选址保证）
+                for (int y = pad + 1; y <= gy; y++) {
+                    AtmosphereGenerator.put(edits, wx, y, wz, BlockSpec.AIR);
+                }
+                boolean rim = x == rx || x == rx + rw - 1 || z == rz || z == rz + rl - 1;
+                if (rim) {
+                    AtmosphereGenerator.put(edits, wx, pad, wz, BlockSpec.of(Material.GRASS_BLOCK));
+                    boolean gate = x == gateX && z == gateZ;
+                    if (gate) {
+                        String gf = h.doorFacing();   // 门板走向贴房向即可
+                        AtmosphereGenerator.put(edits, wx, pad + 1, wz, BlockSpec.raw(
+                                Material.matchMaterial(fence.name() + "_GATE"),
+                                "minecraft:" + fence.name().toLowerCase(java.util.Locale.ROOT)
+                                        + "_gate[facing=" + (gateOnX ? gf : "east") + "]"));
+                    } else {
+                        AtmosphereGenerator.put(edits, wx, pad + 1, wz, BlockSpec.of(fence));
+                    }
+                } else if (x == rx + rw / 2 && z == rz + rl / 2) {
+                    AtmosphereGenerator.put(edits, wx, pad, wz, BlockSpec.of(Material.WATER));
+                } else {
+                    AtmosphereGenerator.put(edits, wx, pad, wz,
+                            BlockSpec.raw(Material.FARMLAND, "minecraft:farmland[moisture=7]"));
+                    if (AtmosphereGenerator.hash01(0xC80BL, wx, wz) < 0.85) {
+                        int age = ci == 3 ? 3 : 4 + rng.nextInt(4);
+                        AtmosphereGenerator.put(edits, wx, pad + 1, wz,
+                                BlockSpec.raw(cropMat[ci], crops[ci].formatted(age)));
+                    }
+                }
+                claimed[i] = true;
+            }
+        }
+    }
+
+    /** 柴堆/草垛：底层横放原木（轴向沿长边）或干草 2~3 块，顶上再压 1~2 块。 */
+    private static void pile(GroundSnapshot g, Random rng, int rx, int rz, int rw, int rl,
+                             Material m, Map<Long, BlockEdit> edits, boolean[] claimed) {
+        int w = g.width();
+        boolean alongX = rw >= rl;
+        org.bukkit.Axis axis = alongX ? org.bukkit.Axis.X : org.bukkit.Axis.Z;
+        List<int[]> base = new ArrayList<>();
+        for (int z = rz; z < rz + rl; z++) {
+            for (int x = rx; x < rx + rw; x++) {
+                base.add(new int[]{x, z});
+            }
+        }
+        int n = Math.min(base.size(), 2 + rng.nextInt(3));
+        int topped = 0;
+        for (int k = 0; k < n; k++) {
+            int[] c = base.get(k);
+            int gy = g.groundY(c[0], c[1]);
+            int wx = g.region().minX() + c[0], wz = g.region().minZ() + c[1];
+            AtmosphereGenerator.put(edits, wx, gy + 1, wz, BlockSpec.log(m, axis));
+            if (topped < 1 && rng.nextDouble() < 0.6) {
+                AtmosphereGenerator.put(edits, wx, gy + 2, wz, BlockSpec.log(m, axis));
+                topped++;
+            }
+            claimed[c[1] * w + c[0]] = true;
+        }
+    }
+
+    // ============================ 村心广场 ============================
+
+    /** 村心：7×7 整平 + 斑驳铺装 + 3×3 石井 + 对角灯柱；地形不配合返回 null（放弃）。 */
+    private static int[] plaza(GroundSnapshot g, AtmosphereTheme th, Random rng, int pcx, int pcz,
+                               boolean[] treeBlk, Map<Long, BlockEdit> edits,
+                               boolean[] claimed, boolean[] pool) {
+        int w = g.width(), d = g.depth();
+        // 在质心附近搜一个可用 7×7（±2 起伏、全净空）
+        int bx = -1, bz = -1, bestRel = 99;
+        for (int dz = -8; dz <= 8; dz += 2) {
+            for (int dx = -8; dx <= 8; dx += 2) {
+                int cx = pcx + dx, cz = pcz + dz;
+                if (cx < 5 || cz < 5 || cx >= w - 5 || cz >= d - 5) continue;
+                int lo = Integer.MAX_VALUE, hi = Integer.MIN_VALUE;
+                boolean ok = true;
+                for (int z = cz - 3; z <= cz + 3 && ok; z++) {
+                    for (int x = cx - 3; x <= cx + 3; x++) {
+                        int i = z * w + x;
+                        if (!g.valid(x, z) || g.water(x, z) || pool[i] || claimed[i] || treeBlk[i]) {
+                            ok = false;
+                            break;
+                        }
+                        int y = g.groundY(x, z);
+                        lo = Math.min(lo, y);
+                        hi = Math.max(hi, y);
+                    }
+                }
+                if (ok && hi - lo <= 2 && hi - lo < bestRel) {
+                    bestRel = hi - lo;
+                    bx = cx;
+                    bz = cz;
+                }
+            }
+        }
+        if (bx < 0) return null;
+        List<Integer> hs = new ArrayList<>();
+        for (int z = bz - 3; z <= bz + 3; z++) {
+            for (int x = bx - 3; x <= bx + 3; x++) {
+                hs.add(g.groundY(x, z));
+            }
+        }
+        Collections.sort(hs);
+        int pad = hs.get(hs.size() / 2);
+        Material pathM = th.pathCore().length > 0 ? th.pathCore()[0] : Material.DIRT_PATH;
+        for (int z = bz - 3; z <= bz + 3; z++) {
+            for (int x = bx - 3; x <= bx + 3; x++) {
+                int i = z * w + x;
+                int gy = g.groundY(x, z);
+                int wx = g.region().minX() + x, wz = g.region().minZ() + z;
+                for (int y = pad + 1; y <= gy; y++) {
+                    AtmosphereGenerator.put(edits, wx, y, wz, BlockSpec.AIR);
+                }
+                for (int y = gy + 1; y < pad; y++) {
+                    AtmosphereGenerator.put(edits, wx, y, wz, BlockSpec.of(Material.DIRT));
+                }
+                double hr = AtmosphereGenerator.hash01(0x1A2AL, wx, wz);
+                Material top = hr < 0.40 ? pathM : hr < 0.60 ? Material.GRAVEL
+                        : hr < 0.75 ? Material.COBBLESTONE : Material.GRASS_BLOCK;
+                AtmosphereGenerator.put(edits, wx, pad, wz, BlockSpec.of(top));
+                claimed[i] = true;
+            }
+        }
+        // 石井 3×3：圈石+中水；角上双层石墙；顶 3×3 石台阶板
+        int wwx = g.region().minX() + bx, wwz = g.region().minZ() + bz;
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                boolean center = dx == 0 && dz == 0;
+                AtmosphereGenerator.put(edits, wwx + dx, pad, wwz + dz,
+                        center ? BlockSpec.of(Material.WATER) : BlockSpec.of(Material.COBBLESTONE));
+                if (center) {
+                    AtmosphereGenerator.put(edits, wwx, pad - 1, wwz, BlockSpec.of(Material.COBBLESTONE));
+                }
+                boolean corner = dx != 0 && dz != 0;
+                if (corner) {
+                    AtmosphereGenerator.put(edits, wwx + dx, pad + 1, wwz + dz,
+                            BlockSpec.of(Material.COBBLESTONE_WALL));
+                    AtmosphereGenerator.put(edits, wwx + dx, pad + 2, wwz + dz,
+                            BlockSpec.of(Material.COBBLESTONE_WALL));
+                }
+                AtmosphereGenerator.put(edits, wwx + dx, pad + 3, wwz + dz,
+                        BlockSpec.of(Material.COBBLESTONE_SLAB));
+            }
+        }
+        // 对角灯柱（格子已被广场占位，直接铺设）
+        Material fence = biomeOf(th).equals("plains") ? Material.OAK_FENCE : Material.SPRUCE_FENCE;
+        for (int[] c : new int[][]{{bx - 3, bz - 3}, {bx + 3, bz + 3}}) {
+            int wx = g.region().minX() + c[0], wz = g.region().minZ() + c[1];
+            AtmosphereGenerator.put(edits, wx, pad + 1, wz, BlockSpec.of(fence));
+            AtmosphereGenerator.put(edits, wx, pad + 2, wz, BlockSpec.of(Material.LANTERN));
+        }
+        return new int[]{bx, bz};
     }
 }

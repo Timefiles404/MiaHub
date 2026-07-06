@@ -56,6 +56,7 @@ public final class AsyncWorldEditor {
                     BlockEdit e = edits.get(cursor);
                     Block b = world.getBlockAt(e.x(), e.y(), e.z());
                     b.setBlockData(toData(e.spec()), false);
+                    attachLoot(b, e.spec());
                 }
                 if (cursor >= edits.size()) {
                     cancel();
@@ -83,6 +84,7 @@ public final class AsyncWorldEditor {
                     Block b = world.getBlockAt(e.x(), e.y(), e.z());
                     undo.add(new Undo(e.x(), e.y(), e.z(), b.getBlockData().getAsString()));
                     b.setBlockData(toData(e.spec()), false);
+                    attachLoot(b, e.spec());
                 }
                 if (cursor >= edits.size()) {
                     cancel();
@@ -117,6 +119,20 @@ public final class AsyncWorldEditor {
                 }
             }
         }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    /** 容器方块挂原版战利品表（村庄箱子/木桶）：首次打开时按表生成内容。 */
+    private static void attachLoot(Block b, BlockSpec spec) {
+        if (spec.loot == null) return;
+        org.bukkit.block.BlockState bs = b.getState();
+        if (bs instanceof org.bukkit.loot.Lootable lo) {
+            org.bukkit.loot.LootTable lt = org.bukkit.Bukkit.getLootTable(
+                    org.bukkit.NamespacedKey.minecraft(spec.loot));
+            if (lt != null) {
+                lo.setLootTable(lt);
+                bs.update(true, false);
+            }
+        }
     }
 
     /** 在主线程把 BlockSpec 具体化为 BlockData。 */

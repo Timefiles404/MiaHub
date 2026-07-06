@@ -40,14 +40,16 @@ public final class BlockSpec {
     /** 完整 blockstate 原始串（结构 NBT 直录，如 "minecraft:oak_stairs[facing=east,...]"）；
      *  state==RAW 时有效，写入端经 Bukkit.createBlockData 构建。 */
     public final String raw;
+    /** 原版战利品表 id（如 "chests/village/village_plains_house"）；容器方块写入后挂表。 */
+    public final String loot;
 
     private BlockSpec(Material material, State state, Axis axis, Set<BlockFace> faces,
                       BlockFace facing, int aux, boolean waterlogged) {
-        this(material, state, axis, faces, facing, aux, waterlogged, null);
+        this(material, state, axis, faces, facing, aux, waterlogged, null, null);
     }
 
     private BlockSpec(Material material, State state, Axis axis, Set<BlockFace> faces,
-                      BlockFace facing, int aux, boolean waterlogged, String raw) {
+                      BlockFace facing, int aux, boolean waterlogged, String raw, String loot) {
         this.material = material;
         this.state = state;
         this.axis = axis;
@@ -56,6 +58,7 @@ public final class BlockSpec {
         this.aux = aux;
         this.waterlogged = waterlogged;
         this.raw = raw;
+        this.loot = loot;
     }
 
     public static BlockSpec of(Material m) { return new BlockSpec(m, State.NONE, null, null, null, 0, false); }
@@ -116,11 +119,17 @@ public final class BlockSpec {
 
     /** 结构件原始 blockstate：material 仅供撤销/渲染记账，写入以 raw 串为准。 */
     public static BlockSpec raw(Material m, String raw) {
-        return new BlockSpec(m, State.RAW, null, null, null, 0, false, raw);
+        return new BlockSpec(m, State.RAW, null, null, null, 0, false, raw, null);
+    }
+
+    /** 带战利品表的容器（村庄箱子/木桶）：写入后挂原版 loot table。 */
+    public static BlockSpec raw(Material m, String raw, String loot) {
+        return new BlockSpec(m, State.RAW, null, null, null, 0, false, raw, loot);
     }
 
     /** 本方块的含水（waterlogged）版本——玻璃板茎/浮水叶/垂滴叶茎/水中台阶等用。 */
     public BlockSpec waterlogged() {
-        return waterlogged ? this : new BlockSpec(material, state, axis, faces, facing, aux, true, raw);
+        return waterlogged ? this
+                : new BlockSpec(material, state, axis, faces, facing, aux, true, raw, loot);
     }
 }
