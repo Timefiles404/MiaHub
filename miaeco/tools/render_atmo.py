@@ -63,6 +63,9 @@ COLORS = {
     "STONE_BRICKS": (152, 150, 144),
     "DEAD_BUSH": (150, 118, 68),
     "SHORT_GRASS": (110, 180, 84),
+    "SPRUCE_FENCE": (92, 66, 40),
+    "OAK_LEAVES": (70, 128, 52),
+    "SPRUCE_LEAVES": (52, 96, 60),
 }
 
 
