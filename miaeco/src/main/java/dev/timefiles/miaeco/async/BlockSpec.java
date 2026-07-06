@@ -55,6 +55,9 @@ public final class BlockSpec {
 
     public static BlockSpec vine(Set<BlockFace> f) { return new BlockSpec(Material.VINE, State.VINE_FACES, null, f, null, 0, false); }
 
+    /** 任意多面附着方块（发光地衣等 MultipleFacing）：faces=贴附面。 */
+    public static BlockSpec faces(Material m, Set<BlockFace> f) { return new BlockSpec(m, State.VINE_FACES, null, f, null, 0, false); }
+
     /** 上半台阶（下半直接用 of()，默认即 bottom）。 */
     public static BlockSpec slabTop(Material m) { return new BlockSpec(m, State.SLAB_TOP, null, null, null, 0, false); }
 

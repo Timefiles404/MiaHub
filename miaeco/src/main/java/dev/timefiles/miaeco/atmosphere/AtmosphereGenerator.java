@@ -75,13 +75,14 @@ public final class AtmosphereGenerator {
         if (st.densityOf("soil") > 0) soil(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
         if (st.densityOf("paths") > 0) paths(g, th, st, seed, treeBases, edits, claimed, pool);
         if (st.densityOf("water") > 0) water(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
-        if (st.densityOf("rocks") > 0) rocks(g, th, st, seed, treeBases, edits, claimed);
+        List<int[]> rockCells = new ArrayList<>();   // 岩石占位（供岩边微生境选点）
+        if (st.densityOf("rocks") > 0) rocks(g, th, st, seed, treeBases, edits, claimed, rockCells);
         if (st.densityOf("ruins") > 0) ruins(g, th, st, seed, treeBases, edits, claimed);
-        if (st.densityOf("groundcover") > 0) groundcover(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
+        if (st.densityOf("groundcover") > 0) groundcover(g, th, st, seed, treeBases, edits, claimed, pool, wetDist, rockCells);
         return new ArrayList<>(edits.values());
     }
 
-    private static double wetOf(int[] wetDist, int idx) {
+    static double wetOf(int[] wetDist, int idx) {
         int d = wetDist[idx];
         if (d == Integer.MAX_VALUE) return 0;
         return Math.max(0, 1.0 - (double) d / WET_RANGE);
@@ -2032,7 +2033,7 @@ public final class AtmosphereGenerator {
 
     private static void rocks(GroundSnapshot g, AtmosphereTheme th, AtmosphereSettings st,
                               long seed, List<int[]> treeBases, Map<Long, BlockEdit> edits,
-                              boolean[] claimed) {
+                              boolean[] claimed, List<int[]> rockCells) {
         double strength = th.rockStrength() * st.densityOf("rocks");
         if (strength <= 0.01 || th.rocks().length == 0) return;
         long area = (long) g.width() * g.depth();
@@ -2050,7 +2051,23 @@ public final class AtmosphereGenerator {
             // 15% 或坡脚处（山上滚落感）出大滚石
             boolean nearSteep = steepNearby(g, lx, lz);
             if (rng.nextDouble() < 0.15 || (nearSteep && rng.nextDouble() < 0.45)) {
-                boulder(g, th, rng, lx, lz, edits, claimed);
+                boulder(g, th, rng, lx, lz, edits, claimed, rockCells);
+                // 石群：40% 带 1~2 块伴石（岩石也讲"聚"，非均匀散点）
+                int mates = rng.nextDouble() < 0.4 ? 1 + rng.nextInt(2) : 0;
+                for (int mi = 0; mi < mates; mi++) {
+                    int mlx = lx + (rng.nextInt(7) - 3);
+                    int mlz = lz + (rng.nextInt(7) - 3);
+                    if (Math.abs(mlx - lx) + Math.abs(mlz - lz) < 3) continue;
+                    if (!g.inBounds(mlx, mlz) || !g.valid(mlx, mlz) || g.water(mlx, mlz)) continue;
+                    int mii = mlz * g.width() + mlx;
+                    if (claimed[mii] || g.slope(mlx, mlz) > 2
+                            || nearTree(g, mlx, mlz, treeBases, 0)) continue;
+                    put(edits, g.region().minX() + mlx, g.groundY(mlx, mlz) + 1,
+                            g.region().minZ() + mlz,
+                            BlockSpec.of(th.rocks()[rng.nextInt(th.rocks().length)]));
+                    claimed[mii] = true;
+                    rockCells.add(new int[]{mlx, mlz});
+                }
                 continue;
             }
             Material main = th.rocks()[rng.nextInt(th.rocks().length)];
@@ -2059,6 +2076,7 @@ public final class AtmosphereGenerator {
             int gy = g.groundY(lx, lz);
             put(edits, wx, gy + 1, wz, BlockSpec.of(main));
             claimed[i] = true;
+            rockCells.add(new int[]{lx, lz});
             int topY = gy + 1;
             if (rng.nextDouble() < 0.6) {   // 旁块
                 int ox = rng.nextBoolean() ? 1 : -1;
@@ -2069,6 +2087,7 @@ public final class AtmosphereGenerator {
                     Material m2 = th.rocks()[rng.nextInt(th.rocks().length)];
                     put(edits, wx + ox, g.groundY(nlx, nlz) + 1, wz + oz, BlockSpec.of(m2));
                     claimed[nlz * g.width() + nlx] = true;
+                    rockCells.add(new int[]{nlx, nlz});
                 }
             }
             if (rng.nextDouble() < 0.35) {  // 上块
@@ -2101,7 +2120,8 @@ public final class AtmosphereGenerator {
 
     /** 滚石巨岩：2~4 格径的实心椭球，底层嵌进地表，苔藓偏一侧（阴面）。 */
     private static void boulder(GroundSnapshot g, AtmosphereTheme th, Random rng,
-                                int lx, int lz, Map<Long, BlockEdit> edits, boolean[] claimed) {
+                                int lx, int lz, Map<Long, BlockEdit> edits, boolean[] claimed,
+                                List<int[]> rockCells) {
         int rx = 1 + rng.nextInt(2);
         int rz = 1 + rng.nextInt(2);
         int ry = 1 + rng.nextInt(2);
@@ -2125,7 +2145,9 @@ public final class AtmosphereGenerator {
                             : (th.rockMoss() > 0.3 ? Material.MOSSY_COBBLESTONE : Material.COBBLESTONE);
                     put(edits, wx, y, wz, BlockSpec.of(m));
                     if (g.inBounds(lx + dx, lz + dz)) {
-                        claimed[(lz + dz) * g.width() + lx + dx] = true;
+                        int ci = (lz + dz) * g.width() + lx + dx;
+                        if (!claimed[ci]) rockCells.add(new int[]{lx + dx, lz + dz});
+                        claimed[ci] = true;
                     }
                     // 顶面苔毯
                     if (dy == ry || e > 0.55 && dy >= ry - 1) {
@@ -2275,21 +2297,27 @@ public final class AtmosphereGenerator {
 
     private static void groundcover(GroundSnapshot g, AtmosphereTheme th, AtmosphereSettings st,
                                     long seed, List<int[]> treeBases, Map<Long, BlockEdit> edits,
-                                    boolean[] claimed, boolean[] pool, int[] wetDist) {
+                                    boolean[] claimed, boolean[] pool, int[] wetDist,
+                                    List<int[]> rockCells) {
         double base = th.groundcover() * st.densityOf("groundcover");
         if (base <= 0.005 || th.plants().isEmpty()) return;
         long s = seed ^ S_PLANT;
+        // ① 聚落：微生境锚点（树脚/岩边/水畔/林荫/开阔地）长同种连通群落
+        boolean[] florified = FloraClusters.plant(g, th, base, s ^ 0xC1057E5L,
+                treeBases, rockCells, edits, claimed, pool, wetDist);
+        // ② 背景散点：原逐格随机压到低配（聚与散共存），跳过群落格（含自疏孔隙）
         Random rng = new Random(s);
         for (int lz = 0; lz < g.depth(); lz++) {
             for (int lx = 0; lx < g.width(); lx++) {
                 int i = lz * g.width() + lx;
                 if (!g.valid(lx, lz) || g.water(lx, lz) || claimed[i] || pool[i]) continue;
+                if (florified[i]) continue;
                 if (g.slope(lx, lz) > 3) continue;
                 if (nearTree(g, lx, lz, treeBases, -1)) continue;
                 int wx = g.region().minX() + lx;
                 int wz = g.region().minZ() + lz;
                 double cluster = Math.pow(noise(s, wx, wz, 6.0), 1.6);
-                double p = Math.min(0.85, base * (0.35 + 1.5 * cluster));
+                double p = Math.min(0.85, base * 0.55 * (0.35 + 1.5 * cluster));
                 if (rng.nextDouble() > p) continue;
                 double wet = wetOf(wetDist, i);
                 boolean canopy = g.canopy(lx, lz);
@@ -2315,7 +2343,7 @@ public final class AtmosphereGenerator {
         return null;
     }
 
-    private static double weightOf(AtmosphereTheme.PlantEntry e, double wet, boolean canopy) {
+    static double weightOf(AtmosphereTheme.PlantEntry e, double wet, boolean canopy) {
         if (wet < e.wetMin() || wet > e.wetMax()) return 0;
         if (e.shade() && !canopy) return 0;
         double w = e.weight();
@@ -2324,10 +2352,10 @@ public final class AtmosphereGenerator {
     }
 
     /** 地物落地：不同 kind 产出 1~4 个方块。 */
-    private static void emitPlant(GroundSnapshot g, AtmosphereTheme.PlantEntry e,
-                                  int lx, int lz, int wx, int wz, Random rng,
-                                  Map<Long, BlockEdit> edits,
-                                  boolean[] claimed, boolean[] pool) {
+    static void emitPlant(GroundSnapshot g, AtmosphereTheme.PlantEntry e,
+                          int lx, int lz, int wx, int wz, Random rng,
+                          Map<Long, BlockEdit> edits,
+                          boolean[] claimed, boolean[] pool) {
         int gy = g.groundY(lx, lz);
         Material gm = g.ground(lx, lz);
         // 有效地表：soil() 可能已把该列顶面改成石/苔/沙——植株底材判断必须看改后的块，
@@ -2424,8 +2452,8 @@ public final class AtmosphereGenerator {
     // ============================ 工具 ============================
 
     /** extra=-1: 仅树基本格；0: 保护半径内；k: 半径+k。 */
-    private static boolean nearTree(GroundSnapshot g, int lx, int lz,
-                                    List<int[]> treeBases, int extra) {
+    static boolean nearTree(GroundSnapshot g, int lx, int lz,
+                            List<int[]> treeBases, int extra) {
         int wx = g.region().minX() + lx;
         int wz = g.region().minZ() + lz;
         for (int[] tb : treeBases) {
