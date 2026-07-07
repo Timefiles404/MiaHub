@@ -40,6 +40,14 @@ public final class GpuRuntime {
                     "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime_gpu/1.20.0/onnxruntime_gpu-1.20.0.jar"},
             "ab70f78259cc730ef27072ca83fd4cea5682e51530081cf12be2ecd2910fa4e4", 551_497_783L);
 
+    /** CPU 版 natives（0.21.1 起不再打进插件 jar，首次使用时下载解出）。 */
+    private static final Component ORT_CPU = new Component(
+            "onnxruntime-1.20.0.jar",
+            new String[]{
+                    "https://maven.aliyun.com/repository/central/com/microsoft/onnxruntime/onnxruntime/1.20.0/onnxruntime-1.20.0.jar",
+                    "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime/1.20.0/onnxruntime-1.20.0.jar"},
+            "c46608681692b3693914defb42fa3119ad7cb6146870581ece247e0ed5793fe8", 92_987_839L);
+
     private static final Component[] CUDA_WIN = {
             new Component("nvidia_cuda_runtime.whl", pypi(
                     "59/df/e7c3a360be4f7b93cee39271b792669baeb3846c58a4df6dfcf187a7ffab/nvidia_cuda_runtime_cu12-12.9.79-py3-none-win_amd64.whl"),
@@ -100,6 +108,10 @@ public final class GpuRuntime {
         return TerrainConfig.modelDir().resolve("gpu-natives").resolve(String.valueOf(osDir()));
     }
 
+    public static Path cpuNativesDir() {
+        return TerrainConfig.modelDir().resolve("cpu-natives").resolve(String.valueOf(osDir()));
+    }
+
     public static Path cudaDir() {
         return TerrainConfig.modelDir().resolve("cuda").resolve(String.valueOf(osDir()));
     }
@@ -110,6 +122,56 @@ public final class GpuRuntime {
         String core = os.startsWith("win") ? "onnxruntime.dll" : "libonnxruntime.so";
         String cuda = os.startsWith("win") ? "onnxruntime_providers_cuda.dll" : "libonnxruntime_providers_cuda.so";
         return Files.exists(nativesDir().resolve(core)) && Files.exists(nativesDir().resolve(cuda));
+    }
+
+    public static boolean cpuNativesReady() {
+        String os = osDir();
+        if (os == null) return false;
+        String core = os.startsWith("win") ? "onnxruntime.dll" : "libonnxruntime.so";
+        return Files.exists(cpuNativesDir().resolve(core));
+    }
+
+    /** 类路径里是否带 native（离线工具走完整 maven jar；插件 jar 0.21.1 起不带）。 */
+    public static boolean classpathNativesPresent() {
+        String os = osDir();
+        if (os == null) return false;
+        return GpuRuntime.class.getResource("/ai/onnxruntime/native/" + os + "/"
+                + (os.startsWith("win") ? "onnxruntime.dll" : "libonnxruntime.so")) != null;
+    }
+
+    /** 确保 CPU natives 就位（下载 93MB maven 包解出本平台库，跳过 300MB pdb）。 */
+    public static boolean ensureCpu(Consumer<String> chat) {
+        String os = osDir();
+        if (os == null) {
+            chat.accept("本平台（非 x64 Windows/Linux）无内置 ONNX native，推理不可用。");
+            return false;
+        }
+        if (cpuNativesReady()) return true;
+        try {
+            Path jar = TerrainConfig.modelDir().resolve(ORT_CPU.file());
+            if (!Files.exists(jar)) fetch(ORT_CPU, jar);
+            Files.createDirectories(cpuNativesDir());
+            String prefix = "ai/onnxruntime/native/" + os + "/";
+            try (ZipFile z = new ZipFile(jar.toFile())) {
+                var en = z.entries();
+                while (en.hasMoreElements()) {
+                    ZipEntry e = en.nextElement();
+                    String n = e.getName();
+                    if (!n.startsWith(prefix) || e.isDirectory()) continue;
+                    String base = n.substring(prefix.length());
+                    if (base.endsWith(".pdb") || base.contains("/")) continue;
+                    try (InputStream in = z.getInputStream(e)) {
+                        Files.copy(in, cpuNativesDir().resolve(base), StandardCopyOption.REPLACE_EXISTING);
+                    }
+                }
+            }
+            Files.deleteIfExists(jar);
+            chat.accept("推理引擎 natives 就位（CPU）。");
+            return cpuNativesReady();
+        } catch (Exception e) {
+            chat.accept("CPU natives 准备失败（" + e.getMessage() + "）。");
+            return false;
+        }
     }
 
     public static boolean cudaLibsReady() {
@@ -220,16 +282,39 @@ public final class GpuRuntime {
     }
 
     /**
-     * 激活 GPU natives：设 {@code onnxruntime.native.path} 并预载 CUDA 库。
-     * 必须先于任何 OrtEnvironment 触碰调用；幂等。返回是否已激活。
+     * 激活 natives（gpu=true 用 CUDA 版，否则 CPU 版）：设 {@code onnxruntime.native.path}
+     * 并按需预载 CUDA 库。必须先于任何 OrtEnvironment 触碰调用；幂等。
+     *
+     * <p>热重载安全：同一个动态库文件在一个 JVM 里只能被一个 ClassLoader 装载。
+     * 首次激活直接用固定目录并留下 JVM 级标记（System property——插件重载后仍在）；
+     * 检测到标记（旧插件实例已用过该目录）就把 natives 拷到独占临时目录再指过去。
      */
-    public static boolean activate(Consumer<String> chat) {
+    public static boolean activate(boolean gpu, Consumer<String> chat) {
         if (ACTIVATED.get()) return true;
-        if (!nativesReady()) return false;
+        if (gpu ? !nativesReady() : !cpuNativesReady()) return false;
         synchronized (GpuRuntime.class) {
             if (ACTIVATED.get()) return true;
-            System.setProperty("onnxruntime.native.path", nativesDir().toAbsolutePath().toString());
-            preloadCudaLibs(chat);
+            Path dir = gpu ? nativesDir() : cpuNativesDir();
+            String marker = "miaeco.ort.claimed." + (gpu ? "gpu" : "cpu");
+            try {
+                if (System.getProperty(marker) != null) {
+                    Path tmp = Files.createTempDirectory("miaeco-ort-");
+                    tmp.toFile().deleteOnExit();
+                    try (var s = Files.list(dir)) {
+                        for (Path p : s.toList()) {
+                            Files.copy(p, tmp.resolve(p.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+                        }
+                    }
+                    dir = tmp;
+                    chat.accept("检测到热重载：natives 已切换独占副本（重启后自动回收）。");
+                } else {
+                    System.setProperty(marker, "1");
+                }
+            } catch (IOException e) {
+                chat.accept("natives 副本准备失败（" + e.getMessage() + "），继续用固定目录。");
+            }
+            System.setProperty("onnxruntime.native.path", dir.toAbsolutePath().toString());
+            if (gpu) preloadCudaLibs(chat);
             ACTIVATED.set(true);
             return true;
         }

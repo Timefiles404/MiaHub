@@ -538,11 +538,26 @@ public final class TerraService {
                         .ensure(TerrainConfig.gpuAutoCuda(), progress::chat);
                 checkCancel();   // 下载中取消：ensure 会把中断吞成失败，这里补判（分段可续传）
                 if (ok) {
-                    dev.timefiles.miaeco.terrain.pipeline.GpuRuntime.activate(progress::chat);
+                    dev.timefiles.miaeco.terrain.pipeline.GpuRuntime.activate(true, progress::chat);
                     progress.chat("GPU 推理已启用（CUDA EP；显卡/驱动不支持时会话级自动回退 CPU）。");
                 } else if ("gpu".equals(TerrainConfig.inferenceDevice())) {
                     progress.chat("GPU 运行时不可用且 device=gpu——建议改 device=auto（可自动回退 CPU）。");
                 }
+            }
+            // CPU natives（0.21.1 起不打进插件 jar）：未走 GPU 时确保就位（一次性 93MB）
+            if (PipelineModels.getInstance() == null
+                    && !dev.timefiles.miaeco.terrain.pipeline.GpuRuntime.classpathNativesPresent()
+                    && !(dev.timefiles.miaeco.terrain.pipeline.GpuRuntime.wanted()
+                    && dev.timefiles.miaeco.terrain.pipeline.GpuRuntime.nativesReady())) {
+                if (!dev.timefiles.miaeco.terrain.pipeline.GpuRuntime.cpuNativesReady()) {
+                    stage("下载推理引擎 natives（93MB，一次性）");
+                    attachDownloadListener();
+                }
+                if (!dev.timefiles.miaeco.terrain.pipeline.GpuRuntime.ensureCpu(progress::chat)) {
+                    throw new IllegalStateException(
+                            "推理引擎 natives 不可用（检查网络，或手动放置 plugins/MiaEco/models/cpu-natives/）");
+                }
+                checkCancel();
             }
             long missing = ModelAssetManager.missingBytes();
             if (missing > 0) {

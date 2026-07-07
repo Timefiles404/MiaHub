@@ -53,7 +53,20 @@ MiaEco 是 MiaHub monorepo（`Timefiles404/MiaHub`）里的一个 Paper 1.21.x /
   - **山侧月牙塘**：山肩选址（外向 3 格骤降≥4、背靠山体）→ 突出平台挖 1~2 格灌水，
     水面=双圆交集之补集的一半（月牙、凸弧朝崖外）；围水完整性预检防漏水
   - 特征间避让：湖/塘列 claimed，soil/树圈/paths 全部绕开
-- **0.21.0（本版）** 生态全覆盖 + 超大地图分片 + GPU（回应"大区跳过生态/更多简单生态/
+- **0.21.1（本版）** 热修：/miah update 热更新时服务器 OOM 崩溃（Paper PluginRemapper）：
+  - 根因：Paper 1.21.4 运行时加载插件要**整 jar 重映射**——加载反向映射表即需数百 MB 堆
+    （OOM 栈在 reversedMappingsFuture），热更新时旧 MiaEco 实例还在堆里 → 小堆服务器爆
+  - 修复①：jar manifest 声明 `paperweight-mappings-namespace: mojang`（纯 Bukkit API、
+    零 NMS，grep 验证）→ **Paper 直接跳过重映射**（根治，装载也更快）
+  - 修复②：ONNX natives 全部移出插件 jar（12.6MB → ~5MB）——CPU natives 首次使用时从
+    maven 镜像下载 93MB 包解出（GpuRuntime.ensureCpu，与 GPU 同一套分段下载/校验/进度；
+    离线 dumpTerra 走 compileClasspath 完整 jar 不受影响，classpathNativesPresent 判别）
+  - 修复③：catalog `restartRequired: true`——嵌 native 运行时的插件不宜热替换
+    （native 只能被一个 ClassLoader 装载一次）；activate 加 JVM 级 marker property，
+    检测到热重载时把 natives 拷到独占临时目录再装载（双保险）
+  - 教训：**给纯 API 插件声明 mojang 映射命名空间应是所有模块的默认动作**；
+    嵌 native 的插件必须 restartRequired
+- **0.21.0** 生态全覆盖 + 超大地图分片 + GPU（回应"大区跳过生态/更多简单生态/
   密度合理分布/突破 1000 上限/GPU 加速 10k×10k"）：
   - **大区自然切分**：RegionSegmenter.split（哈希种子点 + 噪声步长多源 Dijkstra=加权
     Voronoi 生长，边界蜿蜒；不重不漏离线校验）——runEco 里超过 terrain.split-cells

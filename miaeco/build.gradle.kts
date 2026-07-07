@@ -1,5 +1,6 @@
-// 地形扩散推理：ONNX Runtime 直接打进插件 jar（服务器上无 Maven 可达性风险）。
-// 只保留 win-x64（开发机）与 linux-x64（服务器）两个平台 native 以控制体积。
+// 地形扩散推理：ONNX Runtime 的 Java 类打进插件 jar；native 库不进 jar——
+// 首次使用时由 GpuRuntime 从 Maven 镜像下载解出（0.21.1 起，压 jar 体积并降低
+// Paper 热更新 remap 的堆压力；离线 dumpTerra 走 compileClasspath 里的完整 jar 不受影响）。
 val onnxRuntime: Configuration by configurations.creating
 // 离线 dumpTerra 工具的运行时附加依赖（slf4j 控制台绑定 + gson；服务器上由 Paper 提供）
 val terraTool: Configuration by configurations.creating
@@ -16,12 +17,14 @@ dependencies {
 
 tasks.jar {
     archiveBaseName.set("MiaEco")
+    manifest {
+        // 纯 Bukkit API、零 NMS：声明 mojang 映射命名空间 → Paper 跳过整只 jar 的
+        // 运行时重映射（热更新时 remap 需数百 MB 堆，曾在小堆服务器上 OOM）
+        attributes("paperweight-mappings-namespace" to "mojang")
+    }
     from(provider { onnxRuntime.map { zipTree(it) } }) {
         exclude("META-INF/**")
-        exclude("ai/onnxruntime/native/osx-x64/**")
-        exclude("ai/onnxruntime/native/osx-aarch64/**")
-        exclude("ai/onnxruntime/native/linux-aarch64/**")
-        exclude("**/*.pdb")   // Windows 调试符号 300MB+，运行不需要
+        exclude("ai/onnxruntime/native/**")   // native 全部改为首次使用时下载
     }
 }
 
