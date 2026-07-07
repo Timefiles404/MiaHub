@@ -45,7 +45,10 @@ public final class TerraService {
     public record Settings(boolean enabled, int blocksPerTick, int maxSelection, int feather,
                            double vScale, int softStartY, int maxY,
                            boolean autoEco, int ecoMinCells, int ecoCap, long maxEcoFootprint,
-                           boolean caves, boolean cliffErosion, boolean geoFeatures) { }
+                           boolean caves, boolean cliffErosion, boolean geoFeatures,
+                           int splitCells, int mapMaxSize) { }
+
+    public Settings settings() { return st; }
 
     private final Plugin plugin;
     private final EcoManager eco;
@@ -96,8 +99,13 @@ public final class TerraService {
         if (job != null) return "已有地形任务在跑（/miaeco terra status 查看）。";
         EcoWorlds.Entry entry = worlds.entry(worldName);
         if (entry == null || entry.map == null) return "不是地图世界: " + worldName;
-        if (!entry.patches.isEmpty()) return "该地图已生成过。";
         int s = entry.map.size();
+        // 断点续跑：分片是确定性网格，已覆盖面积达 s² 即完成；否则跳过已完成分片续跑
+        long covered = 0;
+        for (EcoWorlds.Patch pt : entry.patches) {
+            covered += (long) (pt.maxX() - pt.minX() + 1) * (pt.maxZ() - pt.minZ() + 1);
+        }
+        if (covered >= (long) s * s) return "该地图已生成完毕（重来一张用 /miaeco world regen）。";
         Region sel = new Region(worldName, -s / 2, 0, -s / 2, -s / 2 + s - 1, 0, -s / 2 + s - 1);
         Job j = new Job(sender, worldName, entry, sel, st.autoEco());
         this.job = j;
@@ -255,6 +263,92 @@ public final class TerraService {
 
         void run() {
             try {
+                if (mapMode) {
+                    runMapTiled();
+                } else {
+                    runCanvas();
+                }
+            } catch (CancelledException c) {
+                progress.fail("任务已取消。已完成的部分保留"
+                        + (mapMode ? "；/miaeco terra resume " + world + " 可从下一分片续跑。" : "；可重新框选生成。"));
+            } catch (Throwable t) {
+                fail("地形生成失败: " + rootMsg(t), t);
+            } finally {
+                ModelAssetManager.setDownloadListener(null);
+                job = null;
+            }
+        }
+
+        /** 地图世界：分片流水线（推理→铺设→地貌→生态 逐片推进，超大地图内存恒定，断点可续）。 */
+        private void runMapTiled() throws Exception {
+            final int APRON = 8;                     // 规划裙边：坡度/滩涂跨片连续
+            int s = entry.map.size();
+            int p = mpb <= 15 ? 0 : Math.max(1, mpb / 30);
+            int tile = p == 0 || p == 1 ? 960 : p == 2 ? 768 : 480;   // 单片原生跨度 ≤~2000
+            int mapX1 = -s / 2, mapZ1 = -s / 2;
+            int nT = Math.max(1, (int) Math.ceil(s / (double) tile));
+            ensureModels();
+            checkCancel();
+            LocalTerrainProvider.init(entry.seed);
+            List<EcoWorlds.Patch> already = List.copyOf(entry.patches);
+            int total = nT * nT, idx = 0, skipped = 0;
+            long t0 = System.currentTimeMillis();
+            if (total > 1) progress.chat("地图 " + s + "×" + s + " 分为 " + total + " 片流水推进"
+                    + (already.isEmpty() ? "" : "（检测到已完成分片，续跑）") + "。");
+            for (int tz = 0; tz < nT; tz++) {
+                for (int tx = 0; tx < nT; tx++) {
+                    idx++;
+                    int cx1 = mapX1 + (int) ((long) s * tx / nT);
+                    int cx2 = mapX1 + (int) ((long) s * (tx + 1) / nT) - 1;
+                    int cz1 = mapZ1 + (int) ((long) s * tz / nT);
+                    int cz2 = mapZ1 + (int) ((long) s * (tz + 1) / nT) - 1;
+                    if (coveredBy(already, cx1, cz1, cx2, cz2)) {
+                        skipped++;
+                        continue;
+                    }
+                    checkCancel();
+                    int W = cx2 - cx1 + 1, H = cz2 - cz1 + 1;
+                    String tag = total > 1 ? "片 " + idx + "/" + total + " · " : "";
+                    stage(tag + "扩散推理（" + W + "×" + H + "，比例尺 " + mpb + "m/格）");
+                    long w0 = LocalTerrainProvider.windowCount();
+                    Thread poller = startInferencePoller(w0,
+                            estimateWindowsFor(W + 2 * APRON, H + 2 * APRON));
+                    LocalTerrainProvider.HeightmapData data;
+                    long tInf = System.currentTimeMillis();
+                    try {
+                        data = fetchTerrain(cx1 - APRON, cz1 - APRON, W + 2 * APRON, H + 2 * APRON);
+                    } finally {
+                        poller.interrupt();
+                    }
+                    progress.update(1.0, (System.currentTimeMillis() - tInf) / 1000 + "s · "
+                            + (LocalTerrainProvider.windowCount() - w0) + " 窗口");
+                    checkCancel();
+                    Plan plan = buildPlanMap(data, cx1, cz1, W, H, APRON, mapX1, mapZ1, s);
+                    checkCancel();
+                    stage(tag + "地形铺设（约 " + human(plan.totalOps) + " 处）");
+                    applyStrips(plan, cx1, cz1, W, H);
+                    checkCancel();
+                    if (st.geoFeatures()) {
+                        runGeo(plan, cx1, cz1, W, H);
+                        checkCancel();
+                    }
+                    if (withEco) runEco(plan, cx1, cz1, W, H);
+                    if (cx1 <= 0 && cx2 >= 0 && cz1 <= 0 && cz2 >= 0) {
+                        maybeSetSpawn(cx1, cz1, W, H, plan);
+                        removeStagingPlatform();
+                    }
+                    worlds.addPatch(world, new EcoWorlds.Patch(cx1, cz1, cx2, cz2));
+                }
+            }
+            long mins = (System.currentTimeMillis() - t0) / 60_000L;
+            progress.done("地图世界生成完成 @ " + world + "（" + s + "×" + s
+                    + (total > 1 ? "，" + total + " 片" + (skipped > 0 ? "（续跑跳过 " + skipped + "）" : "")
+                    + "，" + mins + " 分钟" : "") + "）");
+        }
+
+        /** 画布世界：单块选区生成（0.18 语义不变）。 */
+        private void runCanvas() throws Exception {
+            {
                 int x1 = selRaw.minX(), z1 = selRaw.minZ(), x2 = selRaw.maxX(), z2 = selRaw.maxZ();
                 List<EcoWorlds.Patch> old = List.copyOf(entry.patches);
                 if (!mapMode) {
@@ -315,16 +409,96 @@ public final class TerraService {
                 } else {
                     progress.chat("已跳过自动生态。");
                 }
-                progress.done((mapMode ? "地图世界生成完成 @ " : "大地形完成 @ ") + world
+                progress.done("大地形完成 @ " + world
                         + " [" + fx1 + "," + fz1 + "]~[" + fx2 + "," + fz2 + "]");
-            } catch (CancelledException c) {
-                progress.fail("任务已取消（已铺设部分保留" + (mapMode ? "" : "；可重新框选生成") + "）。");
-            } catch (Throwable t) {
-                fail("地形生成失败: " + rootMsg(t), t);
-            } finally {
-                ModelAssetManager.setDownloadListener(null);
-                job = null;
             }
+        }
+
+        private static boolean coveredBy(List<EcoWorlds.Patch> patches, int x1, int z1, int x2, int z2) {
+            for (EcoWorlds.Patch pt : patches) {
+                if (pt.minX() <= x1 && pt.maxX() >= x2 && pt.minZ() <= z1 && pt.maxZ() >= z2) return true;
+            }
+            return false;
+        }
+
+        /**
+         * 地图分片规划：数据带 APRON 裙边取回，坡度/滩涂邻域对裙边取值 → 跨片无缝；
+         * 边缘岛屿衰减按整张地图的全局边距计算。产出的 Plan 只含核心区。
+         */
+        private Plan buildPlanMap(LocalTerrainProvider.HeightmapData data,
+                                  int x1, int z1, int W, int H, int apron,
+                                  int mapX1, int mapZ1, int mapSize) {
+            int EW = W + 2 * apron, EH = H + 2 * apron;
+            int band = Math.max(24, Math.min(96, mapSize / 8));
+            int[] ey = new int[EW * EH];
+            boolean[] eWater = new boolean[EW * EH];
+            boolean[] eOcean = new boolean[EW * EH];
+            for (int ez = 0; ez < EH; ez++) {
+                for (int ex = 0; ex < EW; ex++) {
+                    int gx = x1 - apron + ex, gz = z1 - apron + ez;
+                    int d = Math.min(Math.min(gx - mapX1, gz - mapZ1),
+                            Math.min(mapX1 + mapSize - 1 - gx, mapZ1 + mapSize - 1 - gz));
+                    float m = edgeFalloff(data.heightmap[ez][ex], d, band);
+                    int y = mapper.yOf(m);
+                    int i = ez * EW + ex;
+                    ey[i] = y;
+                    eOcean[i] = m < 0;
+                    eWater[i] = m < 0 && y < mapper.sea();
+                }
+            }
+            Plan p = new Plan(W, H);
+            int ocean = 0;
+            for (int z = 0; z < H; z++) {
+                for (int x = 0; x < W; x++) {
+                    int i = z * W + x;
+                    int e = (z + apron) * EW + x + apron;
+                    p.y[i] = ey[e];
+                    p.water[i] = eWater[e];
+                    p.rawOcean[i] = eOcean[e];
+                    p.biome[i] = data.biomeIds[z + apron][x + apron];
+                    if (p.water[i]) ocean++;
+                    if (p.y[i] < p.minY) p.minY = p.y[i];
+                    if (p.y[i] > p.maxY) p.maxY = p.y[i];
+                }
+            }
+            p.oceanPct = Math.round(1000.0 * ocean / (W * H)) / 10.0;
+            for (int z = 0; z < H; z++) {
+                for (int x = 0; x < W; x++) {
+                    int i = z * W + x;
+                    int e = (z + apron) * EW + x + apron;
+                    // 滩涂：3 格邻域读裙边（跨片一致），并重标记合成滩涂群系
+                    if (!p.water[i] && p.y[i] <= mapper.sea() + 2) {
+                        outer:
+                        for (int dz = -3; dz <= 3; dz++) {
+                            for (int dx = -3; dx <= 3; dx++) {
+                                if (eWater[e + dz * EW + dx]) {
+                                    p.beach[i] = true;
+                                    p.biome[i] = EcoBiomes.snowySurface(p.biome[i])
+                                            ? EcoBiomes.SNOWY_BEACH : EcoBiomes.BEACH;
+                                    break outer;
+                                }
+                            }
+                        }
+                    }
+                    // 坡度：4 邻读裙边（片界无一格断层）
+                    int y = ey[e], sl = 0;
+                    sl = Math.max(sl, Math.abs(ey[e - 1] - y));
+                    sl = Math.max(sl, Math.abs(ey[e + 1] - y));
+                    sl = Math.max(sl, Math.abs(ey[e - EW] - y));
+                    sl = Math.max(sl, Math.abs(ey[e + EW] - y));
+                    p.slope[i] = (byte) Math.min(127, sl);
+                }
+            }
+            long ops = 0;
+            for (int i = 0; i < W * H; i++) {
+                ops += 24 + 5;
+                if (p.water[i]) ops += mapper.sea() - p.y[i];
+                ops += 12;
+                if (st.caves() && !p.water[i]) ops += 3;
+                if (st.cliffErosion() && !p.water[i] && p.slope[i] >= 5) ops += 2;
+            }
+            p.totalOps = ops;
+            return p;
         }
 
         /** 取地形数据：画布走 provider 标准路径（scale=2 上采样+噪声）；地图按比例尺取原生/池化。 */
@@ -351,28 +525,29 @@ public final class TerraService {
         // ---- 阶段 1/2：权重 + 模型 ----
 
         void ensureModels() {
+            // GPU 运行时先于一切 ORT 触碰（同一 JVM 的 native 只能装载一次）
+            if (dev.timefiles.miaeco.terrain.pipeline.GpuRuntime.wanted()
+                    && PipelineModels.getInstance() == null) {
+                long gpuNeed = dev.timefiles.miaeco.terrain.pipeline.GpuRuntime
+                        .missingBytes(TerrainConfig.gpuAutoCuda());
+                if (gpuNeed > 0) {
+                    stage("准备 GPU 运行时（共缺 " + human(gpuNeed) + "，一次性）");
+                    attachDownloadListener();
+                }
+                boolean ok = dev.timefiles.miaeco.terrain.pipeline.GpuRuntime
+                        .ensure(TerrainConfig.gpuAutoCuda(), progress::chat);
+                checkCancel();   // 下载中取消：ensure 会把中断吞成失败，这里补判（分段可续传）
+                if (ok) {
+                    dev.timefiles.miaeco.terrain.pipeline.GpuRuntime.activate(progress::chat);
+                    progress.chat("GPU 推理已启用（CUDA EP；显卡/驱动不支持时会话级自动回退 CPU）。");
+                } else if ("gpu".equals(TerrainConfig.inferenceDevice())) {
+                    progress.chat("GPU 运行时不可用且 device=gpu——建议改 device=auto（可自动回退 CPU）。");
+                }
+            }
             long missing = ModelAssetManager.missingBytes();
             if (missing > 0) {
                 stage("下载模型权重（共缺 " + human(missing) + "）");
-                ModelAssetManager.setDownloadListener(new ModelAssetManager.DownloadListener() {
-                    @Override
-                    public void onStart(String f, long total, String host) {
-                        progress.chat("下载 " + f + "（" + human(total) + "）@ " + host);
-                    }
-
-                    @Override
-                    public void onProgress(String f, long done, long total, long bps) {
-                        String eta = bps > 0 ? "剩 " + fmtSec((total - done) / Math.max(1, bps)) : "";
-                        progress.update((double) done / Math.max(1, total),
-                                f + " · " + human(bps) + "/s " + eta);
-                        if (cancelled.get()) throw new CancelledException();
-                    }
-
-                    @Override
-                    public void onDone(String f) {
-                        progress.chat(f + " ✔ 校验通过");
-                    }
-                });
+                attachDownloadListener();
             }
             stageIfMissingModels();
             ModelAssetManager.ensureAssetsReady();
@@ -406,6 +581,29 @@ public final class TerraService {
             if (ModelAssetManager.missingBytes() == 0 && PipelineModels.getInstance() != null) {
                 stageName = "模型已就绪";
             }
+        }
+
+        /** 下载进度 → 聊天/BossBar（权重与 GPU 运行时共用）。 */
+        private void attachDownloadListener() {
+            ModelAssetManager.setDownloadListener(new ModelAssetManager.DownloadListener() {
+                @Override
+                public void onStart(String f, long total, String host) {
+                    progress.chat("下载 " + f + "（" + human(total) + "）@ " + host);
+                }
+
+                @Override
+                public void onProgress(String f, long done, long total, long bps) {
+                    String eta = bps > 0 ? "剩 " + fmtSec((total - done) / Math.max(1, bps)) : "";
+                    progress.update((double) done / Math.max(1, total),
+                            f + " · " + human(bps) + "/s " + eta);
+                    if (cancelled.get()) throw new CancelledException();
+                }
+
+                @Override
+                public void onDone(String f) {
+                    progress.chat(f + " ✔ 校验通过");
+                }
+            });
         }
 
         // ---- 阶段 3 进度轮询 ----
@@ -501,7 +699,7 @@ public final class TerraService {
                 if (p.water[i]) ocean++;
             }
             p.oceanPct = Math.round(1000.0 * ocean / (W * H)) / 10.0;
-            // 沙滩：陆地低海拔且 3 格内有水
+            // 沙滩：陆地低海拔且 3 格内有水 → 重标记为合成滩涂群系（写原版 beach + SimpleEco）
             for (int z = 0; z < H; z++) {
                 for (int x = 0; x < W; x++) {
                     int i = z * W + x;
@@ -513,6 +711,8 @@ public final class TerraService {
                             if (nx < 0 || nx >= W || nz < 0 || nz >= H) continue;
                             if (p.water[nz * W + nx]) {
                                 p.beach[i] = true;
+                                p.biome[i] = EcoBiomes.snowySurface(p.biome[i])
+                                        ? EcoBiomes.SNOWY_BEACH : EcoBiomes.BEACH;
                                 break outer;
                             }
                         }
@@ -804,6 +1004,19 @@ public final class TerraService {
             progress.chat("地貌奇观 ✔ " + sb.toString().trim());
         }
 
+        /** 区域 bbox 上的 SimpleEco 视图（读 Plan 数组，掩码感知）。 */
+        private SimpleEco.View planView(Plan p, int W, RegionSegmenter.EcoRegion r) {
+            final int bx = r.minLX(), bz = r.minLZ();
+            return new SimpleEco.View() {
+                @Override public int w() { return r.maxLX() - r.minLX() + 1; }
+                @Override public int h() { return r.maxLZ() - r.minLZ() + 1; }
+                @Override public int y(int lx, int lz) { return p.y[(bz + lz) * W + bx + lx]; }
+                @Override public boolean water(int lx, int lz) { return p.water[(bz + lz) * W + bx + lx]; }
+                @Override public boolean ok(int lx, int lz) { return r.in(bx + lx, bz + lz); }
+                @Override public int sea() { return mapper.sea(); }
+            };
+        }
+
         /** 把一批编辑经 terra 编辑器写入并同步等待（工作线程调用）。 */
         private void applyEditsSync(World w, List<BlockEdit> edits) {
             Object lock = new Object();
@@ -831,19 +1044,42 @@ public final class TerraService {
 
         private void runEco(Plan p, int x1, int z1, int W, int H) {
             stage("生态分区");
-            List<RegionSegmenter.EcoRegion> regions =
+            List<RegionSegmenter.EcoRegion> raw =
                     RegionSegmenter.segment(p.biome, W, H, st.ecoMinCells(), st.ecoCap());
-            if (regions.isEmpty()) {
-                progress.chat("没有可生态化的区域（多为裸峰/海洋）。");
+            if (raw.isEmpty()) {
+                progress.chat("没有可生态化的区域（多为裸峰）。");
                 return;
             }
-            progress.chat("识别出 " + regions.size() + " 块生态区（森林/开阔地），逐区种树+铺氛围…");
+            // 过大的森林/开阔区先自然切分（噪声 Voronoi）；海洋等简单生态不需要
+            List<RegionSegmenter.EcoRegion> regions = new ArrayList<>();
+            for (RegionSegmenter.EcoRegion r : raw) {
+                if (EcoBiomes.of(r.biomeId()).kind() != EcoBiomes.KIND_SIMPLE
+                        && r.cells() > st.splitCells()) {
+                    regions.addAll(RegionSegmenter.split(r, st.splitCells(), entry.seed ^ 0x5711L));
+                } else {
+                    regions.add(r);
+                }
+            }
+            progress.chat("识别出 " + raw.size() + " 块生态区（含海洋/海滩/荒漠简单生态"
+                    + (regions.size() > raw.size()
+                    ? "；大区已自然切分为 " + regions.size() + " 份" : "") + "），逐区推进…");
             World w = Bukkit.getWorld(world);
             int n = 0;
             for (int k = 0; k < regions.size(); k++) {
                 checkCancel();
                 RegionSegmenter.EcoRegion r = regions.get(k);
                 EcoBiomes.Eco ecoDef = EcoBiomes.of(r.biomeId());
+                // 简单生态：海洋/海滩/荒漠/恶地——轻量散布，不建森林对象
+                if (SimpleEco.handles(r.biomeId())) {
+                    List<BlockEdit> simple = SimpleEco.generate(r.biomeId(),
+                            planView(p, W, r), x1 + r.minLX(), z1 + r.minLZ(),
+                            entry.seed ^ (r.minLX() * 0x9E3779B97F4A7C15L)
+                                    ^ (r.minLZ() * 0xC2B2AE3D27D4EB4FL), r.cells());
+                    if (!simple.isEmpty() && w != null) applyEditsSync(w, simple);
+                    progress.update((k + 1.0) / regions.size(), "区域 " + (k + 1) + "/" + regions.size()
+                            + " " + SimpleEco.display(r.biomeId()) + " (" + r.cells() + " 格)");
+                    if (ecoDef.kind() == EcoBiomes.KIND_SIMPLE) continue;
+                }
                 String theme = ecoDef.theme();
                 String[] species = ecoDef.species();
                 double dens = ecoDef.densityScale();

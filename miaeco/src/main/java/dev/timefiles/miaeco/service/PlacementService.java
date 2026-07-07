@@ -93,7 +93,10 @@ public final class PlacementService {
             }
             if (total <= 0) continue;
 
-            double noise = valueNoise(forestSeed, wx, wz);              // 0..1
+            // 双尺度密度噪声：12 格小斑块 × 64 格大起伏——低密度森林（稀树草原等）
+            // 自然聚成"树丛 + 大片空地"，而不是均匀撒点
+            double noise = 0.55 * valueNoise(forestSeed, wx, wz, 12.0)
+                    + 0.45 * valueNoise(forestSeed ^ 0xB16BADL, wx, wz, 64.0);
             double accept = Math.min(0.95, total) * (0.55 + 0.9 * noise) * forest.densityScale();
             if (rng.nextDouble() > accept) continue;
 
@@ -213,10 +216,9 @@ public final class PlacementService {
         return h;
     }
 
-    // ---- 确定性 2D 值噪声（12 格晶格 + 平滑插值），驱动森林疏密 ----
+    // ---- 确定性 2D 值噪声（晶格 + 平滑插值），驱动森林疏密 ----
 
-    private static double valueNoise(long seed, int x, int z) {
-        final double cell = 12.0;
+    private static double valueNoise(long seed, int x, int z, double cell) {
         double fx = x / cell, fz = z / cell;
         int x0 = (int) Math.floor(fx), z0 = (int) Math.floor(fz);
         double tx = smooth(fx - x0), tz = smooth(fz - z0);

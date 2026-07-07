@@ -10,7 +10,10 @@ import java.util.List;
 public final class TerrainConfig {
 
     private static volatile Path modelDir = defaultModelDir();
-    private static volatile String inferenceDevice = "cpu";   // cpu | auto | gpu
+    // cpu | auto | gpu；离线工具可用 -Dmiaeco.device=gpu 覆盖
+    private static volatile String inferenceDevice =
+            System.getProperty("miaeco.device", "cpu").toLowerCase();
+    private static volatile boolean gpuAutoCuda = true;       // GPU 模式自动下载 CUDA 运行库 wheel
     private static volatile boolean offloadModels = true;
     private static volatile boolean validateModel = true;
     private static volatile int intraOpThreads = 0;           // >0 显式；0 自动=核-2；-1 全核
@@ -26,7 +29,8 @@ public final class TerrainConfig {
     }
 
     public static void init(Path dir, String device, boolean offload, boolean validate,
-                            int threads, int blockScale, List<String> downloadEndpoints) {
+                            int threads, int blockScale, List<String> downloadEndpoints,
+                            boolean autoCuda) {
         if (dir != null) modelDir = dir;
         if (device != null && !device.isBlank()) inferenceDevice = device.trim().toLowerCase();
         offloadModels = offload;
@@ -34,7 +38,10 @@ public final class TerrainConfig {
         intraOpThreads = Math.max(-1, threads);
         if (blockScale >= 1 && blockScale <= 6) scale = blockScale;
         if (downloadEndpoints != null && !downloadEndpoints.isEmpty()) endpoints = List.copyOf(downloadEndpoints);
+        gpuAutoCuda = autoCuda;
     }
+
+    public static boolean gpuAutoCuda() { return gpuAutoCuda; }
 
     public static Path modelDir() { return modelDir; }
     public static String inferenceDevice() { return inferenceDevice; }

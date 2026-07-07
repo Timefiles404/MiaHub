@@ -93,7 +93,8 @@ public final class EcoManager {
                 cfg.getBoolean(tb + "validate-model", true),
                 cfg.getInt(tb + "inference-threads", 0),
                 cfg.getInt(tb + "scale", 2),
-                cfg.getStringList(tb + "download-endpoints"));
+                cfg.getStringList(tb + "download-endpoints"),
+                cfg.getBoolean(tb + "gpu-auto-cuda", true));
         this.terraService = new dev.timefiles.miaeco.terrain.TerraService(plugin, this, ecoWorlds,
                 workerPool, new dev.timefiles.miaeco.terrain.TerraService.Settings(
                 cfg.getBoolean(tb + "enabled", true),
@@ -109,7 +110,9 @@ public final class EcoManager {
                 cfg.getLong(tb + "max-eco-footprint", 480000L),
                 cfg.getBoolean(tb + "caves", true),
                 cfg.getBoolean(tb + "cliff-erosion", true),
-                cfg.getBoolean(tb + "geo-features", true)));
+                cfg.getBoolean(tb + "geo-features", true),
+                cfg.getInt(tb + "split-cells", 90000),
+                cfg.getInt(tb + "map-max-size", 10240)));
         this.geoService = new dev.timefiles.miaeco.terrain.GeoService(plugin, workerPool);
 
         plugin.getLogger().info("MiaEco 引擎就绪：" + workerThreads + " 工作线程，已加载 "

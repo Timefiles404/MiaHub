@@ -6,8 +6,10 @@ import java.util.Map;
  * 分类器群系 id（terrain-diffusion 约定）→ 原版群系 key + MiaEco 生态角色的映射表。
  * 纯数据、无 Bukkit 依赖（Biome 枚举在服务器侧按 key 解析），供离线分割/渲染复用。
  *
- * <p>kind：0=不生态（裸峰/海洋），1=开阔地（只铺氛围），2=森林（种树+氛围）。
+ * <p>kind：0=不生态（裸峰），1=开阔地（只铺氛围），2=森林（种树+氛围），
+ * 3=简单生态（海洋/海滩/荒漠——不建森林对象，走 SimpleEco 轻量散布）。
  * species 形如 "oak:0.7"（树种:密度）；features 为该区氛围特征强度覆盖。
+ * 90/91 是本表的合成 id（滩涂带在 buildPlan 里重标记），非分类器输出。
  */
 public final class EcoBiomes {
 
@@ -17,6 +19,11 @@ public final class EcoBiomes {
     public static final int KIND_NONE = 0;
     public static final int KIND_OPEN = 1;
     public static final int KIND_FOREST = 2;
+    public static final int KIND_SIMPLE = 3;
+
+    /** 合成滩涂 id（buildPlan 对近水低地重标记）。 */
+    public static final short BEACH = 90;
+    public static final short SNOWY_BEACH = 91;
 
     private static final Map<Short, Eco> TABLE = Map.ofEntries(
             // ---- 森林类 ----
@@ -29,7 +36,8 @@ public final class EcoBiomes {
             e(23,  "jungle",       KIND_FOREST, "rainforest", new String[]{"jungle:0.8", "banyan:0.15"}, 1.0, Map.of()),
             e(6,   "swamp",        KIND_FOREST, "swamp",     new String[]{"willow:0.65", "mangrove:0.3"}, 0.9,
                     Map.of("water", 2.0)),
-            e(17,  "savanna",      KIND_FOREST, "savanna",   new String[]{"acacia:0.5", "bush:0.3"}, 0.55, Map.of()),
+            // 稀树草原：零零散散的孤树 + SimpleEco 小池塘（0.21 重做，原 0.5+0.3 太密）
+            e(17,  "savanna",      KIND_FOREST, "savanna",   new String[]{"acacia:0.12"}, 0.35, Map.of()),
             // ---- 开阔地（只铺氛围）----
             e(1,   "plains",         KIND_OPEN, "temperate", new String[0], 1.0, Map.of()),
             e(29,  "meadow",         KIND_OPEN, "temperate", new String[]{"oak:0.05"}, 1.0,
@@ -39,19 +47,20 @@ public final class EcoBiomes {
                     Map.of("rocks", 1.6)),                                          // 林间坡地疏杉
             e(19,  "windswept_hills", KIND_OPEN, "taiga",    new String[0], 1.0,
                     Map.of("rocks", 2.4, "groundcover", 0.7, "town", 0.0)),
-            e(5,   "desert",         KIND_OPEN, "savanna",   new String[0], 1.0,
-                    Map.of("water", 0.2, "groundcover", 0.5, "soil", 0.4, "town", 0.0)),
-            e(26,  "badlands",       KIND_OPEN, "savanna",   new String[0], 1.0,
-                    Map.of("water", 0.2, "groundcover", 0.4, "rocks", 1.8, "soil", 0.4, "town", 0.0)),
             e(32,  "snowy_slopes",   KIND_OPEN, "snowy",     new String[0], 1.0,
                     Map.of("rocks", 2.2, "groundcover", 0.5, "town", 0.0)),
+            // ---- 简单生态（SimpleEco 轻量散布，不建森林对象）----
+            e(5,   "desert",       KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 仙人掌/枯灌/枯树/绿洲
+            e(26,  "badlands",     KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 枯灌/陶瓦孤石（+geo 蘑菇岩）
+            e(41,  "warm_ocean",   KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 密海草/海泡菜
+            e(44,  "ocean",        KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 海草甸/海带林
+            e(46,  "cold_ocean",   KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 稀疏海草/砾石孤石
+            e(48,  "frozen_ocean", KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 冰面压脊/冰丘
+            e(90,  "beach",        KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 浮木/甘蔗/棕榈
+            e(91,  "snowy_beach",  KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 浮木
             // ---- 不生态 ----
             e(33, "frozen_peaks", KIND_NONE, null, new String[0], 0, Map.of()),
-            e(35, "stony_peaks",  KIND_NONE, null, new String[0], 0, Map.of()),
-            e(41, "warm_ocean",   KIND_NONE, null, new String[0], 0, Map.of()),
-            e(44, "ocean",        KIND_NONE, null, new String[0], 0, Map.of()),
-            e(46, "cold_ocean",   KIND_NONE, null, new String[0], 0, Map.of()),
-            e(48, "frozen_ocean", KIND_NONE, null, new String[0], 0, Map.of())
+            e(35, "stony_peaks",  KIND_NONE, null, new String[0], 0, Map.of())
     );
 
     private static Map.Entry<Short, Eco> e(int id, String key, int kind, String theme,
@@ -77,6 +86,6 @@ public final class EcoBiomes {
 
     /** 地表带雪的群系（顶面草上盖一层雪片/雪块）。 */
     public static boolean snowySurface(short id) {
-        return id == 3 || id == 16 || id == 116 || id == 32 || id == 33;
+        return id == 3 || id == 16 || id == 116 || id == 32 || id == 33 || id == 91;
     }
 }

@@ -107,6 +107,30 @@ public final class ModelAssetManager {
         return TerrainConfig.modelDir().resolve(fileName);
     }
 
+    /**
+     * 通用大文件下载（GPU 运行时组件等复用）：分段并行 ×6 + 逐段断点续传 + SHA-256 校验。
+     * 进度走同一个 DownloadListener。失败抛 IOException，调用方决定回退。
+     */
+    public static void fetchLargeFile(String url, Path dest, String displayName,
+                                      String sha256, long sizeBytes) throws IOException {
+        Files.createDirectories(dest.getParent());
+        Path tmp = dest.resolveSibling(dest.getFileName() + ".tmp");
+        Asset asset = new Asset();
+        asset.sha256 = sha256;
+        asset.sizeBytes = sizeBytes;
+        new SegmentedDownload(url, tmp, displayName, asset, hostOf(url)).run();
+        String hash = sha256Hex(tmp);
+        if (!hash.equalsIgnoreCase(sha256)) {
+            Files.deleteIfExists(tmp);
+            Files.deleteIfExists(sidecarOf(tmp));
+            throw new IOException(displayName + " SHA-256 校验失败");
+        }
+        Files.deleteIfExists(sidecarOf(tmp));
+        Files.move(tmp, dest, StandardCopyOption.REPLACE_EXISTING);
+        DownloadListener l = listener;
+        if (l != null) l.onDone(displayName);
+    }
+
     private static void ensureSingleAsset(Path local, String name, Asset asset,
                                           Manifest manifest, boolean validate) throws IOException {
         if (Files.exists(local)) {

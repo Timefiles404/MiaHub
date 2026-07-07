@@ -120,18 +120,26 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 }
                 dev.timefiles.miaeco.world.EcoWorlds.MapSpec map = null;
                 if (size != null) {
-                    if (size < 64 || size > 2048) { sender.sendMessage(P + ChatColor.RED + "size 需在 64~2048。"); return; }
+                    int maxSize = eco.terra().settings().mapMaxSize();
+                    if (size < 64 || size > maxSize) {
+                        sender.sendMessage(P + ChatColor.RED + "size 需在 64~" + maxSize
+                                + "（大图分片流水生成，可断点续跑）。");
+                        return;
+                    }
                     if (scaleM != 15 && scaleM != 30 && scaleM != 60 && scaleM != 120) {
                         sender.sendMessage(P + ChatColor.RED + "scale 只支持 15/30/60/120（每格米数）。");
                         return;
                     }
-                    long nativeSpan = scaleM <= 15 ? size / 2L : (long) size * (scaleM / 30);
-                    if (nativeSpan > 2048) {
-                        sender.sendMessage(P + ChatColor.RED + "size×scale 过大（真实跨度 "
-                                + (nativeSpan * 30 / 1000) + "km > 61km），请减小 size 或 scale。");
-                        return;
-                    }
                     if (sea < 0 || sea > 200) { sender.sendMessage(P + ChatColor.RED + "sea 需在 0~200。"); return; }
+                    // CPU 推理耗时预估提示（512² 原生 ≈ 27s 标定）
+                    long nativeSpan = scaleM <= 15 ? Math.max(1, size / 2L) : (long) size * (scaleM / 30);
+                    double hours = nativeSpan * nativeSpan / (512.0 * 512.0) * 27 / 3600.0;
+                    String infDev = dev.timefiles.miaeco.terrain.TerrainConfig.inferenceDevice();
+                    if (hours > 0.5 && "cpu".equals(infDev)) {
+                        sender.sendMessage(P + ChatColor.YELLOW + String.format(
+                                "提示：这张图 CPU 推理预计约 %.1f 小时（分片推进可随时 cancel，"
+                                        + "terra resume 续跑）。config 里 terrain.device=gpu 可大幅加速。", hours));
+                    }
                     map = new dev.timefiles.miaeco.world.EcoWorlds.MapSpec(size, scaleM, sea);
                 }
                 sender.sendMessage(P + ChatColor.GRAY + "创建世界中…");
@@ -269,6 +277,13 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 String err = terra.prefetch(sender);
                 if (err != null) sender.sendMessage(P + ChatColor.RED + err);
             }
+            case "resume" -> {
+                String name = args.length >= 3 ? args[2]
+                        : sender instanceof Player p ? p.getWorld().getName() : null;
+                if (name == null) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco terra resume <地图世界>"); return; }
+                String err = terra.startMap(sender, name);
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
             case "cancel" -> sender.sendMessage(P + (terra.cancel()
                     ? ChatColor.GREEN + "已请求取消（当前阶段收尾后停止）。"
                     : ChatColor.GRAY + "没有正在运行的任务。"));
@@ -281,6 +296,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         msg(s, "/miaeco terra gen [noeco]", "在选区生成真实地形+群系+自动森林（noeco=只地形）");
         msg(s, "/miaeco terra scout", "粗扫世界种子附近的陆地分布（选址用）");
         msg(s, "/miaeco terra status | cancel", "查看/取消任务");
+        msg(s, "/miaeco terra resume [地图世界]", "地图分片断点续跑（取消/崩溃后接着生成）");
         msg(s, "/miaeco terra prefetch", "预下载模型权重并装载（首次 2.2GB）");
     }
 
@@ -883,7 +899,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 case "species" -> addMatches(out, args[1], "add", "list", "remove", "replace", "density");
                 case "atmo" -> addMatches(out, args[1], "set", "apply", "clear", "info", "feature", "themes");
                 case "world" -> addMatches(out, args[1], "create", "list", "tp", "regen", "remove");
-                case "terra" -> addMatches(out, args[1], "gen", "scout", "status", "cancel", "prefetch");
+                case "terra" -> addMatches(out, args[1], "gen", "scout", "status", "cancel", "prefetch", "resume");
                 case "geo" -> addMatches(out, args[1], "gen", "types", "undo");
                 case "plant", "grow", "advance", "clear" -> addForests(out, args[1]);
                 default -> { }

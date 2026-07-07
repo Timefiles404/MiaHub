@@ -42,6 +42,8 @@ tasks.register<JavaExec>("dumpTerra") {
     systemProperty("miaeco.modelDir",
         (findProperty("miaeco.modelDir")
             ?: rootProject.projectDir.parentFile.resolve("references/terrain-diffusion/weights").absolutePath).toString())
+    // -Pmiaeco.device=gpu 走 CUDA EP（需 weights/gpu-natives + weights/cuda 就位）
+    systemProperty("miaeco.device", (findProperty("miaeco.device") ?: "cpu").toString())
     args(layout.buildDirectory.dir("terradump").get().asFile.absolutePath)
 }
 

@@ -53,7 +53,38 @@ MiaEco 是 MiaHub monorepo（`Timefiles404/MiaHub`）里的一个 Paper 1.21.x /
   - **山侧月牙塘**：山肩选址（外向 3 格骤降≥4、背靠山体）→ 突出平台挖 1~2 格灌水，
     水面=双圆交集之补集的一半（月牙、凸弧朝崖外）；围水完整性预检防漏水
   - 特征间避让：湖/塘列 claimed，soil/树圈/paths 全部绕开
-- **0.20.0（本版）** 地貌奇观 + 洞穴/崖蚀 + 生态过渡（完善优化轮）：
+- **0.21.0（本版）** 生态全覆盖 + 超大地图分片 + GPU（回应"大区跳过生态/更多简单生态/
+  密度合理分布/突破 1000 上限/GPU 加速 10k×10k"）：
+  - **大区自然切分**：RegionSegmenter.split（哈希种子点 + 噪声步长多源 Dijkstra=加权
+    Voronoi 生长，边界蜿蜒；不重不漏离线校验）——runEco 里超过 terrain.split-cells
+    (9 万格) 的森林/开阔区先切再逐块生态化，"过大跳过"成为历史
+  - **KIND_SIMPLE 简单生态**（SimpleEco 纯函数，不建 Forest）：44/41/46 海洋（海草甸
+    TALL_SEAGRASS 半块对/海带林 KELP_PLANT+aged KELP 顶/暖海海泡菜/海底孤石）、
+    48 冰原海（|n1-n2| 脊线 → 冰面压力脊 1~3 高+顶雪）、90/91 合成滩涂 id（buildPlan
+    重标记近水低地 → 原版 beach/snowy_beach 群系 + 浮木/近水甘蔗/小棕榈）、
+    5 荒漠（仙人掌/枯灌/枯树 snag/大区 40% 棕榈绿洲——池缘草皮逐列落地防漏水）、
+    26 恶地简化、17 稀树草原重做（acacia:0.12×0.35 + SimpleEco 小池塘；树走常规链）
+  - **双尺度密度噪声**（Placement）：12 格 × 64 格值噪声混合——低密度林自然聚成
+    "树丛+大空地"
+  - **地图分片流水线**：runMapTiled（片长 960/768/480 按 p，APRON=8 裙边保坡度/滩涂
+    跨片连续；边缘衰减用全局地图边距）；每片走完 推理→铺设→地貌→生态 才记 patch →
+    **terra resume 断点续跑**；map-max-size 10240（nativeSpan 2048 上限废除）；
+    分片确定性=fetchPooled 逐位一致（tileSeamRun 离线校验）
+  - **GPU 推理开箱即用**：GpuRuntime 自装配——maven（aliyun→central）拉
+    onnxruntime_gpu-1.20.0.jar（551MB，sha 固定）解本 OS natives；PyPI（aliyun→
+    pythonhosted）拉 NVIDIA 官方 wheel（cudart/cublas/cudnn/cufft，win 1.5G/linux 1.6G）
+    解动态库到 models/cuda——**免装 CUDA Toolkit**，只要有 NVIDIA 驱动；
+    `onnxruntime.native.path` 指向 GPU natives（必须先于首次 ORT 触碰，PipelineModels.load
+    兜底激活）+ **不动点重试 System.load 预载**（已载模块满足后续依赖，Windows/Linux 同理）；
+    device=gpu 硬性、auto 自动回退；依赖闭包用 strings 扫 providers_cuda 实测确定
+    （cudart/cublas/cublasLt/cudnn/cufft + 驱动 nvcuda）
+  - dumpTerra 新增 tileSeamRun/splitterRun/simpleEcoRun 三道校验；dumpTerra
+    -Pmiaeco.device=gpu 可本机验 GPU
+  - **GPU 实测（RTX 5070, driver 12.8）**：CUDA EP 全链通，池化 640² 原生 5.1s vs
+    CPU 61.9s（**12×**）、warm 512² 9.1s vs 22s；首次含 sm_120 PTX JIT ~4.5min（一次性，
+    driver JIT cache 跨进程留存）。**CPU/GPU 浮点次序差异 → 群系边界差几格**：
+    同图生成/续跑须同设备，跨设备续跑片界可能留细缝（已写入 wiki）
+- **0.20.0** 地貌奇观 + 洞穴/崖蚀 + 生态过渡（完善优化轮）：
   - **geo 地貌奇观系统**（`terrain/GeoFeatures`+`GeoService`，第三类生成，与树木/氛围并列）：
     六类型——石林（簇状层理锥柱）/喀斯特峰林（18~34 高绿顶石塔+苔藓杜鹃顶+副峰）/
     风蚀蘑菇岩（条带按世界 y 对齐→跨柱地层感）/天然岩拱（抛物线岩桥+加粗墩）/

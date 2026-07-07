@@ -6,6 +6,7 @@ import dev.timefiles.miaeco.terrain.EcoBiomes;
 import dev.timefiles.miaeco.terrain.GeoFeatures;
 import dev.timefiles.miaeco.terrain.HeightMapper;
 import dev.timefiles.miaeco.terrain.RegionSegmenter;
+import dev.timefiles.miaeco.terrain.SimpleEco;
 import dev.timefiles.miaeco.terrain.pipeline.LocalTerrainProvider;
 
 import javax.imageio.ImageIO;
@@ -49,9 +50,124 @@ public final class TerraDumpTool {
             fail |= dumpAndCheck(outDir, "run" + run, data);
         }
         fail |= mapModeRun(outDir);
+        fail |= tileSeamRun();
         fail |= geoCaveRun();
+        fail |= splitterRun();
+        fail |= simpleEcoRun();
         System.out.println(fail ? "TERRA CHECK: FAIL" : "TERRA CHECK: PASS");
         if (fail) System.exit(1);
+    }
+
+    /** 分片确定性：同一区域整取 vs 两半分取，高程与群系必须逐位一致（无缝分片的根基）。 */
+    private static boolean tileSeamRun() throws Exception {
+        LocalTerrainProvider.init(SEED + 7777L);
+        var whole = dev.timefiles.miaeco.terrain.TerraService.fetchPooled(-48, -48, 96, 96, 2);
+        var left = dev.timefiles.miaeco.terrain.TerraService.fetchPooled(-48, -48, 48, 96, 2);
+        var right = dev.timefiles.miaeco.terrain.TerraService.fetchPooled(0, -48, 48, 96, 2);
+        boolean fail = false;
+        for (int z = 0; z < 96 && !fail; z++) {
+            for (int x = 0; x < 96; x++) {
+                short hw = whole.heightmap[z][x], bw = whole.biomeIds[z][x];
+                short hp = x < 48 ? left.heightmap[z][x] : right.heightmap[z][x - 48];
+                short bp = x < 48 ? left.biomeIds[z][x] : right.biomeIds[z][x - 48];
+                if (hw != hp || bw != bp) {
+                    System.out.println("TILE SEAM FAIL @" + x + "," + z
+                            + " h " + hw + "/" + hp + " b " + bw + "/" + bp);
+                    fail = true;
+                    break;
+                }
+            }
+        }
+        System.out.println("tile seam: " + (fail ? "FAIL" : "整取/分取逐位一致"));
+        return fail;
+    }
+
+    /** 大区自然切分：分割完备性（不重、不漏、不越界、块大小有界）。 */
+    private static boolean splitterRun() {
+        int w = 420, h = 300;
+        java.util.BitSet mask = new java.util.BitSet(w * h);
+        int cells = 0;
+        for (int z = 0; z < h; z++) {
+            for (int x = 0; x < w; x++) {
+                double dx = (x - w / 2.0) / (w / 2.0), dz = (z - h / 2.0) / (h / 2.0);
+                if (dx * dx + dz * dz <= 1) {
+                    mask.set(z * w + x);
+                    cells++;
+                }
+            }
+        }
+        var region = new RegionSegmenter.EcoRegion((short) 1, 0, 0, w - 1, h - 1, mask, cells);
+        var parts = RegionSegmenter.split(region, 30000, SEED);
+        boolean fail = false;
+        long sum = 0;
+        boolean[] seen = new boolean[w * h];
+        StringBuilder sizes = new StringBuilder();
+        for (var p : parts) {
+            sum += p.cells();
+            sizes.append(p.cells()).append(' ');
+            if (p.cells() > 30000 * 1.9) {
+                System.out.println("SPLIT SIZE FAIL " + p.cells());
+                fail = true;
+            }
+            int bw = p.maxLX() - p.minLX() + 1;
+            for (int i = p.mask().nextSetBit(0); i >= 0; i = p.mask().nextSetBit(i + 1)) {
+                int gi = (p.minLZ() + i / bw) * w + p.minLX() + i % bw;
+                if (seen[gi] || !mask.get(gi)) {
+                    System.out.println("SPLIT OVERLAP/OOB");
+                    fail = true;
+                    break;
+                }
+                seen[gi] = true;
+            }
+        }
+        if (sum != cells || parts.size() < 2) {
+            System.out.println("SPLIT UNION/COUNT FAIL " + sum + "/" + cells + " parts=" + parts.size());
+            fail = true;
+        }
+        System.out.println("split: " + cells + " cells -> " + parts.size() + " parts [" + sizes.toString().trim() + "]");
+        return fail;
+    }
+
+    /** 简单生态冒烟：全类型在合成岛面上生成，边界/高度理智检查 + 关键类型非空。 */
+    private static boolean simpleEcoRun() {
+        final int S = 200, sea = 63;
+        SimpleEco.View v = new SimpleEco.View() {
+            private int ground(int lx, int lz) {
+                double d = Math.hypot(lx - S / 2.0, lz - S / 2.0);
+                return 55 + (int) (28 * Math.max(0, 1 - d / (S * 0.48)));
+            }
+            @Override public int w() { return S; }
+            @Override public int h() { return S; }
+            @Override public int y(int lx, int lz) { return ground(lx, lz); }
+            @Override public boolean water(int lx, int lz) { return ground(lx, lz) < sea; }
+            @Override public int sea() { return sea; }
+        };
+        boolean fail = false;
+        for (short id : new short[]{44, 41, 46, 48, 90, 91, 5, 26, 17}) {
+            List<BlockEdit> edits = SimpleEco.generate(id, v, 500, 600, SEED + id, 30000);
+            int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+            for (BlockEdit e : edits) {
+                if (e.x() < 500 || e.x() >= 500 + S || e.z() < 600 || e.z() >= 600 + S) {
+                    System.out.println("SIMPLE OOB id=" + id);
+                    fail = true;
+                    break;
+                }
+                if (e.y() > 110 || e.y() < 40) {
+                    System.out.println("SIMPLE Y FAIL id=" + id + " y=" + e.y());
+                    fail = true;
+                    break;
+                }
+                minY = Math.min(minY, e.y());
+                maxY = Math.max(maxY, e.y());
+            }
+            if ((id == 44 || id == 5 || id == 90) && edits.isEmpty()) {
+                System.out.println("SIMPLE EMPTY id=" + id);
+                fail = true;
+            }
+            System.out.printf("simple %-4s %-5s %6d 编辑 y[%d..%d]%n", id, SimpleEco.display(id),
+                    edits.size(), minY == Integer.MAX_VALUE ? 0 : minY, maxY == Integer.MIN_VALUE ? 0 : maxY);
+        }
+        return fail;
     }
 
     /** 地貌奇观 + 洞穴雕刻校验：合成起伏面上散布全部类型，查接地/越界/预算；洞穴雕刻率合理。 */

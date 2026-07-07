@@ -32,6 +32,11 @@ public final class PipelineModels implements AutoCloseable {
     public static synchronized void load() {
         if (INSTANCE != null) return;
         if (loadStarted) return;
+        // GPU natives 必须在首次触碰 OrtEnvironment 之前激活（同 JVM native 只装载一次）；
+        // 服务器路径由 ensureModels 提前下载好，这里兜底激活（离线工具 -Dmiaeco.device=gpu 也走这）
+        if (GpuRuntime.wanted()) {
+            GpuRuntime.activate(msg -> LOG.info("[gpu] {}", msg));
+        }
         loadStarted = true;
         loadFailure = null;
         loadDone = new CountDownLatch(1);

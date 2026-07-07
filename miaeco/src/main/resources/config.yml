@@ -28,8 +28,12 @@ terrain:
   max-y: 300
   # 地形铺设速率（方块/tick；建造世界通常没人在场，可开大）
   blocks-per-tick: 20000
-  # 选区单边上限（1024 块 ≈ 15km 真实地貌跨度，CPU 推理约 1-3 分钟）
+  # 选区单边上限（画布世界 terra gen；地图世界不受此限、走分片流水线）
   max-selection: 1024
+  # 地图世界 size 上限（分片生成+断点续跑；10240 ≈ 4 亿方块柱，请配合 GPU/耐心）
+  map-max-size: 10240
+  # 过大生态区的自然切分目标（格）：超过即按噪声 Voronoi 切成 ~此大小的块
+  split-cells: 90000
   # 边缘向平原画布的羽化宽度
   feather: 12
   # 生成后自动生态：分区→种树(instant)→氛围
@@ -45,8 +49,12 @@ terrain:
   geo-features: true
   # ONNX 推理线程数（0=自动：核数-2 给主线程留核；-1=全核；>0 指定核数）
   inference-threads: 0
-  # cpu | auto | gpu（auto 依次尝试 CUDA/DirectML/CoreML 回退 CPU）
+  # cpu | auto | gpu：auto/gpu 会自动下载 GPU 运行时（ORT CUDA EP ~526MB +
+  # NVIDIA CUDA 运行库 wheel ~1.4GB，均断点续传、SHA-256 校验，免装 CUDA Toolkit），
+  # 机器需有 NVIDIA 驱动（CUDA 12.x）；auto 在不可用时自动回退 CPU
   device: cpu
+  # GPU 模式自动下载 CUDA 运行库（关掉则需自装 CUDA 12 + cuDNN 9 或手放 models/cuda/）
+  gpu-auto-cuda: true
   # 首次使用自动下载权重 2.2GB（分段并行+断点续传+SHA256 校验）
   download-endpoints:
     - https://hf-mirror.com
