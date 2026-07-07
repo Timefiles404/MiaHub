@@ -42,6 +42,21 @@ public final class Forest {
         return mask.get(lz * maskW + lx);   // 越界索引 BitSet 返回 false，天然安全
     }
 
+    /**
+     * 掩码软边：7×7 窗内掩码占比（1=腹地，0=远离区外）。用作边界的概率接受度，
+     * 让区界树线从硬墙变成 3~4 格的渐变过渡（轻微越界混植是有意的）。
+     */
+    public double maskSoftness(int lx, int lz) {
+        if (mask == null) return 1;
+        int in = 0;
+        for (int dz = -3; dz <= 3; dz++) {
+            for (int dx = -3; dx <= 3; dx++) {
+                if (inMask(lx + dx, lz + dz)) in++;
+            }
+        }
+        return in / 49.0;
+    }
+
     public String name() { return name; }
     public Region region() { return region; }
     public int ageMonths() { return ageMonths; }

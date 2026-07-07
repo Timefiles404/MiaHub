@@ -51,11 +51,20 @@
 <tr><td><code>/miaeco atmo feature &lt;森林&gt; &lt;特征&gt; &lt;0~5&gt;</code></td><td>单项强度：river/town/groundcover/water/paths/soil/rocks/ruins（0=关，river 5 档水系尤其强烈，town=人烟）</td></tr>
 <tr><td><code>/miaeco world create &lt;名&gt; [seed=N] | list | tp &lt;名&gt; | remove &lt;名&gt; confirm</code></td><td>专用生态世界管理（平原画布；remove 连文件夹删除）</td></tr>
 <tr><td><code>/miaeco world create &lt;名&gt; size=N [scale=15|30|60|120] [sea=Y]</code></td><td>地图世界：虚空+中心 N×N 自动地形与生态；scale=每格米数（比例尺），sea=海平面</td></tr>
+<tr><td><code>/miaeco world regen &lt;名&gt; [seed=N] confirm</code></td><td>地图世界删档重生成（默认换新种子，同参数重跑）</td></tr>
 <tr><td><code>/miaeco terra gen [noeco]</code></td><td>在选区生成真实地形+自动群系+自动森林（noeco=只地形）</td></tr>
 <tr><td><code>/miaeco terra scout | prefetch | status | cancel</code></td><td>陆地探测 / 预下载模型 / 任务状态 / 取消</td></tr>
+<tr><td><code>/miaeco geo gen &lt;类型&gt; [强度] [风格]</code></td><td>在选区散布地貌奇观：stone_forest 石林 / karst_towers 峰林 / hoodoos 蘑菇岩 / arch 岩拱 / monoliths 孤石 / hot_spring 温泉；风格 stone/karst/sand/red/ice</td></tr>
+<tr><td><code>/miaeco geo types | undo</code></td><td>列出类型 / 撤销最近一次地貌</td></tr>
 <tr><td><code>/miaeco clear &lt;森林&gt;</code></td><td>清除该森林所有树方块</td></tr>
 <tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（147 棵建筑师设计树）</td></tr>
 </table>
+
+<h2>0.20.0 地貌奇观 · 洞穴与崖蚀 · 生态过渡</h2>
+<p><b>地貌奇观（第三类生成，独立于树木与氛围）：</b>六种大型岩体景观加入生成池——<b>石林</b>（成簇的层理锥柱，云南石林式）、<b>喀斯特峰林</b>（18~34 格高的绿顶石塔，顶覆苔藓草皮与杜鹃，桂林式）、<b>风蚀蘑菇岩</b>（细腰岩柄+出檐岩帽，条带按真实地层跨柱对齐）、<b>天然岩拱</b>、<b>孤石阵</b>（立石/半埋卧石）、<b>温泉钙华</b>（钙华围沿阶梯池、池心岩浆块冒泡）。<code>/miaeco geo gen &lt;类型&gt;</code> 在任意世界的选区手动散布（自动找平地、避水，<code>geo undo</code> 一键撤销）；terra 生成时也会<b>按群系自动融合</b>：裸岩峰配石林、冰封峰配冰塔林、恶地配红岩蘑菇、风袭丘陵偶出岩拱与孤石、林间坡地偶有温泉，温带林与雨林的部分区域整片化作<b>峰林喀斯特</b>（石塔从森林里拔起）。</p>
+<p><b>洞穴与崖面侵蚀（非等高地形第一步）：</b>terra 地形不再只是一张等高面——生成时同步雕刻<b>意面洞与奶酪洞</b>（双路 3D 噪声相交成蜿蜒隧道，深处更粗、偶有石笋；地图世界在悬浮板块内保留底壳，画布世界一路雕进基岩层之上），陡坡崖面按噪声<b>抠出内凹岩檐</b>，从崖下看有真实的外挑层次。山坡上能找到天然洞口。<code>terrain.caves / cliff-erosion</code> 可关。</p>
+<p><b>生态过渡软化：</b>森林区边界从"一刀切树墙"变成 3~4 格的<b>渐变树线</b>（按掩码窗口占比概率接受，轻微越界混植是有意的）；草甸新增<b>孤树</b>点缀、山地林间坡新增<b>疏杉</b>，温带森林新增<b>白桦林变体带</b>（樱花 8% / 金秋 18% / 白桦 18% / 橡桦混交其余）。</p>
+<p><b>打磨：</b><code>world regen</code> 地图世界一键删档重生成（换个种子再来一张）；推理线程默认改为<b>自动留核</b>（核数-2，生成期间不再挤压 tick，可配 -1 拉满全核）。</p>
 
 <h2>0.19.0 地图世界 · 一条命令生成有限世界</h2>
 <p><b>一步到位：</b><code>/miaeco world create &lt;名&gt; size=400 scale=60 sea=63</code>——不再需要先建世界再框选：带 <code>size</code> 参数即为<b>地图世界</b>，以中央 (0,0) 向四周延展 size×size 的完整地形+群系+森林自动生成，<b>地图之外全是虚空</b>；四周以岛屿式浅海环收边（虚空接缝藏在水下）。生成期间出生点有临时玻璃站台，完成自动拆除并把出生点设到地图最高处。</p>

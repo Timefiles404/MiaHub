@@ -31,6 +31,13 @@ public final class RegionSegmenter {
      * @param cap      最多保留的区域数（按面积降序）
      */
     public static List<EcoRegion> segment(short[] biomes, int w, int h, int minCells, int cap) {
+        return segment(biomes, w, h, minCells, cap,
+                id -> EcoBiomes.of((short) id).kind() != EcoBiomes.KIND_NONE);
+    }
+
+    /** include 谓词版：地貌分割要把 KIND_NONE 的裸峰/冰峰也切出来。 */
+    public static List<EcoRegion> segment(short[] biomes, int w, int h, int minCells, int cap,
+                                          java.util.function.IntPredicate include) {
         int[] label = new int[w * h];
         List<EcoRegion> out = new ArrayList<>();
         ArrayDeque<Integer> stack = new ArrayDeque<>();
@@ -39,7 +46,7 @@ public final class RegionSegmenter {
         for (int start = 0; start < w * h; start++) {
             if (label[start] != 0) continue;
             short id = biomes[start];
-            if (EcoBiomes.of(id).kind() == EcoBiomes.KIND_NONE) {
+            if (!include.test(id)) {
                 label[start] = -1;
                 continue;
             }

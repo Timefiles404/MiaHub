@@ -66,6 +66,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             case "clear" -> clear(sender, args);
             case "world" -> world(sender, args);
             case "terra" -> terra(sender, args);
+            case "geo" -> geo(sender, args);
             case "save" -> {
                 eco.store().saveAll(eco.forests());
                 sender.sendMessage(P + ChatColor.GREEN + "已保存全部森林。");
@@ -177,9 +178,51 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                     sender.sendMessage(P + ChatColor.RED + "会连同世界文件夹一起删除！确认请加 confirm。");
                     return;
                 }
+                purgeForestsOf(args[2]);
                 String err = worlds.remove(args[2], ok -> sender.sendMessage(P + (ok
                         ? ChatColor.GREEN + "世界 " + args[2] + " 已删除。"
                         : ChatColor.RED + "世界文件夹删除不完整（可能被占用），请重启后手动清理。")));
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
+            case "regen" -> {
+                if (args.length < 3) {
+                    sender.sendMessage(P + ChatColor.RED + "用法: /miaeco world regen <名> [seed=N] confirm");
+                    return;
+                }
+                var entry = worlds.entry(args[2]);
+                if (entry == null) { sender.sendMessage(P + ChatColor.RED + "不是 MiaEco 管理的世界: " + args[2]); return; }
+                if (entry.map == null) {
+                    sender.sendMessage(P + ChatColor.RED + "只有地图世界（world create size=…）支持 regen。");
+                    return;
+                }
+                if (eco.terra().busy()) { sender.sendMessage(P + ChatColor.RED + "有地形任务在跑，稍后再试。"); return; }
+                Long seed = null;
+                boolean confirm = false;
+                for (int i = 3; i < args.length; i++) {
+                    if (args[i].equalsIgnoreCase("confirm")) confirm = true;
+                    else if (args[i].toLowerCase(Locale.ROOT).startsWith("seed=")) {
+                        String v = args[i].substring(5);
+                        try { seed = Long.parseLong(v); }
+                        catch (NumberFormatException e) { seed = (long) v.hashCode(); }
+                    }
+                }
+                if (!confirm) {
+                    sender.sendMessage(P + ChatColor.RED + "会删掉整个世界并重新生成（默认换新种子）！确认请加 confirm。");
+                    return;
+                }
+                final var map = entry.map;
+                final Long fseed = seed;
+                final String name = args[2];
+                purgeForestsOf(name);
+                sender.sendMessage(P + ChatColor.GRAY + "重生成 " + name + "：删除旧世界…");
+                String err = worlds.remove(name, ok -> {
+                    if (!ok) { sender.sendMessage(P + ChatColor.RED + "旧世界文件删除不完整（可能被占用），请重启后手动清理再建。"); return; }
+                    String e2 = worlds.create(name, fseed, map);
+                    if (e2 != null) { sender.sendMessage(P + ChatColor.RED + e2); return; }
+                    sender.sendMessage(P + ChatColor.GREEN + "新世界就绪（seed=" + worlds.entry(name).seed + "），开始生成…");
+                    String e3 = eco.terra().startMap(sender, name);
+                    if (e3 != null) sender.sendMessage(P + ChatColor.RED + e3);
+                });
                 if (err != null) sender.sendMessage(P + ChatColor.RED + err);
             }
             default -> helpWorld(sender);
@@ -191,7 +234,15 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         msg(s, "/miaeco world create <名> size=N [scale=15|30|60|120] [sea=Y]",
                 "新建地图世界：虚空+中心 N×N 自动地形与生态；scale=每格米数");
         msg(s, "/miaeco world list | tp <名>", "列出/传送");
+        msg(s, "/miaeco world regen <名> [seed=N] confirm", "地图世界删档重生成（默认换新种子）");
         msg(s, "/miaeco world remove <名> confirm", "卸载并删除世界文件");
+    }
+
+    /** 删除/重生成世界前清掉挂在该世界上的森林记录。 */
+    private void purgeForestsOf(String worldName) {
+        boolean removed = eco.forests().values()
+                .removeIf(f -> f.region().world().equals(worldName));
+        if (removed) eco.store().saveAll(eco.forests());
     }
 
     // ---- terra（大地形生成） ----
@@ -233,10 +284,58 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         msg(s, "/miaeco terra prefetch", "预下载模型权重并装载（首次 2.2GB）");
     }
 
+    // ---- geo（地貌奇观：独立于树木与氛围的第三类生成） ----
+    private void geo(CommandSender sender, String[] args) {
+        if (args.length < 2) { helpGeo(sender); return; }
+        var geo = eco.geo();
+        switch (args[1].toLowerCase(Locale.ROOT)) {
+            case "gen" -> {
+                if (!(sender instanceof Player p)) { sender.sendMessage(P + ChatColor.RED + "只有玩家能框选生成。"); return; }
+                if (args.length < 3) {
+                    sender.sendMessage(P + ChatColor.RED + "用法: /miaeco geo gen <类型> [强度0.2~3] [风格]");
+                    return;
+                }
+                if (!eco.selection().hasBoth(p)) { sender.sendMessage(P + ChatColor.RED + "先用 pos1/pos2 设置选区。"); return; }
+                Region sel = Region.between(eco.selection().pos1(p), eco.selection().pos2(p));
+                org.bukkit.World w = org.bukkit.Bukkit.getWorld(sel.world());
+                if (w == null) { sender.sendMessage(P + ChatColor.RED + "选区世界未加载。"); return; }
+                double inten = 1.0;
+                if (args.length >= 4) {
+                    try { inten = Double.parseDouble(args[3]); }
+                    catch (NumberFormatException e) { sender.sendMessage(P + ChatColor.RED + "强度必须是数字（0.2~3）。"); return; }
+                }
+                String style = args.length >= 5 ? args[4].toLowerCase(Locale.ROOT) : null;
+                String err = geo.gen(sender, w, sel, args[2].toLowerCase(Locale.ROOT), inten, style);
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
+            case "types" -> {
+                sender.sendMessage(P + ChatColor.AQUA + "地貌类型（geo gen <类型> [强度] [风格]）：");
+                for (String t : dev.timefiles.miaeco.terrain.GeoFeatures.TYPES) {
+                    sender.sendMessage(ChatColor.YELLOW + " " + t + ChatColor.GRAY + " - "
+                            + dev.timefiles.miaeco.terrain.GeoFeatures.display(t));
+                }
+                sender.sendMessage(ChatColor.GRAY + "风格: stone/karst/sand/red/ice；terra 生成时会按群系自动放置。");
+            }
+            case "undo" -> {
+                if (!(sender instanceof Player p)) { sender.sendMessage(P + ChatColor.RED + "只有玩家能撤销。"); return; }
+                String err = geo.undo(sender, p.getWorld());
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
+            default -> helpGeo(sender);
+        }
+    }
+
+    private void helpGeo(CommandSender s) {
+        msg(s, "/miaeco geo gen <类型> [强度] [风格]", "在选区散布地貌奇观（石林/峰林/蘑菇岩/岩拱/孤石/温泉）");
+        msg(s, "/miaeco geo types", "列出全部类型与风格");
+        msg(s, "/miaeco geo undo", "撤销当前世界最近一次 geo gen");
+    }
+
     private void help(CommandSender s) {
         s.sendMessage(P + ChatColor.AQUA + "参数化程序化森林 + 大世界地形");
-        msg(s, "/miaeco world …", "多世界管理（create/list/tp/remove）");
+        msg(s, "/miaeco world …", "多世界管理（create/list/tp/regen/remove）");
         msg(s, "/miaeco terra …", "扩散地形生成（gen/scout/status/cancel/prefetch）");
+        msg(s, "/miaeco geo …", "地貌奇观（石林/峰林/岩拱…，独立于树木与氛围）");
         msg(s, "/miaeco test <树种> plant [giant]", "在脚下种一棵测试树（giant=巨木变异）");
         msg(s, "/miaeco test <树种> advance <月>", "推进这棵测试树的形态");
         msg(s, "/miaeco test <树种> clear", "移除测试树");
@@ -775,7 +874,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
             addMatches(out, args[0], "help", "test", "pos1", "pos2", "forest", "species", "atmo",
-                    "plant", "grow", "advance", "clear", "save", "world", "terra");
+                    "plant", "grow", "advance", "clear", "save", "world", "terra", "geo");
         } else if (args.length == 2) {
             switch (args[0].toLowerCase(Locale.ROOT)) {
                 case "test" -> addMatches(out, args[1],
@@ -783,15 +882,16 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 case "forest" -> addMatches(out, args[1], "create", "list", "info", "remove", "density");
                 case "species" -> addMatches(out, args[1], "add", "list", "remove", "replace", "density");
                 case "atmo" -> addMatches(out, args[1], "set", "apply", "clear", "info", "feature", "themes");
-                case "world" -> addMatches(out, args[1], "create", "list", "tp", "remove");
+                case "world" -> addMatches(out, args[1], "create", "list", "tp", "regen", "remove");
                 case "terra" -> addMatches(out, args[1], "gen", "scout", "status", "cancel", "prefetch");
+                case "geo" -> addMatches(out, args[1], "gen", "types", "undo");
                 case "plant", "grow", "advance", "clear" -> addForests(out, args[1]);
                 default -> { }
             }
         } else if (args.length == 3) {
             String w0 = args[0].toLowerCase(Locale.ROOT);
             String w1 = args[1].toLowerCase(Locale.ROOT);
-            if (w0.equals("world") && (w1.equals("tp") || w1.equals("remove"))) {
+            if (w0.equals("world") && (w1.equals("tp") || w1.equals("remove") || w1.equals("regen"))) {
                 for (String n : eco.worlds().all().keySet()) {
                     if (n.toLowerCase(Locale.ROOT).startsWith(args[2].toLowerCase(Locale.ROOT))) out.add(n);
                 }
@@ -799,6 +899,11 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             }
             if (w0.equals("terra") && w1.equals("gen")) {
                 addMatches(out, args[2], "noeco");
+                return out;
+            }
+            if (w0.equals("geo") && w1.equals("gen")) {
+                addMatches(out, args[2],
+                        dev.timefiles.miaeco.terrain.GeoFeatures.TYPES.toArray(new String[0]));
                 return out;
             }
             String a0 = args[0].toLowerCase(Locale.ROOT);
@@ -821,10 +926,14 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         } else if (args.length >= 4 && args[0].equalsIgnoreCase("world")
                 && args[1].equalsIgnoreCase("create")) {
             addMatches(out, args[args.length - 1], "size=400", "scale=30", "scale=60", "sea=63", "seed=");
+        } else if (args.length >= 4 && args[0].equalsIgnoreCase("world")
+                && args[1].equalsIgnoreCase("regen")) {
+            addMatches(out, args[args.length - 1], "confirm", "seed=");
         } else if (args.length == 4) {
             String a0 = args[0].toLowerCase(Locale.ROOT);
             String a1 = args[1].toLowerCase(Locale.ROOT);
-            if (a0.equals("test") && args[2].equalsIgnoreCase("advance")) addMatches(out, args[3], "1", "3", "6", "12", "24");
+            if (a0.equals("geo") && a1.equals("gen")) addMatches(out, args[3], "0.5", "1", "1.5", "2", "3");
+            else if (a0.equals("test") && args[2].equalsIgnoreCase("advance")) addMatches(out, args[3], "1", "3", "6", "12", "24");
             else if (a0.equals("test") && args[2].equalsIgnoreCase("plant")) addMatches(out, args[3], "giant");
             else if (a0.equals("forest") && a1.equals("density")) addMatches(out, args[3], "0.5", "1.0", "1.5", "2.0");
             else if (a0.equals("atmo") && a1.equals("set")) addMatches(out, args[3],
@@ -840,7 +949,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         } else if (args.length == 5) {
             String a0 = args[0].toLowerCase(Locale.ROOT);
             String a1 = args[1].toLowerCase(Locale.ROOT);
-            if (a0.equals("atmo") && a1.equals("feature")) addMatches(out, args[4], "0", "0.5", "1", "1.5", "2", "3", "4", "5");
+            if (a0.equals("geo") && a1.equals("gen")) addMatches(out, args[4], "stone", "karst", "sand", "red", "ice");
+            else if (a0.equals("atmo") && a1.equals("feature")) addMatches(out, args[4], "0", "0.5", "1", "1.5", "2", "3", "4", "5");
             else if (a0.equals("species") && a1.equals("density")) addMatches(out, args[4], "0.3", "0.7", "1.0", "1.5", "2", "3", "4");
             else if (a0.equals("species") && a1.equals("replace")) addMatches(out, args[4],
                     dev.timefiles.miaeco.model.TreeArchetype.KNOWN.toArray(new String[0]));

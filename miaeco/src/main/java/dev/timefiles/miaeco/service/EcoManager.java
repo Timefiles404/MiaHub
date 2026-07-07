@@ -37,6 +37,7 @@ public final class EcoManager {
     private ForestStore store;
     private dev.timefiles.miaeco.world.EcoWorlds ecoWorlds;
     private dev.timefiles.miaeco.terrain.TerraService terraService;
+    private dev.timefiles.miaeco.terrain.GeoService geoService;
 
     private final Map<String, Forest> forests = new LinkedHashMap<>();
 
@@ -105,7 +106,11 @@ public final class EcoManager {
                 cfg.getBoolean(tb + "auto-eco", true),
                 cfg.getInt(tb + "eco-region-min-cells", 300),
                 cfg.getInt(tb + "eco-region-cap", 24),
-                cfg.getLong(tb + "max-eco-footprint", 480000L)));
+                cfg.getLong(tb + "max-eco-footprint", 480000L),
+                cfg.getBoolean(tb + "caves", true),
+                cfg.getBoolean(tb + "cliff-erosion", true),
+                cfg.getBoolean(tb + "geo-features", true)));
+        this.geoService = new dev.timefiles.miaeco.terrain.GeoService(plugin, workerPool);
 
         plugin.getLogger().info("MiaEco 引擎就绪：" + workerThreads + " 工作线程，已加载 "
                 + forests.size() + " 片森林、" + ecoWorlds.all().size() + " 个生态世界。");
@@ -181,4 +186,5 @@ public final class EcoManager {
     public ForestStore store() { return store; }
     public dev.timefiles.miaeco.world.EcoWorlds worlds() { return ecoWorlds; }
     public dev.timefiles.miaeco.terrain.TerraService terra() { return terraService; }
+    public dev.timefiles.miaeco.terrain.GeoService geo() { return geoService; }
 }

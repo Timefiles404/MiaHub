@@ -1,6 +1,9 @@
 package dev.timefiles.miaeco.tool;
 
+import dev.timefiles.miaeco.async.BlockEdit;
+import dev.timefiles.miaeco.terrain.CaveCarver;
 import dev.timefiles.miaeco.terrain.EcoBiomes;
+import dev.timefiles.miaeco.terrain.GeoFeatures;
 import dev.timefiles.miaeco.terrain.HeightMapper;
 import dev.timefiles.miaeco.terrain.RegionSegmenter;
 import dev.timefiles.miaeco.terrain.pipeline.LocalTerrainProvider;
@@ -8,6 +11,7 @@ import dev.timefiles.miaeco.terrain.pipeline.LocalTerrainProvider;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -45,8 +49,82 @@ public final class TerraDumpTool {
             fail |= dumpAndCheck(outDir, "run" + run, data);
         }
         fail |= mapModeRun(outDir);
+        fail |= geoCaveRun();
         System.out.println(fail ? "TERRA CHECK: FAIL" : "TERRA CHECK: PASS");
         if (fail) System.exit(1);
+    }
+
+    /** 地貌奇观 + 洞穴雕刻校验：合成起伏面上散布全部类型，查接地/越界/预算；洞穴雕刻率合理。 */
+    private static boolean geoCaveRun() {
+        final int S = 220;
+        final int[][] ys = new int[S][S];
+        for (int z = 0; z < S; z++)
+            for (int x = 0; x < S; x++)
+                ys[z][x] = (int) (78 + 16 * Math.sin(x / 19.0) + 11 * Math.cos(z / 23.0));
+        GeoFeatures.Surface surf = new GeoFeatures.Surface() {
+            @Override public int w() { return S; }
+            @Override public int h() { return S; }
+            @Override public int y(int lx, int lz) { return ys[lz][lx]; }
+            @Override public boolean water(int lx, int lz) { return ys[lz][lx] < 66; }
+        };
+        boolean fail = false;
+        for (String type : GeoFeatures.TYPES) {
+            List<GeoFeatures.Spot> spots = new ArrayList<>();
+            List<BlockEdit> edits = GeoFeatures.generate(type, GeoFeatures.defaultStyle(type),
+                    surf, 1000, -2000, SEED, 1.5, 320, spots);
+            int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+            for (BlockEdit e : edits) {
+                if (e.x() < 1000 || e.x() >= 1000 + S || e.z() < -2000 || e.z() >= -2000 + S) {
+                    System.out.println("GEO OOB " + type + " @" + e.x() + "," + e.z());
+                    fail = true;
+                    break;
+                }
+                if (e.y() > 320) {
+                    System.out.println("GEO BUDGET " + type + " y=" + e.y());
+                    fail = true;
+                    break;
+                }
+                minY = Math.min(minY, e.y());
+                maxY = Math.max(maxY, e.y());
+            }
+            // 每处地物必须咬地：spot 半径 14 内最低编辑 ≤ 地表+1
+            for (GeoFeatures.Spot sp : spots) {
+                int ground = ys[sp.wz() + 2000][sp.wx() - 1000];
+                int low = Integer.MAX_VALUE;
+                for (BlockEdit e : edits) {
+                    if (Math.abs(e.x() - sp.wx()) <= 14 && Math.abs(e.z() - sp.wz()) <= 14) {
+                        low = Math.min(low, e.y());
+                    }
+                }
+                if (low > ground + 1) {
+                    System.out.println("GEO FLOAT " + type + " @" + sp.wx() + "," + sp.wz()
+                            + " low=" + low + " ground=" + ground);
+                    fail = true;
+                }
+            }
+            System.out.printf("geo %-13s %2d 处 %6d 方块 y[%d..%d]%n", type, spots.size(), edits.size(),
+                    minY == Integer.MAX_VALUE ? 0 : minY, maxY == Integer.MIN_VALUE ? 0 : maxY);
+            if (spots.isEmpty() && (type.equals("stone_forest") || type.equals("hoodoos")
+                    || type.equals("monoliths"))) {
+                System.out.println("GEO EMPTY " + type);
+                fail = true;
+            }
+        }
+        CaveCarver cc = new CaveCarver(SEED);
+        long carved = 0, tot = 0;
+        for (int x = 0; x < 96; x += 2)
+            for (int z = 0; z < 96; z += 2)
+                for (int y = 12; y <= 90; y++) {
+                    tot++;
+                    if (cc.isCave(x + 5000, y, z - 7000)) carved++;
+                }
+        double fr = 100.0 * carved / tot;
+        System.out.printf("cave carve %.2f%%（带内体积占比）%n", fr);
+        if (fr < 0.4 || fr > 15) {
+            System.out.println("CAVE RATE FAIL");
+            fail = true;
+        }
+        return fail;
     }
 
     /** 地图世界路径：比例尺 60m/格（p=2 池化）+ 岛屿衰减；验证边环必水、预算、群系。 */

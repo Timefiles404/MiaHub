@@ -44,7 +44,8 @@ public final class TerraService {
     /** config.yml terrain.* 的快照。 */
     public record Settings(boolean enabled, int blocksPerTick, int maxSelection, int feather,
                            double vScale, int softStartY, int maxY,
-                           boolean autoEco, int ecoMinCells, int ecoCap, long maxEcoFootprint) { }
+                           boolean autoEco, int ecoMinCells, int ecoCap, long maxEcoFootprint,
+                           boolean caves, boolean cliffErosion, boolean geoFeatures) { }
 
     private final Plugin plugin;
     private final EcoManager eco;
@@ -133,6 +134,9 @@ public final class TerraService {
         return true;
     }
 
+    /** 是否有任务在跑（world regen 等外部编排用）。 */
+    public boolean busy() { return job != null; }
+
     public String status() {
         Job j = job;
         if (j == null) {
@@ -165,6 +169,7 @@ public final class TerraService {
         final boolean mapMode;
         final int mpb;                 // 比例尺：每格米数（15/30/60/120）
         final HeightMapper mapper;
+        final CaveCarver carver;       // 洞穴/崖蚀共用噪声（都关则 null）
         final AtomicBoolean cancelled = new AtomicBoolean(false);
         final TerraProgress progress;
         volatile String stageName = "准备";
@@ -179,6 +184,8 @@ public final class TerraService {
             this.mpb = mapMode ? entry.map.metersPerBlock() : 0;   // 0=画布模式走 provider 默认路径
             this.mapper = new HeightMapper(st.vScale(), st.softStartY(), st.maxY(),
                     mapMode ? entry.map.seaLevel() : HeightMapper.SEA_LEVEL);
+            this.carver = entry != null && (st.caves() || st.cliffErosion())
+                    ? new CaveCarver(entry.seed ^ 0xCA4EL) : null;
             this.progress = new TerraProgress(plugin, sender, world == null ? "" : world);
         }
 
@@ -295,6 +302,12 @@ public final class TerraService {
                 progress.chat("地形完成：Y ∈ [" + plan.minY + ", " + plan.maxY + "]，海洋 "
                         + plan.oceanPct + "%" + (mapMode ? "（地图四周为海环+虚空）"
                         : "，已并入世界拼图（相邻选区自动无缝）。"));
+
+                // ---- 地貌奇观（独立于树木/氛围）----
+                if (st.geoFeatures()) {
+                    runGeo(plan, fx1, fz1, W, H);
+                    checkCancel();
+                }
 
                 // ---- 生态 ----
                 if (withEco) {
@@ -518,13 +531,15 @@ public final class TerraService {
                     p.slope[i] = (byte) Math.min(127, s);
                 }
             }
-            // 总操作数（进度分母）：方块编辑 + biome 四分格
+            // 总操作数（进度分母）：方块编辑 + biome 四分格 + 洞穴/崖蚀近似项
             long ops = 0;
             for (int i = 0; i < W * H; i++) {
                 int y = p.y[i];
                 ops += mapMode ? 24 + 5 : Math.abs(y - PlainBase.SURFACE) + 5;
                 if (p.water[i]) ops += mapper.sea() - y;
                 ops += 12;   // biome 列近似
+                if (st.caves() && !p.water[i]) ops += 3;
+                if (st.cliffErosion() && !p.water[i] && p.slope[i] >= 5) ops += 2;
             }
             p.totalOps = ops;
             return p;
@@ -558,17 +573,36 @@ public final class TerraService {
                     short b = p.biome[i];
                     boolean water = p.water[i];
                     Material[] skin = skinFor(p, i, wx, wz);
+                    // 洞穴带：地图世界板块内保 4 格底壳；画布向下雕进区块原生石
+                    boolean canCave = carver != null && st.caves() && !water && !p.beach[i];
+                    int caveLo = mapMode ? y - 19 : 12;
+                    int caveHi = y - 6;
 
                     if (mapMode) {
                         // 虚空画布：悬浮板块，柱厚 24 格
                         for (int yy = y - 23; yy <= y - skin.length; yy++) {
-                            edits.add(new BlockEdit(wx, yy, wz, BlockSpec.of(Material.STONE)));
+                            BlockSpec c = caveAt(canCave, wx, yy, wz, caveLo, caveHi);
+                            edits.add(new BlockEdit(wx, yy, wz, c != null ? c : BlockSpec.of(Material.STONE)));
                         }
                     } else if (y >= PlainBase.SURFACE) {
+                        if (canCave) {
+                            // 画布基底之下（区块原生石）只在成洞处补挖
+                            for (int yy = caveLo; yy < PlainBase.SURFACE - 4 && yy <= caveHi; yy++) {
+                                BlockSpec c = caveAt(true, wx, yy, wz, caveLo, caveHi);
+                                if (c != null) edits.add(new BlockEdit(wx, yy, wz, c));
+                            }
+                        }
                         for (int yy = PlainBase.SURFACE - 4; yy <= y - skin.length; yy++) {
-                            edits.add(new BlockEdit(wx, yy, wz, BlockSpec.of(Material.STONE)));
+                            BlockSpec c = caveAt(canCave, wx, yy, wz, caveLo, caveHi);
+                            edits.add(new BlockEdit(wx, yy, wz, c != null ? c : BlockSpec.of(Material.STONE)));
                         }
                     } else {
+                        if (canCave) {
+                            for (int yy = caveLo; yy <= caveHi; yy++) {
+                                BlockSpec c = caveAt(true, wx, yy, wz, caveLo, caveHi);
+                                if (c != null) edits.add(new BlockEdit(wx, yy, wz, c));
+                            }
+                        }
                         for (int yy = y + 1; yy <= PlainBase.SURFACE; yy++) {
                             edits.add(new BlockEdit(wx, yy, wz, BlockSpec.AIR));
                         }
@@ -586,6 +620,15 @@ public final class TerraService {
                     } else if (EcoBiomes.snowySurface(b) && skin[0] != Material.SNOW_BLOCK) {
                         edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.snow(1)));
                     }
+                    // 陡坡崖面凹蚀：柱身中段抠内凹，悬出的表皮从崖侧看即是外挑岩檐
+                    if (carver != null && st.cliffErosion() && !water && p.slope[i] >= 5) {
+                        int lo = Math.max(mapMode ? y - 19 : 12, y - 8);
+                        for (int yy = lo; yy <= y - 3; yy++) {
+                            if (carver.isNotch(wx, yy, wz)) {
+                                edits.add(new BlockEdit(wx, yy, wz, BlockSpec.of(Material.CAVE_AIR)));
+                            }
+                        }
+                    }
                 }
             }
             // biome 四分格列（x/z 对齐到 4 的倍数；采样格 clamp 回选区）
@@ -602,6 +645,17 @@ public final class TerraService {
                     biomeOps.add(new int[]{wxq, wzq, lo, hi, p.biome[i]});
                 }
             }
+        }
+
+        /** 洞穴替换：该格若被雕刻，返回洞穴填充（洞穴空气/偶发石笋），否则 null。 */
+        private BlockSpec caveAt(boolean canCave, int wx, int yy, int wz, int lo, int hi) {
+            if (!canCave || yy < lo || yy > hi || !carver.isCave(wx, yy, wz)) return null;
+            // 洞底第一格且上方延续成洞 → 少量石笋（默认态即地面尖头朝上）
+            if (!carver.isCave(wx, yy - 1, wz) && carver.isCave(wx, yy + 1, wz)
+                    && hash01(entry.seed ^ 0xD81L, wx * 31 + yy, wz) < 0.05) {
+                return BlockSpec.of(Material.POINTED_DRIPSTONE);
+            }
+            return BlockSpec.of(Material.CAVE_AIR);
         }
 
         /** 主线程限速应用一个条带（方块 + biome），完成后返回工作线程。 */
@@ -704,7 +758,76 @@ public final class TerraService {
             return new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.DIRT, Material.DIRT};
         }
 
-        // ---- 阶段 6：生态 ----
+        // ---- 阶段 6：地貌奇观 ----
+
+        /** 按群系自动散布地貌（含 KIND_NONE 的裸峰/冰峰/恶地——它们不生态但配地貌）。 */
+        private void runGeo(Plan p, int x1, int z1, int W, int H) {
+            stage("地貌奇观");
+            List<RegionSegmenter.EcoRegion> regions = RegionSegmenter.segment(
+                    p.biome, W, H, 200, 32, GeoFeatures::geoBiome);
+            List<BlockEdit> all = new ArrayList<>();
+            Map<String, Integer> counts = new java.util.LinkedHashMap<>();
+            int spotsTotal = 0;
+            for (RegionSegmenter.EcoRegion r : regions) {
+                checkCancel();
+                double rh = hash01(entry.seed ^ 0x6E0L, r.minLX(), r.minLZ());
+                GeoFeatures.BiomeGeo bg = GeoFeatures.geoFor(r.biomeId(), rh);
+                if (bg == null) continue;
+                final int bx = r.minLX(), bz = r.minLZ();
+                GeoFeatures.Surface surf = new GeoFeatures.Surface() {
+                    @Override public int w() { return r.maxLX() - r.minLX() + 1; }
+                    @Override public int h() { return r.maxLZ() - r.minLZ() + 1; }
+                    @Override public int y(int lx, int lz) { return p.y[(bz + lz) * W + bx + lx]; }
+                    @Override public boolean water(int lx, int lz) { return p.water[(bz + lz) * W + bx + lx]; }
+                    @Override public boolean ok(int lx, int lz) { return r.in(bx + lx, bz + lz); }
+                };
+                List<GeoFeatures.Spot> spots = new ArrayList<>();
+                all.addAll(GeoFeatures.generate(bg.type(), bg.style(), surf,
+                        x1 + bx, z1 + bz,
+                        entry.seed ^ (bx * 0x9E3779B97F4A7C15L) ^ (bz * 0xC2B2AE3D27D4EB4FL),
+                        bg.intensity(), Math.min(316, st.maxY() + 16), spots));
+                if (!spots.isEmpty()) {
+                    counts.merge(GeoFeatures.display(bg.type()), spots.size(), Integer::sum);
+                    spotsTotal += spots.size();
+                }
+            }
+            if (all.isEmpty()) {
+                progress.chat("本区没有地貌奇观落点。");
+                return;
+            }
+            progress.update(0.2, spotsTotal + " 处 · " + human(all.size()) + " 方块");
+            World w = Bukkit.getWorld(world);
+            if (w == null) return;
+            applyEditsSync(w, all);
+            StringBuilder sb = new StringBuilder();
+            counts.forEach((k, v) -> sb.append(k).append("×").append(v).append(" "));
+            progress.chat("地貌奇观 ✔ " + sb.toString().trim());
+        }
+
+        /** 把一批编辑经 terra 编辑器写入并同步等待（工作线程调用）。 */
+        private void applyEditsSync(World w, List<BlockEdit> edits) {
+            Object lock = new Object();
+            boolean[] done = {false};
+            Bukkit.getScheduler().runTask(plugin, () -> terraEditor.apply(w, edits, n -> {
+                synchronized (lock) {
+                    done[0] = true;
+                    lock.notifyAll();
+                }
+            }));
+            synchronized (lock) {
+                long deadline = System.currentTimeMillis() + 10 * 60_000L;
+                while (!done[0] && System.currentTimeMillis() < deadline && !cancelled.get()) {
+                    try {
+                        lock.wait(1000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        }
+
+        // ---- 阶段 7：生态 ----
 
         private void runEco(Plan p, int x1, int z1, int W, int H) {
             stage("生态分区");
@@ -724,7 +847,7 @@ public final class TerraService {
                 String theme = ecoDef.theme();
                 String[] species = ecoDef.species();
                 double dens = ecoDef.densityScale();
-                // 温带森林的点缀变体：金秋 18%，小林班樱花 8%
+                // 温带森林的点缀变体：小林班樱花 8%、金秋 18%、白桦林 18%
                 double rh = hash01(entry.seed ^ 0xEC0L, r.minLX(), r.minLZ());
                 if (r.biomeId() == 8) {
                     if (rh < 0.08 && r.cells() < 2500) {
@@ -733,6 +856,8 @@ public final class TerraService {
                     } else if (rh < 0.26) {
                         theme = "autumn";
                         species = new String[]{"maple:0.6", "oak:0.4", "birch:0.3"};
+                    } else if (rh < 0.44) {
+                        species = new String[]{"birch:0.75", "oak:0.25"};
                     }
                 }
                 String fname = nextForestName();
@@ -751,7 +876,8 @@ public final class TerraService {
                 for (Map.Entry<String, Double> fe : ecoDef.features().entrySet()) {
                     f.atmosphere().density(fe.getKey(), fe.getValue());
                 }
-                boolean trees = ecoDef.kind() == EcoBiomes.KIND_FOREST && species.length > 0;
+                // 有树种就种（开阔地的孤树/疏林也走同一条链）
+                boolean trees = species.length > 0;
                 if (trees) {
                     for (String s : species) {
                         String[] parts = s.split(":");

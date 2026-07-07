@@ -32,10 +32,11 @@ public final class EcoBiomes {
             e(17,  "savanna",      KIND_FOREST, "savanna",   new String[]{"acacia:0.5", "bush:0.3"}, 0.55, Map.of()),
             // ---- 开阔地（只铺氛围）----
             e(1,   "plains",         KIND_OPEN, "temperate", new String[0], 1.0, Map.of()),
-            e(29,  "meadow",         KIND_OPEN, "temperate", new String[0], 1.0,
-                    Map.of("groundcover", 2.2, "water", 1.3)),
+            e(29,  "meadow",         KIND_OPEN, "temperate", new String[]{"oak:0.05"}, 1.0,
+                    Map.of("groundcover", 2.2, "water", 1.3)),                      // 草甸孤树
             e(3,   "snowy_plains",   KIND_OPEN, "snowy",     new String[0], 1.0, Map.of()),
-            e(31,  "grove",          KIND_OPEN, "taiga",     new String[0], 1.0, Map.of("rocks", 1.6)),
+            e(31,  "grove",          KIND_OPEN, "taiga",     new String[]{"snowy_spruce:0.15"}, 1.0,
+                    Map.of("rocks", 1.6)),                                          // 林间坡地疏杉
             e(19,  "windswept_hills", KIND_OPEN, "taiga",    new String[0], 1.0,
                     Map.of("rocks", 2.4, "groundcover", 0.7, "town", 0.0)),
             e(5,   "desert",         KIND_OPEN, "savanna",   new String[0], 1.0,

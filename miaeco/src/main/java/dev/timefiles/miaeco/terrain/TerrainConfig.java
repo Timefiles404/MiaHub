@@ -13,7 +13,7 @@ public final class TerrainConfig {
     private static volatile String inferenceDevice = "cpu";   // cpu | auto | gpu
     private static volatile boolean offloadModels = true;
     private static volatile boolean validateModel = true;
-    private static volatile int intraOpThreads = 0;           // 0 = ORT 默认（全部核心）
+    private static volatile int intraOpThreads = 0;           // >0 显式；0 自动=核-2；-1 全核
     private static volatile int scale = 2;                    // 每原生像素的方块数（15m/块）
     private static volatile List<String> endpoints = List.of(
             "https://hf-mirror.com", "https://huggingface.co");
@@ -31,7 +31,7 @@ public final class TerrainConfig {
         if (device != null && !device.isBlank()) inferenceDevice = device.trim().toLowerCase();
         offloadModels = offload;
         validateModel = validate;
-        intraOpThreads = Math.max(0, threads);
+        intraOpThreads = Math.max(-1, threads);
         if (blockScale >= 1 && blockScale <= 6) scale = blockScale;
         if (downloadEndpoints != null && !downloadEndpoints.isEmpty()) endpoints = List.copyOf(downloadEndpoints);
     }
@@ -41,6 +41,18 @@ public final class TerrainConfig {
     public static boolean offloadModels() { return offloadModels; }
     public static boolean validateModel() { return validateModel; }
     public static int intraOpThreads() { return intraOpThreads; }
+
+    /**
+     * 实际推理线程数：>0 用配置值；0 自动 = 核数-2（1..8 夹取，给主线程留核，
+     * 推理期间不再挤压 tick）；-1 = 交给 ORT 默认（全核，离线工具想拉满可用）。
+     * 返回 0 表示不设置（走 ORT 默认）。
+     */
+    public static int resolvedIntraOpThreads() {
+        int t = intraOpThreads;
+        if (t > 0) return t;
+        if (t == 0) return Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors() - 2));
+        return 0;
+    }
     public static int scale() { return scale; }
     public static List<String> endpoints() { return endpoints; }
 }

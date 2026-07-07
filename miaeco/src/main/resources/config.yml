@@ -37,7 +37,13 @@ terrain:
   eco-region-min-cells: 300
   eco-region-cap: 24
   max-eco-footprint: 480000
-  # ONNX 推理线程数（0=全部核心；服务器建议留核给 tick，如 4）
+  # 洞穴雕刻：意面/奶酪洞（地图世界在悬浮板块内保 4 格底壳，画布世界向下雕进基岩层之上）
+  caves: true
+  # 陡坡崖面凹蚀（外挑岩檐的非等高观感）
+  cliff-erosion: true
+  # 生成后按群系自动散布地貌奇观（石林/峰林/风蚀岩/岩拱/孤石/温泉/冰塔）
+  geo-features: true
+  # ONNX 推理线程数（0=自动：核数-2 给主线程留核；-1=全核；>0 指定核数）
   inference-threads: 0
   # cpu | auto | gpu（auto 依次尝试 CUDA/DirectML/CoreML 回退 CPU）
   device: cpu

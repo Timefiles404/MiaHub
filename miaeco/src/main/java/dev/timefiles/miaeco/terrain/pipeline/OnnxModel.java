@@ -208,9 +208,9 @@ public final class OnnxModel implements AutoCloseable {
                 .resolve(optimizedFileName);
     }
 
-    /** 推理会话内并行线程数限核（防止在服务器上饿死 tick 线程；0=ORT 默认）。 */
+    /** 推理会话内并行线程数限核（防止在服务器上饿死 tick 线程；解析见 TerrainConfig）。 */
     private static void applyIntraOpThreads(OrtSession.SessionOptions opts) throws OrtException {
-        int threads = TerrainConfig.intraOpThreads();
+        int threads = TerrainConfig.resolvedIntraOpThreads();
         if (threads > 0) opts.setIntraOpNumThreads(threads);
     }
 
