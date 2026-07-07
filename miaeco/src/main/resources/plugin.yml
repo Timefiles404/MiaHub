@@ -2,6 +2,9 @@ name: MiaEco
 main: dev.timefiles.miaeco.MiaEcoPlugin
 version: ${version}
 api-version: "1.21"
+# 嵌入 ONNX 原生推理引擎：native 库同一 JVM 只能装载一次，不宜热替换。
+# PlugSite 读此键进目录 → /miah update 走"落盘+提示重启"而非热加载（Bukkit 忽略未知键）
+restart-required: true
 description: 参数化程序化森林插件：区域定义、地形驱动选点、异步程序化树木生长与演替。
 author: Timefiles404
 commands:

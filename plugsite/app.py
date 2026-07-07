@@ -237,6 +237,10 @@ def inspect_jar(path):
             with jar.open("plugin.yml") as stream:
                 text = stream.read().decode("utf-8", errors="replace")
             metadata = merge_metadata(metadata, parse_plugin_yml(text))
+            # 插件可在 plugin.yml 里自声明 restart-required: true（嵌 native 运行时等
+            # 不宜热替换的插件），Bukkit 忽略未知键，这里读出来进目录
+            if re.search(r"^restart-required:\s*true\s*$", text, re.MULTILINE):
+                metadata["restartRequired"] = True
         if "paper-plugin.yml" in names:
             metadata["hasPaperPluginYml"] = True
             metadata["restartRequired"] = True
