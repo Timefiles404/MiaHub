@@ -54,8 +54,266 @@ public final class TerraDumpTool {
         fail |= geoCaveRun();
         fail |= splitterRun();
         fail |= simpleEcoRun();
+        fail |= riverRun();
+        fail |= coastRun();
+        fail |= canopyRun();
         System.out.println(fail ? "TERRA CHECK: FAIL" : "TERRA CHECK: PASS");
         if (fail) System.exit(1);
+    }
+
+    /** 河流规划：合成山地→海的高度场上定线，验证 非空/水位单调/蜿蜒度/齐平岸/跨片一致。 */
+    private static boolean riverRun() {
+        final int SZ = 1200, sea = 63;
+        var mapper = new HeightMapper(40, 250, 300, sea);
+        dev.timefiles.miaeco.terrain.RiverPlanner.HeightField hf = (wx, wz) -> {
+            double base = 420 - (wx + SZ / 2.0) * 0.42;          // 西山东海（~10.5 格落差）
+            double hills = 55 * Math.sin(wx / 97.0) * Math.cos(wz / 83.0)
+                    + 34 * Math.sin((wx + wz) / 61.0);
+            return mapper.yOfF((float) (base + hills));
+        };
+        var rivers = dev.timefiles.miaeco.terrain.RiverPlanner.plan(
+                hf, sea, -SZ / 2, -SZ / 2, SZ, SEED, 1.3);
+        boolean fail = false;
+        if (rivers.isEmpty()) {
+            System.out.println("RIVER EMPTY");
+            return true;
+        }
+        double worstChord = 1;
+        for (var r : rivers) {
+            var ns = r.nodes();
+            int prevWl = Integer.MAX_VALUE;
+            double path = 0;
+            for (int i = 0; i < ns.size(); i++) {
+                if (ns.get(i).wl() > prevWl) {
+                    System.out.println("RIVER WL NOT MONOTONE @node" + i);
+                    fail = true;
+                    break;
+                }
+                prevWl = ns.get(i).wl();
+                if (i > 0) path += Math.hypot(ns.get(i).x() - ns.get(i - 1).x(),
+                        ns.get(i).z() - ns.get(i - 1).z());
+            }
+            if (path > 220) {
+                double chord = Math.hypot(ns.get(ns.size() - 1).x() - ns.get(0).x(),
+                        ns.get(ns.size() - 1).z() - ns.get(0).z());
+                worstChord = Math.min(worstChord, chord / path);
+                if (chord / path > 0.965) {
+                    System.out.printf("RIVER TOO STRAIGHT chord/path=%.3f len=%.0f%n", chord / path, path);
+                    fail = true;
+                }
+            }
+        }
+        // 栅格化：齐平岸 + 跨片一致
+        int EW = 420, EH = 420, ox = -210, ozr = -210;
+        int[] ey = new int[EW * EH];
+        boolean[] eWater = new boolean[EW * EH];
+        for (int z = 0; z < EH; z++)
+            for (int x = 0; x < EW; x++) ey[z * EW + x] = (int) Math.floor(hf.yAt(ox + x + 0.5, ozr + z + 0.5));
+        int[] eyB = ey.clone();
+        boolean[] eRiver = new boolean[EW * EH];
+        boolean[] eShoal = new boolean[EW * EH];
+        int[] eWl = new int[EW * EH];
+        java.util.Arrays.fill(eWl, sea);
+        dev.timefiles.miaeco.terrain.RiverPlanner.rasterize(
+                rivers, ey, eWater, eRiver, eWl, eShoal, EW, EH, ox, ozr);
+        int riverCols = 0, flushBank = 0, leaks = 0;
+        for (int z = 1; z < EH - 1; z++) {
+            for (int x = 1; x < EW - 1; x++) {
+                int i = z * EW + x;
+                if (!eRiver[i]) continue;
+                riverCols++;
+                if (ey[i] >= eWl[i]) {
+                    System.out.println("RIVER FLOOR ABOVE WL @" + x + "," + z);
+                    fail = true;
+                }
+                for (int[] d : new int[][]{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
+                    int ni = (z + d[1]) * EW + x + d[0];
+                    if (eRiver[ni]) continue;
+                    if (ey[ni] < eWl[i]) leaks++;               // 岸低于水位=漏水
+                    if (ey[ni] == eWl[i]) flushBank++;          // 齐平岸（--）
+                }
+            }
+        }
+        if (riverCols > 0 && (leaks > 0 || flushBank == 0)) {
+            System.out.println("RIVER BANK FAIL leaks=" + leaks + " flush=" + flushBank);
+            fail = true;
+        }
+        // 跨片一致：偏移窗口重算，重叠区必须逐位一致
+        int EW2 = 300, EH2 = 300, ox2 = ox + 100, oz2 = ozr + 100;
+        int[] ey2 = new int[EW2 * EH2];
+        for (int z = 0; z < EH2; z++)
+            for (int x = 0; x < EW2; x++) ey2[z * EW2 + x] = eyB[(z + 100) * EW + x + 100];
+        boolean[] eWater2 = new boolean[EW2 * EH2];
+        boolean[] eRiver2 = new boolean[EW2 * EH2];
+        boolean[] eShoal2 = new boolean[EW2 * EH2];
+        int[] eWl2 = new int[EW2 * EH2];
+        java.util.Arrays.fill(eWl2, sea);
+        dev.timefiles.miaeco.terrain.RiverPlanner.rasterize(
+                rivers, ey2, eWater2, eRiver2, eWl2, eShoal2, EW2, EH2, ox2, oz2);
+        for (int z = 0; z < EH2 && !fail; z++) {
+            for (int x = 0; x < EW2; x++) {
+                int a = (z + 100) * EW + x + 100, b = z * EW2 + x;
+                if (ey[a] != ey2[b] || eRiver[a] != eRiver2[b] || eWl[a] != eWl2[b]) {
+                    System.out.println("RIVER TILE MISMATCH @" + x + "," + z);
+                    fail = true;
+                    break;
+                }
+            }
+        }
+        int nodes = rivers.stream().mapToInt(r -> r.nodes().size()).sum();
+        System.out.printf("river: %d 条 %d 节点, 蜿蜒(chord/path)最低 %.3f, 河道 %d 列, 齐平岸 %d, 漏水 %d%n",
+                rivers.size(), nodes, worstChord, riverCols, flushBank, leaks);
+        return fail;
+    }
+
+    /** 海岸带：合成岛上跑 齐平→坡度→海岸群系→平原节奏，验证 无 sea+1 台阶/森林退出海岸/类型覆盖。 */
+    private static boolean coastRun() {
+        final int S = 360, sea = 63;
+        int[] ey = new int[S * S];
+        boolean[] eWater = new boolean[S * S];
+        boolean[] eOcean = new boolean[S * S];
+        short[] eBio = new short[S * S];
+        var mapper = new HeightMapper(40, 250, 300, sea);
+        for (int z = 0; z < S; z++) {
+            for (int x = 0; x < S; x++) {
+                double d = Math.hypot(x - S / 2.0, z - S / 2.0);
+                float m = (float) (120 * (1 - d / (S * 0.42)) - 8 + 10 * Math.sin(x / 23.0) * Math.cos(z / 29.0));
+                int i = z * S + x;
+                ey[i] = mapper.yOf(m);
+                eOcean[i] = m < 0;
+                eWater[i] = m < 0 && ey[i] < sea;
+                eBio[i] = m < 0 ? 44 : (x < S / 2 ? (short) 8 : z < S / 2 ? (short) 23 : (short) 15);
+            }
+        }
+        boolean[] eRiver = new boolean[S * S];
+        boolean[] eShoal = new boolean[S * S];
+        int flushed = dev.timefiles.miaeco.terrain.PlanOps.flushShore(
+                ey, eWater, eRiver, eShoal, S, S, sea);
+        byte[] eSlope = new byte[S * S];
+        for (int z = 1; z < S - 1; z++)
+            for (int x = 1; x < S - 1; x++) {
+                int e = z * S + x, y = ey[e];
+                eSlope[e] = (byte) Math.min(127, Math.max(
+                        Math.max(Math.abs(ey[e - 1] - y), Math.abs(ey[e + 1] - y)),
+                        Math.max(Math.abs(ey[e - S] - y), Math.abs(ey[e + S] - y))));
+            }
+        int[] coast = dev.timefiles.miaeco.terrain.PlanOps.coastDistance(
+                eWater, eOcean, S, S, dev.timefiles.miaeco.terrain.PlanOps.COAST_BAND);
+        dev.timefiles.miaeco.terrain.PlanOps.coastal(eBio, coast, ey, eSlope, S, S, sea, 700, -900, SEED);
+        boolean fail = false;
+        int steps = 0, forestNearSea = 0;
+        java.util.Map<Short, Integer> coastTypes = new java.util.TreeMap<>();
+        for (int z = 1; z < S - 1; z++) {
+            for (int x = 1; x < S - 1; x++) {
+                int i = z * S + x;
+                if (!eWater[i]) {
+                    // 系统性 -_ 台阶：贴水陆列不许恰为 sea+1
+                    boolean touch = eWater[i - 1] || eWater[i + 1] || eWater[i - S] || eWater[i + S];
+                    if (touch && ey[i] == sea + 1) steps++;
+                    int cd = coast[i];
+                    if (cd >= 1 && cd <= 4 && eSlope[i] < 6
+                            && EcoBiomes.of(eBio[i]).kind() == EcoBiomes.KIND_FOREST) forestNearSea++;
+                    if (eBio[i] >= 90 && eBio[i] <= 95) coastTypes.merge(eBio[i], 1, Integer::sum);
+                }
+            }
+        }
+        if (steps > 0) { System.out.println("COAST STEP FAIL (-_ 台阶) " + steps); fail = true; }
+        if (forestNearSea > 0) { System.out.println("COAST FOREST FAIL 贴海森林 " + forestNearSea); fail = true; }
+        if (coastTypes.size() < 3) { System.out.println("COAST TYPES FAIL " + coastTypes); fail = true; }
+        // 平原节奏：大平原翻出多样镶嵌
+        java.util.Map<Short, Integer> rhythm = new java.util.TreeMap<>();
+        for (int z = 0; z < 400; z++)
+            for (int x = 0; x < 400; x++) {
+                rhythm.merge(dev.timefiles.miaeco.terrain.PlanOps.rhythm((short) 1, 5000 + x, -3000 + z, SEED),
+                        1, Integer::sum);
+            }
+        int plains = rhythm.getOrDefault((short) 1, 0);
+        if (rhythm.size() < 3 || plains < 400 * 400 / 5 || plains > 400 * 400 * 9 / 10) {
+            System.out.println("RHYTHM FAIL " + rhythm);
+            fail = true;
+        }
+        System.out.println("coast: 压平 " + flushed + " 列, 海岸类型 " + coastTypes + ", 平原节奏 " + rhythm);
+        return fail;
+    }
+
+    /** 树冠：活树树干不裸露天空 + 大树冠面参差度（防"圆整密壳"回归）。 */
+    private static boolean canopyRun() {
+        boolean fail = false;
+        int bare = 0, checked = 0;
+        double raggedSum = 0;
+        int raggedN = 0;
+        for (String id : new String[]{"oak", "jungle", "birch", "maple"}) {
+            var sp = new dev.timefiles.miaeco.model.TreeSpecies(id);
+            dev.timefiles.miaeco.model.TreeArchetype.applyTo(sp);
+            var model = dev.timefiles.miaeco.growth.GrowthModels.forSpecies(sp);
+            for (int k = 0; k < 14; k++) {
+                for (var stage : new dev.timefiles.miaeco.model.GrowthStage[]{
+                        dev.timefiles.miaeco.model.GrowthStage.YOUNG,
+                        dev.timefiles.miaeco.model.GrowthStage.MATURE}) {
+                    var struct = model.generate(sp, stage, SEED + k * 7919L + id.hashCode(), 0.6);
+                    List<BlockEdit> es = struct.toEdits(0, 0, 0, sp);
+                    // 逐列最高木质格 + 有无遮盖
+                    java.util.Map<Long, int[]> cols = new java.util.HashMap<>();  // key→{topWood, anySolidAboveMax}
+                    java.util.Map<Long, java.util.List<Integer>> solids = new java.util.HashMap<>();
+                    for (BlockEdit e : es) {
+                        String n = e.spec().material.name();
+                        long ck = ((long) e.x() << 32) ^ (e.z() & 0xffffffffL);
+                        boolean woody = n.endsWith("_LOG") || n.endsWith("_WOOD");
+                        boolean solid = woody || n.contains("LEAVES") || n.contains("WOOL")
+                                || n.contains("CONCRETE") || n.contains("TERRACOTTA") || n.contains("PLANKS");
+                        if (woody) {
+                            cols.merge(ck, new int[]{e.y()}, (a, b) -> a[0] >= b[0] ? a : b);
+                        }
+                        if (solid) solids.computeIfAbsent(ck, q -> new java.util.ArrayList<>()).add(e.y());
+                    }
+                    for (var en : cols.entrySet()) {
+                        int top = en.getValue()[0];
+                        if (top < 3) continue;
+                        checked++;
+                        int cx = (int) (en.getKey() >> 32), cz = (int) (long) en.getKey();
+                        boolean covered = false;
+                        for (int ox2 = -1; ox2 <= 1 && !covered; ox2++) {
+                            for (int oz2 = -1; oz2 <= 1 && !covered; oz2++) {
+                                var lst = solids.get(((long) (cx + ox2) << 32) ^ ((cz + oz2) & 0xffffffffL));
+                                if (lst == null) continue;
+                                for (int y : lst) {
+                                    if (y > top && y <= top + 3) { covered = true; break; }
+                                }
+                            }
+                        }
+                        if (!covered) bare++;
+                    }
+                    // 冠面参差度（成树才看）：相邻列冠顶差 ≥2 的占比
+                    if (stage == dev.timefiles.miaeco.model.GrowthStage.MATURE && !id.equals("birch")) {
+                        java.util.Map<Long, Integer> topLeaf = new java.util.HashMap<>();
+                        for (BlockEdit e : es) {
+                            String n = e.spec().material.name();
+                            if (!n.contains("LEAVES") && !n.contains("WOOL") && !n.contains("CONCRETE")) continue;
+                            long ck = ((long) e.x() << 32) ^ (e.z() & 0xffffffffL);
+                            topLeaf.merge(ck, e.y(), Math::max);
+                        }
+                        int pairs = 0, jumps = 0;
+                        for (var en : topLeaf.entrySet()) {
+                            int cx = (int) (en.getKey() >> 32), cz = (int) (long) en.getKey();
+                            Integer right = topLeaf.get(((long) (cx + 1) << 32) ^ (cz & 0xffffffffL));
+                            if (right != null) {
+                                pairs++;
+                                if (Math.abs(en.getValue() - right) >= 2) jumps++;
+                            }
+                        }
+                        if (pairs > 30) {
+                            raggedSum += jumps / (double) pairs;
+                            raggedN++;
+                        }
+                    }
+                }
+            }
+        }
+        double ragged = raggedN > 0 ? raggedSum / raggedN : 0;
+        if (bare > 0) { System.out.println("CANOPY BARE TRUNK FAIL " + bare + "/" + checked); fail = true; }
+        if (ragged < 0.10) { System.out.println("CANOPY TOO SMOOTH ragged=" + ragged); fail = true; }
+        System.out.printf("canopy: 秃顶 %d/%d, 冠面参差度 %.2f%n", bare, checked, ragged);
+        return fail;
     }
 
     /** 分片确定性：同一区域整取 vs 两半分取，高程与群系必须逐位一致（无缝分片的根基）。 */
@@ -143,7 +401,7 @@ public final class TerraDumpTool {
             @Override public int sea() { return sea; }
         };
         boolean fail = false;
-        for (short id : new short[]{44, 41, 46, 48, 90, 91, 5, 26, 17}) {
+        for (short id : new short[]{44, 41, 46, 48, 90, 91, 92, 93, 94, 95, 5, 26, 17}) {
             List<BlockEdit> edits = SimpleEco.generate(id, v, 500, 600, SEED + id, 30000);
             int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
             for (BlockEdit e : edits) {
@@ -160,7 +418,7 @@ public final class TerraDumpTool {
                 minY = Math.min(minY, e.y());
                 maxY = Math.max(maxY, e.y());
             }
-            if ((id == 44 || id == 5 || id == 90) && edits.isEmpty()) {
+            if ((id == 44 || id == 5 || id == 90 || id == 92 || id == 94) && edits.isEmpty()) {
                 System.out.println("SIMPLE EMPTY id=" + id);
                 fail = true;
             }
@@ -218,11 +476,20 @@ public final class TerraDumpTool {
                     fail = true;
                 }
             }
-            System.out.printf("geo %-13s %2d 处 %6d 方块 y[%d..%d]%n", type, spots.size(), edits.size(),
-                    minY == Integer.MAX_VALUE ? 0 : minY, maxY == Integer.MIN_VALUE ? 0 : maxY);
+            int stairs = 0;
+            for (BlockEdit e : edits) {
+                if (e.spec().state == dev.timefiles.miaeco.async.BlockSpec.State.STAIR) stairs++;
+            }
+            System.out.printf("geo %-13s %2d 处 %6d 方块 y[%d..%d] 楼梯 %d%n", type, spots.size(),
+                    edits.size(), minY == Integer.MAX_VALUE ? 0 : minY,
+                    maxY == Integer.MIN_VALUE ? 0 : maxY, stairs);
             if (spots.isEmpty() && (type.equals("stone_forest") || type.equals("hoodoos")
                     || type.equals("monoliths"))) {
                 System.out.println("GEO EMPTY " + type);
+                fail = true;
+            }
+            if (type.equals("hoodoos") && !spots.isEmpty() && stairs == 0) {
+                System.out.println("GEO HOODOO NO STAIRS（自然化收边缺失）");
                 fail = true;
             }
         }

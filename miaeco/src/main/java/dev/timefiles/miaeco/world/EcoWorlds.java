@@ -42,8 +42,15 @@ public final class EcoWorlds {
         }
     }
 
-    /** 地图世界规格：size>0 表示"虚空画布 + 中心 size×size 自动地形"。 */
-    public record MapSpec(int size, int metersPerBlock, int seaLevel) { }
+    /**
+     * 地图世界规格：size>0 表示"虚空画布 + 中心 size×size 自动地形"。
+     * openEdge=true 四周不强制为海（断崖边缘、山体增幅）；yScale 竖向缩放（1=默认，越大山越高）。
+     */
+    public record MapSpec(int size, int metersPerBlock, int seaLevel, boolean openEdge, double yScale) {
+        public MapSpec(int size, int metersPerBlock, int seaLevel) {
+            this(size, metersPerBlock, seaLevel, false, 1.0);
+        }
+    }
 
     public static final class Entry {
         public final String name;
@@ -80,7 +87,9 @@ public final class EcoWorlds {
                     int size = sec.getInt(name + ".map.size", 0);
                     MapSpec map = size > 0 ? new MapSpec(size,
                             sec.getInt(name + ".map.mpb", 30),
-                            sec.getInt(name + ".map.sea", 63)) : null;
+                            sec.getInt(name + ".map.sea", 63),
+                            "open".equals(sec.getString(name + ".map.edge", "sea")),
+                            sec.getDouble(name + ".map.yscale", 1.0)) : null;
                     Entry e = new Entry(name, seed, map);
                     for (String s : sec.getStringList(name + ".patches")) {
                         String[] p = s.trim().split("\\s*,\\s*");
@@ -117,6 +126,8 @@ public final class EcoWorlds {
                 yml.set(base + "map.size", e.map.size());
                 yml.set(base + "map.mpb", e.map.metersPerBlock());
                 yml.set(base + "map.sea", e.map.seaLevel());
+                yml.set(base + "map.edge", e.map.openEdge() ? "open" : "sea");
+                yml.set(base + "map.yscale", e.map.yScale());
             }
             List<String> ps = new ArrayList<>(e.patches.size());
             for (Patch p : e.patches) ps.add(p.minX() + "," + p.minZ() + "," + p.maxX() + "," + p.maxZ());

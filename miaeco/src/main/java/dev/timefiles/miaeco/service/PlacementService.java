@@ -70,13 +70,31 @@ public final class PlacementService {
         List<double[]> points = PoissonDiskSampler.sample(
                 snap.width(), snap.depth(), minSpacing, maxCandidates, rng);
 
+        // 并行预打分（0.22.0 多核）：适宜度/掩码只读快照，逐点独立 → 平铺进数组；
+        // 下方接收循环保持原顺序消费同一随机数流，结果与单线程逐位一致。
+        double[] maskArr = new double[points.size()];
+        double[][] scoreArr = new double[points.size()][];
+        java.util.stream.IntStream.range(0, points.size()).parallel().forEach(pi -> {
+            double[] pt = points.get(pi);
+            int lx = (int) pt[0], lz = (int) pt[1];
+            double pm = forest.maskSoftness(lx, lz);
+            maskArr[pi] = pm;
+            if (pm <= 0) return;
+            double[] sc = new double[speciesList.size()];
+            for (int i = 0; i < speciesList.size(); i++) {
+                sc[i] = SuitabilityEvaluator.score(snap, speciesList.get(i), lx, lz);
+            }
+            scoreArr[pi] = sc;
+        });
+
         List<TreeInstance> planted = new ArrayList<>();
         double[] w = new double[speciesList.size()];
-        for (double[] p : points) {
+        for (int pi = 0; pi < points.size(); pi++) {
+            double[] p = points.get(pi);
             int lx = (int) p[0];
             int lz = (int) p[1];
             // 不规则区掩码（terra 生态分区）：软边——按窗口占比概率接受，树线渐变不结墙
-            double pm = forest.maskSoftness(lx, lz);
+            double pm = maskArr[pi];
             if (pm <= 0) continue;
             if (pm < 1 && hash01(forestSeed ^ 0x50F7EDCEL, region.minX() + lx, region.minZ() + lz) >= pm) {
                 continue;
@@ -87,17 +105,20 @@ public final class PlacementService {
             // 每个树种的权重 = 适宜度 × 密度；总权重驱动接受率，占比驱动混植
             double total = 0;
             for (int i = 0; i < speciesList.size(); i++) {
-                w[i] = SuitabilityEvaluator.score(snap, speciesList.get(i), lx, lz)
-                        * Math.max(0, speciesList.get(i).density());
+                w[i] = scoreArr[pi][i] * Math.max(0, speciesList.get(i).density());
                 total += w[i];
             }
             if (total <= 0) continue;
 
-            // 双尺度密度噪声：12 格小斑块 × 64 格大起伏——低密度森林（稀树草原等）
-            // 自然聚成"树丛 + 大片空地"，而不是均匀撒点
-            double noise = 0.55 * valueNoise(forestSeed, wx, wz, 12.0)
-                    + 0.45 * valueNoise(forestSeed ^ 0xB16BADL, wx, wz, 64.0);
-            double accept = Math.min(0.95, total) * (0.55 + 0.9 * noise) * forest.densityScale();
+            // 大跨度双尺度密度噪声（0.22.0）：96 格大起伏主导 + 14 格小斑块，
+            // 幂曲线拉开疏密——密核 ~1.35、疏区 ~0.15（跨度 >8×），再叠大尺度林窗
+            // （n2<0.16 额外 ×0.25 → 近乎空地）。森林不再从头密到尾。
+            double n1 = valueNoise(forestSeed, wx, wz, 14.0);
+            double n2 = valueNoise(forestSeed ^ 0xB16BADL, wx, wz, 96.0);
+            double noise = 0.32 * n1 + 0.68 * n2;
+            double densMul = 0.10 + 1.25 * Math.pow(noise, 1.6);
+            if (n2 < 0.16) densMul *= 0.25;
+            double accept = Math.min(0.95, total) * densMul * forest.densityScale();
             if (rng.nextDouble() > accept) continue;
 
             // 按权重抽树种；间距不满足则退下一候选——小间距灌木能钻进乔木间隙

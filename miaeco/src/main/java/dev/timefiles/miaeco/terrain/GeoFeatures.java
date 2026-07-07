@@ -28,18 +28,21 @@ public final class GeoFeatures {
         default boolean ok(int lx, int lz) { return true; }
     }
 
-    /** 岩体材质风格：主体/杂色/条带层理/顶面（top=null 不做绿顶）。 */
-    public record Style(Material core, Material vary, Material band, Material top) { }
+    /** 岩体材质风格：主体/杂色/条带层理/顶面（top=null 不做绿顶）+ 楼梯/台阶（null 不做收边）。 */
+    public record Style(Material core, Material vary, Material band, Material top,
+                        Material stair, Material slab) { }
 
-    public static final Style STONE = new Style(Material.STONE, Material.ANDESITE, Material.CALCITE, null);
+    public static final Style STONE = new Style(Material.STONE, Material.ANDESITE, Material.CALCITE, null,
+            Material.STONE_STAIRS, Material.STONE_SLAB);
     public static final Style KARST = new Style(Material.STONE, Material.CALCITE,
-            Material.MOSSY_COBBLESTONE, Material.MOSS_BLOCK);
+            Material.MOSSY_COBBLESTONE, Material.MOSS_BLOCK,
+            Material.STONE_STAIRS, Material.STONE_SLAB);
     public static final Style SAND = new Style(Material.SANDSTONE, Material.SMOOTH_SANDSTONE,
-            Material.CUT_SANDSTONE, null);
+            Material.CUT_SANDSTONE, null, Material.SANDSTONE_STAIRS, Material.SANDSTONE_SLAB);
     public static final Style RED = new Style(Material.TERRACOTTA, Material.ORANGE_TERRACOTTA,
-            Material.RED_TERRACOTTA, null);
+            Material.RED_TERRACOTTA, null, Material.RED_SANDSTONE_STAIRS, Material.RED_SANDSTONE_SLAB);
     public static final Style ICE = new Style(Material.PACKED_ICE, Material.PACKED_ICE,
-            Material.SNOW_BLOCK, null);
+            Material.SNOW_BLOCK, null, null, null);
 
     private static final Map<String, Style> STYLES = Map.of(
             "stone", STONE, "karst", KARST, "sand", SAND, "red", RED, "ice", ICE);
@@ -199,13 +202,19 @@ public final class GeoFeatures {
         if (g + h + 3 > maxY) h = maxY - g - 3;
         if (h < 12) return;
         double baseR = 3.5 + hash01(seed, 2, 6) * 3.5;
+        double leanAmp = hash01(seed, 6, 6) * 1.4;
+        double leanAng = hash01(seed, 7, 6) * Math.PI * 2;
         int topR = 1;
+        int topCx = lx, topCz = lz;
         for (int t = -2; t <= h; t++) {
-            double f = 1 - 0.62 * Math.max(0, t) / (double) h;
+            double lt = Math.max(0, t) / (double) h;
+            int cx = lx + (int) Math.round(Math.cos(leanAng) * leanAmp * lt);
+            int cz = lz + (int) Math.round(Math.sin(leanAng) * leanAmp * lt);
+            double f = 1 - 0.62 * lt;
             double wob = (hash01(seed, t, 9) - 0.5) * 1.1;
             boolean ledge = t > 4 && t < h - 3 && hash01(seed, t, 10) < 0.16;
             double r = t < 0 ? baseR + 1 : Math.max(1.1, baseR * f + wob + (ledge ? 0.9 : 0));
-            if (t == h) topR = Math.max(1, (int) r);
+            if (t == h) { topR = Math.max(1, (int) r); topCx = cx; topCz = cz; }
             int y = g + t;
             int ri = (int) Math.ceil(r);
             for (int dz = -ri; dz <= ri; dz++) {
@@ -215,7 +224,23 @@ public final class GeoFeatures {
                     Material m = shell && hash01(seed, dx * 7 + t, dz * 11) < 0.30 ? st.vary()
                             : shell && hash01(seed, dx * 5 + t, dz * 3 + 2) < 0.12 ? st.band()
                             : st.core();
-                    edits.add(new BlockEdit(ox + lx + dx, y, oz + lz + dz, BlockSpec.of(m)));
+                    edits.add(new BlockEdit(ox + cx + dx, y, oz + cz + dz, BlockSpec.of(m)));
+                }
+            }
+            // 檐口收边：出檐层的外缘放朝心楼梯（占 18%），像岩檐的层理崩解
+            if (ledge && st.stair() != null) {
+                int rim = ri + 1;
+                for (int dz = -rim; dz <= rim; dz++) {
+                    for (int dx = -rim; dx <= rim; dx++) {
+                        double d2 = dx * dx + dz * dz;
+                        if (d2 <= r * r + 0.3 || d2 > (r + 1.1) * (r + 1.1)) continue;
+                        if (hash01(seed ^ 0x57A2L, dx + t, dz) >= 0.18) continue;
+                        org.bukkit.block.BlockFace toCenter = Math.abs(dx) >= Math.abs(dz)
+                                ? (dx > 0 ? org.bukkit.block.BlockFace.WEST : org.bukkit.block.BlockFace.EAST)
+                                : (dz > 0 ? org.bukkit.block.BlockFace.NORTH : org.bukkit.block.BlockFace.SOUTH);
+                        edits.add(new BlockEdit(ox + cx + dx, y, oz + cz + dz,
+                                BlockSpec.stair(st.stair(), toCenter, false)));
+                    }
                 }
             }
         }
@@ -223,10 +248,10 @@ public final class GeoFeatures {
             for (int dz = -topR; dz <= topR; dz++) {
                 for (int dx = -topR; dx <= topR; dx++) {
                     if (dx * dx + dz * dz > topR * topR + 0.3) continue;
-                    edits.add(new BlockEdit(ox + lx + dx, g + h + 1, oz + lz + dz,
+                    edits.add(new BlockEdit(ox + topCx + dx, g + h + 1, oz + topCz + dz,
                             BlockSpec.of(hash01(seed, dx, dz + 40) < 0.6 ? st.top() : Material.GRASS_BLOCK)));
                     if (hash01(seed, dx + 9, dz + 41) < 0.22) {
-                        edits.add(new BlockEdit(ox + lx + dx, g + h + 2, oz + lz + dz,
+                        edits.add(new BlockEdit(ox + topCx + dx, g + h + 2, oz + topCz + dz,
                                 BlockSpec.of(hash01(seed, dx, dz + 42) < 0.5
                                         ? Material.AZALEA : Material.FLOWERING_AZALEA)));
                     }
@@ -245,35 +270,97 @@ public final class GeoFeatures {
         }
     }
 
-    /** 风蚀蘑菇岩：细腰条带岩柄 + 出檐岩帽；条带按世界 y 分层→相邻柱同层同色（地层感）。 */
+    /**
+     * 风蚀蘑菇岩（0.22.0 自然化）：<b>正弦曲干</b>（像树干一样带弧度）+ 半径起伏 +
+     * 表面风蚀微孔；岩帽三变体（经典出檐/圆丘/斜板），帽缘参差并用<b>倒置楼梯</b>
+     * 收出檐下蚀刻——条带仍按世界 y 分层（相邻柱同层同色的地层感）。
+     */
     private static void hoodoo(List<BlockEdit> edits, Surface s, int ox, int oz,
                                int lx, int lz, long seed, Style st, int maxY) {
         int g = s.y(lx, lz);
-        int stemH = 4 + (int) (hash01(seed, 1, 21) * 6);
+        int stemH = 4 + (int) (hash01(seed, 1, 21) * 7);
         int stemR = hash01(seed, 2, 21) < 0.6 ? 1 : 2;
-        if (g + stemH + 4 > maxY) return;
+        if (g + stemH + 5 > maxY) return;
         Material[] bands = {st.core(), st.vary(), st.band(), st.core(), st.vary()};
+        // 曲干轴线：正弦漂移（振幅 0.6~1.9，随高展开）
+        double bendAmp = 0.6 + hash01(seed, 6, 21) * 1.3;
+        double bendAng = hash01(seed, 7, 21) * Math.PI * 2;
+        double phase = hash01(seed, 8, 21) * Math.PI;
+        int topCx = lx, topCz = lz;
         for (int t = -2; t <= stemH; t++) {
-            int r = t < 0 ? stemR + 1 : stemR;
+            double f = Math.sin((double) Math.max(0, t) / stemH * Math.PI * 0.9 + phase)
+                    - Math.sin(phase);
+            int cx = lx + (int) Math.round(Math.cos(bendAng) * bendAmp * f);
+            int cz = lz + (int) Math.round(Math.sin(bendAng) * bendAmp * f);
+            if (t == stemH) { topCx = cx; topCz = cz; }
+            double rr = (t < 0 ? stemR + 1 : stemR) + (t >= 2 ? (hash01(seed, t, 29) - 0.5) * 0.8 : 0);
+            rr = Math.max(0.9, rr);
+            int r = (int) Math.ceil(rr);
             Material m = bands[Math.floorMod(g + t, bands.length)];
             for (int dz = -r; dz <= r; dz++) {
                 for (int dx = -r; dx <= r; dx++) {
-                    if (dx * dx + dz * dz > r * r + 0.3) continue;
-                    edits.add(new BlockEdit(ox + lx + dx, g + t, oz + lz + dz, BlockSpec.of(m)));
+                    if (dx * dx + dz * dz > rr * rr + 0.3) continue;
+                    // 风蚀微孔：中段表层 6% 缺格（底部两层不挖，保证咬地）
+                    boolean shell = dx * dx + dz * dz > (rr - 1) * (rr - 1);
+                    if (t > 1 && t < stemH - 1 && shell
+                            && hash01(seed ^ 0x9C0CL, cx + dx, cz * 31 + dz + t * 7) < 0.06) continue;
+                    edits.add(new BlockEdit(ox + cx + dx, g + t, oz + cz + dz, BlockSpec.of(m)));
                 }
             }
         }
+        // 岩帽（以曲干顶为心）：三变体 + 缘部参差
+        double variant = hash01(seed, 4, 21);
         int capR = stemR + 2;
-        int capH = 2 + (hash01(seed, 3, 21) < 0.4 ? 1 : 0);
+        int capBaseY = g + stemH + 1;
+        int capH = variant < 0.75 ? 2 + (hash01(seed, 3, 21) < 0.4 ? 1 : 0) : 2;
+        int slantDx = 0, slantDz = 0;
+        if (variant >= 0.75) {                       // 斜板帽：逐层横移
+            double sa = hash01(seed, 5, 21) * Math.PI * 2;
+            slantDx = (int) Math.round(Math.cos(sa));
+            slantDz = (int) Math.round(Math.sin(sa));
+        }
         for (int t = 0; t < capH; t++) {
-            double r = capR - t * 0.9;
+            double r = variant < 0.45 ? capR - t * 0.9          // 经典出檐（上收）
+                    : variant < 0.75 ? capR * (1 - 0.24 * t)    // 圆丘帽（缓收）
+                    : capR - t * 0.5;                           // 斜板帽
+            int ccx = topCx + slantDx * t, ccz = topCz + slantDz * t;
             int ri = (int) Math.ceil(r);
             for (int dz = -ri; dz <= ri; dz++) {
                 for (int dx = -ri; dx <= ri; dx++) {
-                    if (dx * dx + dz * dz > r * r + 0.3) continue;
+                    double d2 = dx * dx + dz * dz;
+                    // 缘部参差：外缘半格随机进退
+                    double edge = r + (hash01(seed ^ 0xCA9L, dx * 3 + t, dz * 5) - 0.5) * 1.1;
+                    if (d2 > edge * edge + 0.3) continue;
                     Material m = hash01(seed, dx * 3 + t, dz * 5) < 0.3 ? st.vary() : st.core();
-                    edits.add(new BlockEdit(ox + lx + dx, g + stemH + 1 + t, oz + lz + dz, BlockSpec.of(m)));
+                    edits.add(new BlockEdit(ox + ccx + dx, capBaseY + t, oz + ccz + dz, BlockSpec.of(m)));
                 }
+            }
+            // 帽底檐口：倒置楼梯收边（贴帽底外缘，朝心上坡）——风蚀下切的观感
+            if (t == 0 && st.stair() != null) {
+                int rim = ri + 1;
+                for (int dz = -rim; dz <= rim; dz++) {
+                    for (int dx = -rim; dx <= rim; dx++) {
+                        double d2 = dx * dx + dz * dz;
+                        if (d2 <= r * r + 0.3 || d2 > (r + 1.1) * (r + 1.1)) continue;
+                        if (hash01(seed ^ 0x57A1L, dx, dz) >= 0.30) continue;
+                        org.bukkit.block.BlockFace toCenter = Math.abs(dx) >= Math.abs(dz)
+                                ? (dx > 0 ? org.bukkit.block.BlockFace.WEST : org.bukkit.block.BlockFace.EAST)
+                                : (dz > 0 ? org.bukkit.block.BlockFace.NORTH : org.bukkit.block.BlockFace.SOUTH);
+                        edits.add(new BlockEdit(ox + ccx + dx, capBaseY, oz + ccz + dz,
+                                BlockSpec.stair(st.stair(), toCenter, true)));
+                    }
+                }
+            }
+        }
+        // 帽顶零星台阶/凸石：打破平顶
+        if (st.slab() != null) {
+            for (int k = 0; k < 3; k++) {
+                if (hash01(seed, k, 61) >= 0.5) continue;
+                int dx = (int) ((hash01(seed, k, 62) - 0.5) * capR * 1.6);
+                int dz = (int) ((hash01(seed, k, 63) - 0.5) * capR * 1.6);
+                edits.add(new BlockEdit(ox + topCx + slantDx * (capH - 1) + dx, capBaseY + capH,
+                        oz + topCz + slantDz * (capH - 1) + dz,
+                        hash01(seed, k, 64) < 0.6 ? BlockSpec.of(st.slab()) : BlockSpec.of(st.core())));
             }
         }
     }
@@ -382,18 +469,30 @@ public final class GeoFeatures {
 
     // ============================ 共用体元 ============================
 
-    /** 锥柱：底半径 baseR、高 h、锥度 taper，带层理条带与杂色；根部下探 2 格咬地。 */
+    /**
+     * 锥柱：底半径 baseR、高 h、锥度 taper，带层理条带与杂色；根部下探 2 格咬地。
+     * 0.22.0：整柱微倾（线性轴漂 ≤1.6 格）+ 中段表面风蚀微孔 + 顶面偶置台阶——
+     * 石林/孤石不再是笔直圆规柱。
+     */
     private static void pillar(List<BlockEdit> edits, Surface s, int ox, int oz, int lx, int lz,
                                long seed, Style st, int baseR, int h, double taper, int maxY) {
-        if (lx < baseR + 1 || lz < baseR + 1 || lx >= s.w() - baseR - 1 || lz >= s.h() - baseR - 1) return;
+        if (lx < baseR + 2 || lz < baseR + 2 || lx >= s.w() - baseR - 2 || lz >= s.h() - baseR - 2) return;
         if (s.water(lx, lz)) return;
         int g = s.y(lx, lz);
         if (g + h > maxY) h = maxY - g;
         if (h < 3) return;
         int bandEvery = 3 + (int) (hash01(seed, 8, 8) * 3);
+        double leanAmp = hash01(seed, 9, 8) * 1.6;
+        double leanAng = hash01(seed, 10, 8) * Math.PI * 2;
+        int tcx = lx, tcz = lz;
+        double tr = baseR;
         for (int t = -2; t <= h; t++) {
+            double lt = Math.max(0, t) / (double) h;
+            int cx = lx + (int) Math.round(Math.cos(leanAng) * leanAmp * lt);
+            int cz = lz + (int) Math.round(Math.sin(leanAng) * leanAmp * lt);
             double r = t < 0 ? baseR + 0.8
-                    : Math.max(0.45, baseR * (1 - taper * t / (double) h) + (hash01(seed, t, 3) - 0.5) * 0.7);
+                    : Math.max(0.45, baseR * (1 - taper * lt) + (hash01(seed, t, 3) - 0.5) * 0.7);
+            if (t == h) { tcx = cx; tcz = cz; tr = r; }
             int y = g + t;
             boolean band = t >= 0 && t % bandEvery == bandEvery - 1;
             int ri = (int) Math.ceil(r);
@@ -401,11 +500,18 @@ public final class GeoFeatures {
                 for (int dx = -ri; dx <= ri; dx++) {
                     if (dx * dx + dz * dz > r * r + 0.3) continue;
                     boolean shell = dx * dx + dz * dz > (r - 1) * (r - 1);
+                    // 风蚀微孔：中段表层 5% 缺格
+                    if (shell && t > 1 && t < h - 1
+                            && hash01(seed ^ 0x9C0DL, cx * 7 + dx, cz * 11 + dz + t * 5) < 0.05) continue;
                     Material m = band && shell ? st.band()
                             : hash01(seed, dx * 17 + t, dz * 13 + 1) < 0.28 ? st.vary() : st.core();
-                    edits.add(new BlockEdit(ox + lx + dx, y, oz + lz + dz, BlockSpec.of(m)));
+                    edits.add(new BlockEdit(ox + cx + dx, y, oz + cz + dz, BlockSpec.of(m)));
                 }
             }
+        }
+        // 顶面收头：细顶 40% 盖台阶（顶不圆平）
+        if (st.slab() != null && tr <= 1.6 && hash01(seed, 11, 8) < 0.4) {
+            edits.add(new BlockEdit(ox + tcx, g + h + 1, oz + tcz, BlockSpec.of(st.slab())));
         }
     }
 

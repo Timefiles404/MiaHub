@@ -46,7 +46,7 @@ public final class TerraService {
                            double vScale, int softStartY, int maxY,
                            boolean autoEco, int ecoMinCells, int ecoCap, long maxEcoFootprint,
                            boolean caves, boolean cliffErosion, boolean geoFeatures,
-                           int splitCells, int mapMaxSize) { }
+                           int splitCells, int mapMaxSize, double riverDensity) { }
 
     public Settings settings() { return st; }
 
@@ -176,11 +176,13 @@ public final class TerraService {
         final boolean withEco;
         final boolean mapMode;
         final int mpb;                 // 比例尺：每格米数（15/30/60/120）
+        final boolean openEdge;        // true=四周不强制为海（断崖边缘 + 山体增幅）
         final HeightMapper mapper;
         final CaveCarver carver;       // 洞穴/崖蚀共用噪声（都关则 null）
         final AtomicBoolean cancelled = new AtomicBoolean(false);
         final TerraProgress progress;
         volatile String stageName = "准备";
+        volatile List<RiverPlanner.River> rivers = List.of();   // 全局河道（runMapTiled 规划一次）
 
         Job(CommandSender sender, String world, EcoWorlds.Entry entry, Region sel, boolean withEco) {
             this.sender = sender;
@@ -190,11 +192,19 @@ public final class TerraService {
             this.withEco = withEco;
             this.mapMode = entry != null && entry.map != null;
             this.mpb = mapMode ? entry.map.metersPerBlock() : 0;   // 0=画布模式走 provider 默认路径
-            this.mapper = new HeightMapper(st.vScale(), st.softStartY(), st.maxY(),
+            this.openEdge = mapMode && entry.map.openEdge();
+            double ys = mapMode ? Math.max(0.5, Math.min(2.5, entry.map.yScale())) : 1.0;
+            this.mapper = new HeightMapper(st.vScale() / ys, st.softStartY(), st.maxY(),
                     mapMode ? entry.map.seaLevel() : HeightMapper.SEA_LEVEL);
             this.carver = entry != null && (st.caves() || st.cliffErosion())
                     ? new CaveCarver(entry.seed ^ 0xCA4EL) : null;
             this.progress = new TerraProgress(plugin, sender, world == null ? "" : world);
+        }
+
+        /** open 模式的山体增幅：高地渐进 +35%（低地几乎不动）——增强山体生成欲望。 */
+        private float boost(float m) {
+            if (!openEdge || m <= 0) return m;
+            return m * (1 + 0.35f * Math.min(1f, m / 900f));
         }
 
         void runPrefetch() {
@@ -281,7 +291,7 @@ public final class TerraService {
 
         /** 地图世界：分片流水线（推理→铺设→地貌→生态 逐片推进，超大地图内存恒定，断点可续）。 */
         private void runMapTiled() throws Exception {
-            final int APRON = 8;                     // 规划裙边：坡度/滩涂跨片连续
+            final int APRON = 16;                    // 规划裙边：坡度/滩涂/海岸带跨片连续
             int s = entry.map.size();
             int p = mpb <= 15 ? 0 : Math.max(1, mpb / 30);
             int tile = p == 0 || p == 1 ? 960 : p == 2 ? 768 : 480;   // 单片原生跨度 ≤~2000
@@ -290,6 +300,19 @@ public final class TerraService {
             ensureModels();
             checkCancel();
             LocalTerrainProvider.init(entry.seed);
+            // 全局河流规划：coarse 粗扫整张地图（秒级），定线一次、逐片栅格化（断点续跑可重算，确定性）
+            if (st.riverDensity() > 0 && s >= 320) {
+                stage("河流规划（全图 coarse 粗扫）");
+                try {
+                    rivers = planRivers(mapX1, mapZ1, s);
+                    int nodes = rivers.stream().mapToInt(r -> r.nodes().size()).sum();
+                    progress.chat(rivers.isEmpty() ? "本图高地不足，未规划出河流。"
+                            : "规划出 " + rivers.size() + " 条河（" + nodes + " 节点，蜿蜒合流，源自高地入海）。");
+                } catch (Exception e) {
+                    plugin.getLogger().log(Level.WARNING, "river plan", e);
+                    progress.chat("河流规划失败（跳过河流）: " + rootMsg(e));
+                }
+            }
             List<EcoWorlds.Patch> already = List.copyOf(entry.patches);
             int total = nT * nT, idx = 0, skipped = 0;
             long t0 = System.currentTimeMillis();
@@ -422,83 +445,137 @@ public final class TerraService {
         }
 
         /**
-         * 地图分片规划：数据带 APRON 裙边取回，坡度/滩涂邻域对裙边取值 → 跨片无缝；
-         * 边缘岛屿衰减按整张地图的全局边距计算。产出的 Plan 只含核心区。
+         * 地图分片规划（0.22.0 重排）：数据带 APRON 裙边取回，全部逐列变换都在<b>扩展网格</b>
+         * 上做（河流栅格化/水岸齐平/平原节奏/海岸带/地表混合都是世界坐标纯函数）→ 跨片无缝；
+         * 边缘岛屿衰减按整张地图的全局边距（open 模式跳过衰减 + 山体增幅）。Plan 只含核心区。
          */
         private Plan buildPlanMap(LocalTerrainProvider.HeightmapData data,
                                   int x1, int z1, int W, int H, int apron,
                                   int mapX1, int mapZ1, int mapSize) {
             int EW = W + 2 * apron, EH = H + 2 * apron;
             int band = Math.max(24, Math.min(96, mapSize / 8));
+            int sea = mapper.sea();
             int[] ey = new int[EW * EH];
             boolean[] eWater = new boolean[EW * EH];
             boolean[] eOcean = new boolean[EW * EH];
+            short[] eBio = new short[EW * EH];
             for (int ez = 0; ez < EH; ez++) {
                 for (int ex = 0; ex < EW; ex++) {
                     int gx = x1 - apron + ex, gz = z1 - apron + ez;
                     int d = Math.min(Math.min(gx - mapX1, gz - mapZ1),
                             Math.min(mapX1 + mapSize - 1 - gx, mapZ1 + mapSize - 1 - gz));
-                    float m = edgeFalloff(data.heightmap[ez][ex], d, band);
+                    float m = boost(data.heightmap[ez][ex]);
+                    if (!openEdge) m = edgeFalloff(m, d, band);
                     int y = mapper.yOf(m);
                     int i = ez * EW + ex;
                     ey[i] = y;
                     eOcean[i] = m < 0;
-                    eWater[i] = m < 0 && y < mapper.sea();
+                    eWater[i] = m < 0 && y < sea;
+                    // 平原节奏：大平原按大尺度噪声翻出小林班/疏林/草甸（纯世界坐标函数）
+                    eBio[i] = PlanOps.rhythm(data.biomeIds[ez][ex], gx, gz, entry.seed ^ 0x4174L);
                 }
             }
+            // ---- 全局河流栅格化：改写 ey、标河道/水位/浅滩，并写河群系 ----
+            boolean[] eRiver = new boolean[EW * EH];
+            boolean[] eShoal = new boolean[EW * EH];
+            int[] eWl = new int[EW * EH];
+            java.util.Arrays.fill(eWl, sea);
+            if (!rivers.isEmpty()) {
+                RiverPlanner.rasterize(rivers, ey, eWater, eRiver, eWl, eShoal,
+                        EW, EH, x1 - apron, z1 - apron);
+                for (int i = 0; i < EW * EH; i++) {
+                    if (eRiver[i]) {
+                        eBio[i] = EcoBiomes.snowySurface(eBio[i]) || eBio[i] == 16 || eBio[i] == 116
+                                ? EcoBiomes.FROZEN_RIVER : EcoBiomes.RIVER;
+                    }
+                }
+            }
+            // ---- 水岸齐平：贴海的 sea+1 陆列压到 sea（-- 而非 -_）----
+            PlanOps.flushShore(ey, eWater, eRiver, eShoal, EW, EH, sea);
+            // ---- 坡度（4 邻，齐平/河道之后）----
+            byte[] eSlope = new byte[EW * EH];
+            for (int ez = 1; ez < EH - 1; ez++) {
+                for (int ex = 1; ex < EW - 1; ex++) {
+                    int e = ez * EW + ex, y = ey[e];
+                    int sl = Math.max(Math.max(Math.abs(ey[e - 1] - y), Math.abs(ey[e + 1] - y)),
+                            Math.max(Math.abs(ey[e - EW] - y), Math.abs(ey[e + EW] - y)));
+                    eSlope[e] = (byte) Math.min(127, sl);
+                }
+            }
+            // ---- 海岸带群系：红树/砾石滩/滨海草甸/海岸崖/椰林沙滩，森林退出海岸 ----
+            int[] coast = PlanOps.coastDistance(eWater, eOcean, EW, EH, PlanOps.COAST_BAND);
+            PlanOps.coastal(eBio, coast, ey, eSlope, EW, EH, sea,
+                    x1 - apron, z1 - apron, entry.seed ^ 0xC057L);
+            // ---- 核心区拷贝 ----
             Plan p = new Plan(W, H);
+            java.util.Arrays.fill(p.wlvl, sea);
             int ocean = 0;
             for (int z = 0; z < H; z++) {
                 for (int x = 0; x < W; x++) {
                     int i = z * W + x;
                     int e = (z + apron) * EW + x + apron;
                     p.y[i] = ey[e];
-                    p.water[i] = eWater[e];
+                    p.water[i] = eWater[e] || eRiver[e];
+                    p.river[i] = eRiver[e];
+                    p.wlvl[i] = eRiver[e] ? eWl[e] : sea;
+                    p.shoal[i] = eShoal[e];
                     p.rawOcean[i] = eOcean[e];
-                    p.biome[i] = data.biomeIds[z + apron][x + apron];
-                    if (p.water[i]) ocean++;
+                    p.biome[i] = eBio[e];
+                    p.slope[i] = eSlope[e];
+                    short b = eBio[e];
+                    p.beach[i] = b == EcoBiomes.BEACH || b == EcoBiomes.SNOWY_BEACH
+                            || b == 92 || b == 93 || b == 94;
+                    if (eWater[e]) ocean++;
                     if (p.y[i] < p.minY) p.minY = p.y[i];
                     if (p.y[i] > p.maxY) p.maxY = p.y[i];
                 }
             }
             p.oceanPct = Math.round(1000.0 * ocean / (W * H)) / 10.0;
-            for (int z = 0; z < H; z++) {
-                for (int x = 0; x < W; x++) {
-                    int i = z * W + x;
-                    int e = (z + apron) * EW + x + apron;
-                    // 滩涂：3 格邻域读裙边（跨片一致），并重标记合成滩涂群系
-                    if (!p.water[i] && p.y[i] <= mapper.sea() + 2) {
-                        outer:
-                        for (int dz = -3; dz <= 3; dz++) {
-                            for (int dx = -3; dx <= 3; dx++) {
-                                if (eWater[e + dz * EW + dx]) {
-                                    p.beach[i] = true;
-                                    p.biome[i] = EcoBiomes.snowySurface(p.biome[i])
-                                            ? EcoBiomes.SNOWY_BEACH : EcoBiomes.BEACH;
-                                    break outer;
-                                }
-                            }
-                        }
-                    }
-                    // 坡度：4 邻读裙边（片界无一格断层）
-                    int y = ey[e], sl = 0;
-                    sl = Math.max(sl, Math.abs(ey[e - 1] - y));
-                    sl = Math.max(sl, Math.abs(ey[e + 1] - y));
-                    sl = Math.max(sl, Math.abs(ey[e - EW] - y));
-                    sl = Math.max(sl, Math.abs(ey[e + EW] - y));
-                    p.slope[i] = (byte) Math.min(127, sl);
-                }
-            }
+            // ---- 群系交界地表散点过渡（读扩展群系，跨片一致）----
+            PlanOps.surfaceMix(eBio, eWater, EW, EH, p.mix, p.mixP, apron, apron, W, H);
             long ops = 0;
             for (int i = 0; i < W * H; i++) {
                 ops += 24 + 5;
-                if (p.water[i]) ops += mapper.sea() - p.y[i];
+                if (p.water[i]) ops += Math.max(0, p.wlvl[i] - p.y[i]);
                 ops += 12;
                 if (st.caves() && !p.water[i]) ops += 3;
                 if (st.cliffErosion() && !p.water[i] && p.slope[i] >= 5) ops += 2;
             }
             p.totalOps = ops;
             return p;
+        }
+
+        /** 全局河流规划：coarse 张量（~128 格/像素）双线性成高度场，与铺设同一映射链。 */
+        private List<RiverPlanner.River> planRivers(int mapX1, int mapZ1, int s) throws Exception {
+            double npb = mpb <= 15 ? 1.0 / Math.max(1, TerrainConfig.scale()) : mpb / 30.0; // 原生px/格
+            int ci0 = (int) Math.floor(mapZ1 * npb / 256.0) - 1;
+            int cj0 = (int) Math.floor(mapX1 * npb / 256.0) - 1;
+            int ci1 = (int) Math.ceil((mapZ1 + s) * npb / 256.0) + 2;
+            int cj1 = (int) Math.ceil((mapX1 + s) * npb / 256.0) + 2;
+            var t = LocalTerrainProvider.getPipelineCoarse(ci0, cj0, ci1, cj1);
+            int CH = ci1 - ci0, CW = cj1 - cj0;
+            float[][] elev = new float[CH][CW];
+            for (int r = 0; r < CH; r++) {
+                for (int c = 0; c < CW; c++) {
+                    float w = t.data[6 * CH * CW + r * CW + c];
+                    float v = w > 1e-6f ? t.data[r * CW + c] / w : 0f;
+                    elev[r][c] = Math.signum(v) * v * v;         // elev_sqrt → 米
+                }
+            }
+            int band = Math.max(24, Math.min(96, s / 8));
+            RiverPlanner.HeightField hf = (wx, wz) -> {
+                double gi = wz * npb / 256.0 - ci0 - 0.5;
+                double gj = wx * npb / 256.0 - cj0 - 0.5;
+                float m = boost(bilinear(elev, CH, CW, gi, gj));
+                if (!openEdge) {
+                    int d = (int) Math.min(Math.min(wx - mapX1, wz - mapZ1),
+                            Math.min(mapX1 + s - 1 - wx, mapZ1 + s - 1 - wz));
+                    m = edgeFalloff(m, d, band);
+                }
+                return mapper.yOfF(m);
+            };
+            return RiverPlanner.plan(hf, mapper.sea(), mapX1, mapZ1, s,
+                    entry.seed ^ 0x51E77AL, st.riverDensity());
         }
 
         /** 取地形数据：画布走 provider 标准路径（scale=2 上采样+噪声）；地图按比例尺取原生/池化。 */
@@ -667,6 +744,7 @@ public final class TerraService {
         private Plan buildPlan(LocalTerrainProvider.HeightmapData data,
                                int x1, int z1, int W, int H, List<EcoWorlds.Patch> old) {
             Plan p = new Plan(W, H);
+            java.util.Arrays.fill(p.wlvl, mapper.sea());   // 画布：水面恒为海平面
             int F = st.feather();
             // 画布：各边逐行/列判定“朝外 2 格是否落在旧选区”→ 该投影位免羽化
             boolean[] openW = new boolean[H], openE = new boolean[H], openN = new boolean[W], openS = new boolean[W];
@@ -826,14 +904,31 @@ public final class TerraService {
                         edits.add(new BlockEdit(wx, y - k, wz, BlockSpec.of(skin[k])));
                     }
                     if (water) {
-                        boolean frozen = EcoBiomes.isFrozenOcean(b);
-                        for (int yy = y + 1; yy <= mapper.sea(); yy++) {
-                            boolean top = yy == mapper.sea();
+                        int wl = p.wlvl[i];
+                        boolean frozen = EcoBiomes.isFrozenOcean(b) || b == EcoBiomes.FROZEN_RIVER;
+                        for (int yy = y + 1; yy <= wl; yy++) {
+                            boolean top = yy == wl;
                             edits.add(new BlockEdit(wx, yy, wz,
                                     top && frozen ? BlockSpec.of(Material.ICE) : BlockSpec.of(Material.WATER)));
                         }
+                        // 河道轻植被：缓宽段浅水海草 + 零星睡莲（确定性哈希，湍窄段自然稀）
+                        if (p.river[i] && !frozen && wl - y >= 1) {
+                            double fh = hash01(entry.seed ^ 0xF10AL, wx, wz);
+                            if (fh < 0.07 && wl - y >= 2) {
+                                edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.of(Material.SEAGRASS)));
+                            } else if (fh > 0.975 && wl - y >= 2) {
+                                edits.add(new BlockEdit(wx, wl + 1, wz, BlockSpec.of(Material.LILY_PAD)));
+                            }
+                        }
                     } else if (EcoBiomes.snowySurface(b) && skin[0] != Material.SNOW_BLOCK) {
                         edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.snow(1)));
+                    } else if (p.shoal[i] && y == mapper.sea() && !EcoBiomes.snowySurface(b)
+                            && hash01(entry.seed ^ 0x2EEDL, wx, wz) < 0.05) {
+                        // 齐平海岸零星芦苇（支撑面与邻水同高，甘蔗合法）
+                        int ch = 1 + (int) (hash01(entry.seed ^ 0x2EEEL, wx, wz) * 3);
+                        for (int k = 1; k <= ch; k++) {
+                            edits.add(new BlockEdit(wx, y + k, wz, BlockSpec.of(Material.SUGAR_CANE)));
+                        }
                     }
                     // 陡坡崖面凹蚀：柱身中段抠内凹，悬出的表皮从崖侧看即是外挑岩檐
                     if (carver != null && st.cliffErosion() && !water && p.slope[i] >= 5) {
@@ -946,20 +1041,43 @@ public final class TerraService {
             return s.material.createBlockData();
         }
 
-        /** 顶皮决策：峰岩/雪块/沙漠/恶地/滩涂/水底/沼泽泥/常规草。 */
+        /** 顶皮决策：峰岩/雪块/沙漠/恶地/海岸带/水底/沼泽泥/常规草 + 交界散点混合。 */
         private Material[] skinFor(Plan p, int i, int wx, int wz) {
             short b = p.biome[i];
+            // 群系交界：按距离概率借邻群系的顶面块（只换最上一格，轻微咬合）
+            if (p.mix[i] != 0 && !p.water[i]
+                    && hash01(entry.seed ^ 0x51C0L, wx, wz) * 100 < (p.mixP[i] & 0xFF)) {
+                Material[] own = skinBase(p, i, b, wx, wz);
+                Material[] other = skinBase(p, i, p.mix[i], wx, wz);
+                if (other[0] != own[0]) {
+                    Material[] mixed = own.clone();
+                    mixed[0] = other[0];
+                    return mixed;
+                }
+                return own;
+            }
+            return skinBase(p, i, b, wx, wz);
+        }
+
+        private Material[] skinBase(Plan p, int i, short b, int wx, int wz) {
             int y = p.y[i];
             int slope = p.slope[i];
             double hash = hash01(entry.seed, wx, wz);
             if (p.water[i]) {
-                int depth = mapper.sea() - y;
+                int depth = p.wlvl[i] - y;
+                if (b == 92) return new Material[]{Material.MUD, Material.MUD, Material.CLAY};
                 if (depth <= 4) return new Material[]{Material.SAND, Material.SAND, Material.GRAVEL};
                 return hash < 0.5
                         ? new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE}
                         : new Material[]{Material.GRAVEL, Material.CLAY, Material.STONE};
             }
-            boolean rock = slope >= 5 || (slope >= 3 && y > 190) || b == 35;
+            // 齐平浅滩岸：贴水第一圈用沙/砾（冷区砾石），平滑不碎
+            if (p.shoal[i]) {
+                boolean cold = EcoBiomes.snowySurface(b) || b == 93;
+                return cold ? new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE}
+                        : new Material[]{Material.SAND, Material.SAND, Material.GRAVEL};
+            }
+            boolean rock = slope >= 5 || (slope >= 3 && y > 190) || b == 35 || b == 95;
             if (rock) {
                 Material top = hash < 0.45 ? Material.STONE : hash < 0.75 ? Material.ANDESITE : Material.TUFF;
                 return new Material[]{top, Material.STONE, Material.STONE};
@@ -968,42 +1086,70 @@ public final class TerraService {
             if (b == 5) return new Material[]{Material.SAND, Material.SAND, Material.SAND, Material.SANDSTONE};
             if (b == 26) return new Material[]{Material.RED_SAND, Material.TERRACOTTA,
                     Material.ORANGE_TERRACOTTA, Material.TERRACOTTA};
-            if (p.beach[i]) return new Material[]{Material.SAND, Material.SAND, Material.SANDSTONE};
+            if (b == 92) {
+                // 红树滩：泥地混草皮斑
+                return hash < 0.72 ? new Material[]{Material.MUD, Material.MUD, Material.DIRT}
+                        : new Material[]{Material.GRASS_BLOCK, Material.MUD, Material.DIRT};
+            }
+            if (b == 93) {
+                // 砾石滩：砾石为主混石头/圆石
+                Material top = hash < 0.62 ? Material.GRAVEL : hash < 0.84 ? Material.STONE
+                        : Material.COBBLESTONE;
+                return new Material[]{top, Material.GRAVEL, Material.STONE};
+            }
+            if (b == 94) {
+                // 滨海草甸：草皮，零星沙窝
+                return hash < 0.12 ? new Material[]{Material.SAND, Material.DIRT, Material.DIRT}
+                        : new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.DIRT};
+            }
+            if (b == EcoBiomes.BEACH || b == EcoBiomes.SNOWY_BEACH) {
+                return new Material[]{Material.SAND, Material.SAND, Material.SANDSTONE};
+            }
             if (b == 6 && hash < 0.3) return new Material[]{Material.MUD, Material.MUD, Material.DIRT};
             return new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.DIRT, Material.DIRT};
         }
 
         // ---- 阶段 6：地貌奇观 ----
 
-        /** 按群系自动散布地貌（含 KIND_NONE 的裸峰/冰峰/恶地——它们不生态但配地貌）。 */
+        /** 按群系自动散布地貌（含 KIND_NONE 的裸峰/冰峰/恶地——它们不生态但配地貌）。
+         *  各区生成为纯函数 → 并行规划吃满多核，按区序合并保证确定性。 */
         private void runGeo(Plan p, int x1, int z1, int W, int H) {
             stage("地貌奇观");
             List<RegionSegmenter.EcoRegion> regions = RegionSegmenter.segment(
                     p.biome, W, H, 200, 32, GeoFeatures::geoBiome);
+            record GeoOut(List<BlockEdit> edits, String display, int spots) { }
+            List<GeoOut> outs = java.util.stream.IntStream.range(0, regions.size()).parallel()
+                    .mapToObj(k -> {
+                        RegionSegmenter.EcoRegion r = regions.get(k);
+                        double rh = hash01(entry.seed ^ 0x6E0L, r.minLX(), r.minLZ());
+                        GeoFeatures.BiomeGeo bg = GeoFeatures.geoFor(r.biomeId(), rh);
+                        if (bg == null) return null;
+                        final int bx = r.minLX(), bz = r.minLZ();
+                        GeoFeatures.Surface surf = new GeoFeatures.Surface() {
+                            @Override public int w() { return r.maxLX() - r.minLX() + 1; }
+                            @Override public int h() { return r.maxLZ() - r.minLZ() + 1; }
+                            @Override public int y(int lx, int lz) { return p.y[(bz + lz) * W + bx + lx]; }
+                            @Override public boolean water(int lx, int lz) { return p.water[(bz + lz) * W + bx + lx]; }
+                            @Override public boolean ok(int lx, int lz) { return r.in(bx + lx, bz + lz); }
+                        };
+                        List<GeoFeatures.Spot> spots = new ArrayList<>();
+                        List<BlockEdit> edits = GeoFeatures.generate(bg.type(), bg.style(), surf,
+                                x1 + bx, z1 + bz,
+                                entry.seed ^ (bx * 0x9E3779B97F4A7C15L) ^ (bz * 0xC2B2AE3D27D4EB4FL),
+                                bg.intensity(), Math.min(316, st.maxY() + 16), spots);
+                        return new GeoOut(edits, GeoFeatures.display(bg.type()), spots.size());
+                    })
+                    .toList();
+            checkCancel();
             List<BlockEdit> all = new ArrayList<>();
             Map<String, Integer> counts = new java.util.LinkedHashMap<>();
             int spotsTotal = 0;
-            for (RegionSegmenter.EcoRegion r : regions) {
-                checkCancel();
-                double rh = hash01(entry.seed ^ 0x6E0L, r.minLX(), r.minLZ());
-                GeoFeatures.BiomeGeo bg = GeoFeatures.geoFor(r.biomeId(), rh);
-                if (bg == null) continue;
-                final int bx = r.minLX(), bz = r.minLZ();
-                GeoFeatures.Surface surf = new GeoFeatures.Surface() {
-                    @Override public int w() { return r.maxLX() - r.minLX() + 1; }
-                    @Override public int h() { return r.maxLZ() - r.minLZ() + 1; }
-                    @Override public int y(int lx, int lz) { return p.y[(bz + lz) * W + bx + lx]; }
-                    @Override public boolean water(int lx, int lz) { return p.water[(bz + lz) * W + bx + lx]; }
-                    @Override public boolean ok(int lx, int lz) { return r.in(bx + lx, bz + lz); }
-                };
-                List<GeoFeatures.Spot> spots = new ArrayList<>();
-                all.addAll(GeoFeatures.generate(bg.type(), bg.style(), surf,
-                        x1 + bx, z1 + bz,
-                        entry.seed ^ (bx * 0x9E3779B97F4A7C15L) ^ (bz * 0xC2B2AE3D27D4EB4FL),
-                        bg.intensity(), Math.min(316, st.maxY() + 16), spots));
-                if (!spots.isEmpty()) {
-                    counts.merge(GeoFeatures.display(bg.type()), spots.size(), Integer::sum);
-                    spotsTotal += spots.size();
+            for (GeoOut o : outs) {
+                if (o == null) continue;
+                all.addAll(o.edits());
+                if (o.spots() > 0) {
+                    counts.merge(o.display(), o.spots(), Integer::sum);
+                    spotsTotal += o.spots();
                 }
             }
             if (all.isEmpty()) {
@@ -1075,21 +1221,30 @@ public final class TerraService {
                     regions.add(r);
                 }
             }
-            progress.chat("识别出 " + raw.size() + " 块生态区（含海洋/海滩/荒漠简单生态"
+            progress.chat("识别出 " + raw.size() + " 块生态区（含海洋/海岸带/荒漠简单生态"
                     + (regions.size() > raw.size()
                     ? "；大区已自然切分为 " + regions.size() + " 份" : "") + "），逐区推进…");
             World w = Bukkit.getWorld(world);
+            // 简单生态是纯函数：全部并行预规划吃满多核，主循环按区序消费（结果确定）
+            Map<Integer, java.util.concurrent.CompletableFuture<List<BlockEdit>>> simplePre =
+                    new HashMap<>();
+            for (int k = 0; k < regions.size(); k++) {
+                RegionSegmenter.EcoRegion r = regions.get(k);
+                if (!SimpleEco.handles(r.biomeId())) continue;
+                simplePre.put(k, java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                        SimpleEco.generate(r.biomeId(),
+                                planView(p, W, r), x1 + r.minLX(), z1 + r.minLZ(),
+                                entry.seed ^ (r.minLX() * 0x9E3779B97F4A7C15L)
+                                        ^ (r.minLZ() * 0xC2B2AE3D27D4EB4FL), r.cells())));
+            }
             int n = 0;
             for (int k = 0; k < regions.size(); k++) {
                 checkCancel();
                 RegionSegmenter.EcoRegion r = regions.get(k);
                 EcoBiomes.Eco ecoDef = EcoBiomes.of(r.biomeId());
-                // 简单生态：海洋/海滩/荒漠/恶地——轻量散布，不建森林对象
+                // 简单生态：海洋/海岸带/荒漠/恶地——轻量散布，不建森林对象
                 if (SimpleEco.handles(r.biomeId())) {
-                    List<BlockEdit> simple = SimpleEco.generate(r.biomeId(),
-                            planView(p, W, r), x1 + r.minLX(), z1 + r.minLZ(),
-                            entry.seed ^ (r.minLX() * 0x9E3779B97F4A7C15L)
-                                    ^ (r.minLZ() * 0xC2B2AE3D27D4EB4FL), r.cells());
+                    List<BlockEdit> simple = simplePre.get(k).join();
                     if (!simple.isEmpty() && w != null) applyEditsSync(w, simple);
                     progress.update((k + 1.0) / regions.size(), "区域 " + (k + 1) + "/" + regions.size()
                             + " " + SimpleEco.display(r.biomeId()) + " (" + r.cells() + " 格)");
@@ -1127,6 +1282,9 @@ public final class TerraService {
                 for (Map.Entry<String, Double> fe : ecoDef.features().entrySet()) {
                     f.atmosphere().density(fe.getKey(), fe.getValue());
                 }
+                // 地图世界：河流由全局规划器统一定线（0.22.0），
+                // 关掉每区各刻一条的氛围河——那是"平行同向短直河"的根源
+                if (mapMode) f.atmosphere().density("river", 0);
                 // 有树种就种（开阔地的孤树/疏林也走同一条链）
                 boolean trees = species.length > 0;
                 if (trees) {
@@ -1267,6 +1425,11 @@ public final class TerraService {
         final boolean[] rawOcean;
         final boolean[] beach;
         final byte[] slope;
+        final int[] wlvl;        // 逐列水面 Y（海=sea，河=河段水位；无水列无意义）
+        final boolean[] river;   // 河道水列
+        final boolean[] shoal;   // 齐平浅滩岸（皮肤沙/砾）
+        final short[] mix;       // 交界混合的邻群系（0=不混）
+        final byte[] mixP;       // 混合概率 %
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
         double oceanPct;
         long totalOps;
@@ -1278,6 +1441,11 @@ public final class TerraService {
             rawOcean = new boolean[w * h];
             beach = new boolean[w * h];
             slope = new byte[w * h];
+            wlvl = new int[w * h];
+            river = new boolean[w * h];
+            shoal = new boolean[w * h];
+            mix = new short[w * h];
+            mixP = new byte[w * h];
         }
     }
 
@@ -1312,6 +1480,17 @@ public final class TerraService {
         double s = Math.max(0, d) / (double) band;
         s = s * s * (3 - 2 * s);
         return (float) (-45 + (meters + 45) * s);
+    }
+
+    /** 2D 双线性采样（越界钳边），河流规划的 coarse 高度场用。 */
+    public static float bilinear(float[][] src, int H, int W, double gy, double gx) {
+        double y = Math.max(0, Math.min(H - 1.0, gy));
+        double x = Math.max(0, Math.min(W - 1.0, gx));
+        int y0 = (int) y, y1 = Math.min(H - 1, y0 + 1);
+        int x0 = (int) x, x1 = Math.min(W - 1, x0 + 1);
+        double wy = y - y0, wx = x - x0;
+        return (float) ((1 - wy) * (1 - wx) * src[y0][x0] + (1 - wy) * wx * src[y0][x1]
+                + wy * (1 - wx) * src[y1][x0] + wy * wx * src[y1][x1]);
     }
 
     /**

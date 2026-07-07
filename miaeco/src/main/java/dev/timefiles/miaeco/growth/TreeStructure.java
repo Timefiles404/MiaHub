@@ -165,6 +165,55 @@ public final class TreeStructure {
         for (long[] a : add) put((int) a[0], (int) a[1], (int) a[2], Part.LEAF, (int) a[3]);
     }
 
+    /**
+     * 兜底冠盖（0.22.0）：树干顶端裸露在天空下（顶端 3×3、上方 3 格内无任何实体）时
+     * 补一小簇叶盖住——小树/细干树不再"秃杆朝天"。dy&lt;3 的树桩、倒木、根系不管
+     * （它们本就该裸露）。在树叶元胞自动机之后调用。
+     */
+    public void ensureCrownCover(Random rng) {
+        Map<Long, Integer> colTop = new LinkedHashMap<>();
+        Map<Long, Integer> colChannel = new LinkedHashMap<>();
+        for (Map.Entry<Long, Voxel> e : voxels.entrySet()) {
+            Voxel v = e.getValue();
+            if (!v.part.isWoody() || v.part == Part.STONE
+                    || v.part == Part.FENCE || v.part == Part.PLANK) continue;
+            long k = e.getKey();
+            int dx = sx21((int) ((k >> 42) & 0x1FFFFF));
+            int dy = sx21((int) ((k >> 21) & 0x1FFFFF));
+            int dz = sx21((int) (k & 0x1FFFFF));
+            long ck = key(dx, 0, dz);
+            Integer cur = colTop.get(ck);
+            if (cur == null || dy > cur) colTop.put(ck, dy);
+        }
+        for (Map.Entry<Long, Integer> e : colTop.entrySet()) {
+            int dy = e.getValue();
+            if (dy < 3) continue;
+            long ck = e.getKey();
+            int dx = sx21((int) ((ck >> 42) & 0x1FFFFF));
+            int dz = sx21((int) (ck & 0x1FFFFF));
+            boolean covered = false;
+            check:
+            for (int yy = dy + 1; yy <= dy + 3; yy++) {
+                for (int ox = -1; ox <= 1; ox++) {
+                    for (int oz = -1; oz <= 1; oz++) {
+                        if (solidAt(dx + ox, yy, dz + oz)) { covered = true; break check; }
+                    }
+                }
+            }
+            if (covered) continue;
+            // 小叶簇盖顶：中心 + 2~3 侧叶 + 顶叶
+            put(dx, dy + 1, dz, Part.LEAF, 0);
+            int[][] sides = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            int n = 2 + rng.nextInt(2);
+            int start = rng.nextInt(4);
+            for (int i = 0; i < n; i++) {
+                int[] d = sides[(start + i) % 4];
+                put(dx + d[0], dy + 1, dz + d[1], Part.LEAF, 0);
+            }
+            if (rng.nextDouble() < 0.7) put(dx, dy + 2, dz, Part.LEAF, 0);
+        }
+    }
+
     /** CA 之后清除失去支撑的依附装饰（叶被吃掉后残留的草/花/雪）。 */
     public void pruneUnsupportedDecor() {
         List<Long> remove = new ArrayList<>();

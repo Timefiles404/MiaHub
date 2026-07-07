@@ -36,8 +36,12 @@ public final class SimpleEco {
             case 41 -> "暖海";
             case 46 -> "寒带海洋";
             case 48 -> "冰原海";
-            case 90 -> "海滩";
+            case 90 -> "椰林沙滩";
             case 91 -> "雪滩";
+            case 92 -> "红树滩";
+            case 93 -> "砾石滩";
+            case 94 -> "滨海草甸";
+            case 95 -> "海岸崖";
             case 5 -> "荒漠";
             case 26 -> "恶地";
             case 17 -> "稀树草原";
@@ -59,6 +63,10 @@ public final class SimpleEco {
             case 48 -> frozen(out, v, ox, oz, seed);
             case 90 -> beach(out, v, ox, oz, seed, false);
             case 91 -> beach(out, v, ox, oz, seed, true);
+            case 92 -> mangrove(out, v, ox, oz, seed);
+            case 93 -> gravelShore(out, v, ox, oz, seed);
+            case 94 -> coastalMeadow(out, v, ox, oz, seed);
+            case 95 -> coastCliff(out, v, ox, oz, seed);
             case 5 -> desert(out, v, ox, oz, seed, cells);
             case 26 -> badlands(out, v, ox, oz, seed);
             case 17 -> savanna(out, v, ox, oz, seed, cells);
@@ -156,14 +164,25 @@ public final class SimpleEco {
                 }
             }
         }
-        for (int cz = 0; cz * 30 < v.h(); cz++) {
-            for (int cx = 0; cx * 30 < v.w(); cx++) {
-                if (hash01(seed ^ 0x9A17L, cx, cz) >= 0.45) continue;
-                int lx = cx * 30 + (int) (hash01(seed, cx * 7 + 3, cz) * 30);
-                int lz = cz * 30 + (int) (hash01(seed, cx, cz * 11 + 4) * 30);
-                if (lx < 5 || lz < 5 || lx >= v.w() - 5 || lz >= v.h() - 5) continue;
+        // 椰林：成簇 2~4 株（同簇彼此错开高矮/倾向）——"沙滩+椰子树"的群系主角
+        for (int cz = 0; cz * 26 < v.h(); cz++) {
+            for (int cx = 0; cx * 26 < v.w(); cx++) {
+                if (hash01(seed ^ 0x9A17L, cx, cz) >= 0.55) continue;
+                int lx = cx * 26 + (int) (hash01(seed, cx * 7 + 3, cz) * 26);
+                int lz = cz * 26 + (int) (hash01(seed, cx, cz * 11 + 4) * 26);
+                if (lx < 6 || lz < 6 || lx >= v.w() - 6 || lz >= v.h() - 6) continue;
                 if (!v.ok(lx, lz) || v.water(lx, lz)) continue;
-                palm(out, v, ox, oz, lx, lz, mix(seed ^ 0xA17L, lx, lz));
+                long cs = mix(seed ^ 0xA17L, lx, lz);
+                int count = 2 + (int) (hash01(cs, 9, 9) * 2.4);
+                for (int k = 0; k < count; k++) {
+                    double ang = hash01(cs, k, 21) * Math.PI * 2;
+                    double dist = k == 0 ? 0 : 2.5 + hash01(cs, k, 22) * 4;
+                    int px = lx + (int) Math.round(Math.cos(ang) * dist);
+                    int pz = lz + (int) Math.round(Math.sin(ang) * dist);
+                    if (px < 3 || pz < 3 || px >= v.w() - 3 || pz >= v.h() - 3) continue;
+                    if (!v.ok(px, pz) || v.water(px, pz)) continue;
+                    palm(out, v, ox, oz, px, pz, mix(cs, px, pz));
+                }
             }
         }
     }
@@ -204,6 +223,194 @@ public final class SimpleEco {
             int gx = tx + dirs[d][0] * 2, gz = tz + dirs[d][1] * 2;
             if (gx >= 0 && gz >= 0 && gx < v.w() && gz < v.h()) {
                 out.add(new BlockEdit(ox + gx, g + h - 1, oz + gz, BlockSpec.of(Material.JUNGLE_LEAVES)));
+            }
+        }
+    }
+
+    // ============================ 海岸带（0.22.0） ============================
+
+    /**
+     * 红树滩：浅水红树（曼格罗夫根撑起短干 + 圆冠）+ 泥滩根瘤 + 岸上蕨草。
+     * 树立在水深 ≤2 的浅水与贴水泥地上——海陆之间的过渡林。
+     */
+    private static void mangrove(List<BlockEdit> out, View v, int ox, int oz, long seed) {
+        for (int cz = 0; cz * 12 < v.h(); cz++) {
+            for (int cx = 0; cx * 12 < v.w(); cx++) {
+                if (hash01(seed ^ 0x3A26L, cx, cz) >= 0.5) continue;
+                int lx = cx * 12 + (int) (hash01(seed, cx * 5 + 1, cz) * 12);
+                int lz = cz * 12 + (int) (hash01(seed, cx, cz * 7 + 2) * 12);
+                if (lx < 4 || lz < 4 || lx >= v.w() - 4 || lz >= v.h() - 4) continue;
+                if (!v.ok(lx, lz)) continue;
+                boolean inWater = v.water(lx, lz);
+                int ground = v.y(lx, lz);
+                int depth = inWater ? v.sea() - ground : 0;
+                if (depth > 2) continue;                        // 只站浅水/泥滩
+                mangroveTree(out, v, ox, oz, lx, lz, mix(seed, lx, lz),
+                        inWater ? v.sea() : ground);
+            }
+        }
+        // 泥滩点缀：根瘤木 + 蕨草
+        for (int lz = 0; lz < v.h(); lz++) {
+            for (int lx = 0; lx < v.w(); lx++) {
+                if (!v.ok(lx, lz) || v.water(lx, lz)) continue;
+                double h = hash01(seed ^ 0x3A27L, ox + lx, oz + lz);
+                int y = v.y(lx, lz);
+                if (h < 0.008) {
+                    out.add(new BlockEdit(ox + lx, y + 1, oz + lz,
+                            BlockSpec.of(Material.MANGROVE_ROOTS)));
+                } else if (h < 0.05) {
+                    out.add(new BlockEdit(ox + lx, y + 1, oz + lz, BlockSpec.of(
+                            hash01(seed, lx, lz + 3) < 0.6 ? Material.FERN : Material.SHORT_GRASS)));
+                }
+            }
+        }
+    }
+
+    /** 一株小红树：架空根（4 向斜根）+ 短干 + 饱满圆冠 + 垂根须。waterTop=站水时的水面。 */
+    private static void mangroveTree(List<BlockEdit> out, View v, int ox, int oz,
+                                     int lx, int lz, long seed, int waterTop) {
+        int base = waterTop;                                     // 根颈在水面/地表
+        int rootBottom = v.y(lx, lz);                            // 根扎到床底
+        // 中柱根 + 4 向撑根
+        for (int y = rootBottom; y <= base + 1; y++) {
+            out.add(new BlockEdit(ox + lx, y, oz + lz, BlockSpec.of(Material.MANGROVE_ROOTS)));
+        }
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (int d = 0; d < 4; d++) {
+            if (hash01(seed, d, 1) < 0.25) continue;
+            int px = lx + dirs[d][0], pz = lz + dirs[d][1];
+            if (px < 0 || pz < 0 || px >= v.w() || pz >= v.h()) continue;
+            int pg = v.y(px, pz);
+            for (int y = Math.max(pg, base - 2); y <= base; y++) {
+                out.add(new BlockEdit(ox + px, y, oz + pz, BlockSpec.of(Material.MANGROVE_ROOTS)));
+            }
+        }
+        int h = 2 + (int) (hash01(seed, 2, 2) * 3);
+        for (int t = 2; t <= h + 1; t++) {
+            out.add(new BlockEdit(ox + lx, base + t, oz + lz,
+                    BlockSpec.log(Material.MANGROVE_LOG, Axis.Y)));
+        }
+        // 圆冠：2 层十字盘
+        int cy = base + h + 1;
+        for (int dz = -2; dz <= 2; dz++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                if (dx * dx + dz * dz > 5) continue;
+                if (lx + dx < 0 || lz + dz < 0 || lx + dx >= v.w() || lz + dz >= v.h()) continue;
+                if (hash01(seed, dx * 3, dz * 5) < 0.12) continue;
+                out.add(new BlockEdit(ox + lx + dx, cy, oz + lz + dz,
+                        BlockSpec.of(Material.MANGROVE_LEAVES)));
+                if (dx * dx + dz * dz <= 2) {
+                    out.add(new BlockEdit(ox + lx + dx, cy + 1, oz + lz + dz,
+                            BlockSpec.of(Material.MANGROVE_LEAVES)));
+                }
+                // 冠缘垂根须
+                if (dx * dx + dz * dz > 2 && hash01(seed, dx * 7, dz * 11) < 0.3) {
+                    out.add(new BlockEdit(ox + lx + dx, cy - 1, oz + lz + dz,
+                            BlockSpec.of(Material.HANGING_ROOTS)));
+                }
+            }
+        }
+    }
+
+    /** 砾石滩：卵石堆 + 浮木 + 贴水零星海草——冷硬的石头海岸。 */
+    private static void gravelShore(List<BlockEdit> out, View v, int ox, int oz, long seed) {
+        for (int cz = 0; cz * 16 < v.h(); cz++) {
+            for (int cx = 0; cx * 16 < v.w(); cx++) {
+                if (hash01(seed ^ 0x6BA7L, cx, cz) >= 0.3) continue;
+                int lx = cx * 16 + (int) (hash01(seed, cx * 3 + 1, cz) * 16);
+                int lz = cz * 16 + (int) (hash01(seed, cx, cz * 5 + 2) * 16);
+                if (lx < 3 || lz < 3 || lx >= v.w() - 3 || lz >= v.h() - 3) continue;
+                if (!v.ok(lx, lz) || v.water(lx, lz)) continue;
+                long bs = mix(seed, lx, lz);
+                int y = v.y(lx, lz);
+                // 卵石堆：3~6 块连体（1~2 层）
+                int want = 3 + (int) (hash01(bs, 1, 1) * 4);
+                int px = lx, pz = lz;
+                for (int k = 0; k < want; k++) {
+                    Material m = hash01(bs, k, 2) < 0.5 ? Material.COBBLESTONE
+                            : hash01(bs, k, 3) < 0.5 ? Material.STONE : Material.ANDESITE;
+                    out.add(new BlockEdit(ox + px, v.y(px, pz) + 1, oz + pz, BlockSpec.of(m)));
+                    if (k == 0 && hash01(bs, 7, 7) < 0.45) {
+                        out.add(new BlockEdit(ox + px, y + 2, oz + pz, BlockSpec.of(m)));
+                    }
+                    int d = (int) (hash01(bs, k, 4) * 4);
+                    px = Math.max(1, Math.min(v.w() - 2, px + (d == 0 ? 1 : d == 1 ? -1 : 0)));
+                    pz = Math.max(1, Math.min(v.h() - 2, pz + (d == 2 ? 1 : d == 3 ? -1 : 0)));
+                    if (v.water(px, pz)) break;
+                }
+            }
+        }
+        for (int cz = 0; cz * 20 < v.h(); cz++) {
+            for (int cx = 0; cx * 20 < v.w(); cx++) {
+                if (hash01(seed ^ 0xD1F2L, cx, cz) >= 0.2) continue;
+                int lx = cx * 20 + (int) (hash01(seed, cx * 3 + 2, cz) * 20);
+                int lz = cz * 20 + (int) (hash01(seed, cx, cz * 7 + 3) * 20);
+                if (lx < 4 || lz < 4 || lx >= v.w() - 4 || lz >= v.h() - 4) continue;
+                if (!v.ok(lx, lz) || v.water(lx, lz)) continue;
+                driftwood(out, v, ox, oz, lx, lz, mix(seed ^ 0xD1FL, lx, lz));
+            }
+        }
+    }
+
+    /** 滨海草甸：高草浪 + 沙丘草簇 + 杜鹃矮丛 + 野花——海与森林之间的开阔缓冲带。 */
+    private static void coastalMeadow(List<BlockEdit> out, View v, int ox, int oz, long seed) {
+        for (int lz = 0; lz < v.h(); lz++) {
+            for (int lx = 0; lx < v.w(); lx++) {
+                if (!v.ok(lx, lz) || v.water(lx, lz)) continue;
+                int wx = ox + lx, wz = oz + lz;
+                double band = patch(seed ^ 0x9EAD0L, wx, wz, 22.0);   // 草浪成片
+                double h = hash01(seed, wx, wz);
+                int y = v.y(lx, lz);
+                if (band > 0.55 && h < 0.34) {
+                    if (h < 0.10) {
+                        out.add(new BlockEdit(wx, y + 1, wz, BlockSpec.of(Material.TALL_GRASS)));
+                        out.add(new BlockEdit(wx, y + 2, wz, BlockSpec.upperHalf(Material.TALL_GRASS)));
+                    } else {
+                        out.add(new BlockEdit(wx, y + 1, wz, BlockSpec.of(Material.SHORT_GRASS)));
+                    }
+                } else if (h < 0.012) {
+                    out.add(new BlockEdit(wx, y + 1, wz, BlockSpec.of(
+                            hash01(seed, wx, wz + 5) < 0.5 ? Material.OXEYE_DAISY : Material.CORNFLOWER)));
+                } else if (h > 0.996) {
+                    // 杜鹃矮丛：2~4 叶块小团
+                    Material leaf = hash01(seed, wx, wz + 9) < 0.7
+                            ? Material.AZALEA_LEAVES : Material.FLOWERING_AZALEA_LEAVES;
+                    out.add(new BlockEdit(wx, y + 1, wz, BlockSpec.of(leaf)));
+                    if (lx + 1 < v.w() && !v.water(lx + 1, lz) && hash01(seed, wx, wz + 11) < 0.6) {
+                        out.add(new BlockEdit(wx + 1, v.y(lx + 1, lz) + 1, wz, BlockSpec.of(leaf)));
+                    }
+                    if (hash01(seed, wx, wz + 13) < 0.4) {
+                        out.add(new BlockEdit(wx, y + 2, wz, BlockSpec.of(leaf)));
+                    }
+                }
+            }
+        }
+        for (int cz = 0; cz * 34 < v.h(); cz++) {
+            for (int cx = 0; cx * 34 < v.w(); cx++) {
+                if (hash01(seed ^ 0xD1F3L, cx, cz) >= 0.16) continue;
+                int lx = cx * 34 + (int) (hash01(seed, cx * 3 + 4, cz) * 34);
+                int lz = cz * 34 + (int) (hash01(seed, cx, cz * 5 + 6) * 34);
+                if (lx < 4 || lz < 4 || lx >= v.w() - 4 || lz >= v.h() - 4) continue;
+                if (!v.ok(lx, lz) || v.water(lx, lz)) continue;
+                driftwood(out, v, ox, oz, lx, lz, mix(seed ^ 0xD1F4L, lx, lz));
+            }
+        }
+    }
+
+    /** 海岸崖：崖面裸岩不加植被，崖肩零星蕨/枯草/苔斑——荒凉即是风景。 */
+    private static void coastCliff(List<BlockEdit> out, View v, int ox, int oz, long seed) {
+        for (int lz = 0; lz < v.h(); lz++) {
+            for (int lx = 0; lx < v.w(); lx++) {
+                if (!v.ok(lx, lz) || v.water(lx, lz)) continue;
+                double h = hash01(seed ^ 0xC11FL, ox + lx, oz + lz);
+                int y = v.y(lx, lz);
+                if (h < 0.02) {
+                    out.add(new BlockEdit(ox + lx, y + 1, oz + lz, BlockSpec.of(Material.FERN)));
+                } else if (h < 0.032) {
+                    out.add(new BlockEdit(ox + lx, y + 1, oz + lz, BlockSpec.of(Material.DEAD_BUSH)));
+                } else if (h < 0.044) {
+                    out.add(new BlockEdit(ox + lx, y + 1, oz + lz, BlockSpec.of(Material.MOSS_CARPET)));
+                }
             }
         }
     }

@@ -33,6 +33,9 @@ public final class HeightMapper {
 
     public int sea() { return seaLevel; }
 
+    /** 米/格（河流规划的平滑高度场用同一比例）。 */
+    public double vScale() { return vScale; }
+
     /** 高程（米）→ 地表方块 Y（该列最上一格固体）。 */
     public int yOf(float meters) {
         if (meters >= 0f) {
@@ -45,6 +48,18 @@ public final class HeightMapper {
         // 海底：sqrt 压缩，浅海细腻、深海收敛
         int depth = (int) Math.floor(Math.sqrt(-meters + 10) - Math.sqrt(10.0)) + 1;
         return Math.max(minFloorY, seaLevel - depth);
+    }
+
+    /** {@link #yOf} 的连续版（河流规划要平滑梯度；同一映射不取整）。 */
+    public float yOfF(float meters) {
+        if (meters >= 0f) {
+            double y = seaLevel + 1 + meters / vScale;
+            if (y <= softStartY) return (float) y;
+            double span = Math.max(1, maxY - softStartY);
+            return (float) (softStartY + span * Math.tanh((y - softStartY) / span));
+        }
+        double depth = Math.sqrt(-meters + 10) - Math.sqrt(10.0) + 1;
+        return (float) Math.max(minFloorY, seaLevel - depth);
     }
 
     /**

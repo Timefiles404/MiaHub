@@ -24,6 +24,14 @@ public final class EcoBiomes {
     /** 合成滩涂 id（buildPlan 对近水低地重标记）。 */
     public static final short BEACH = 90;
     public static final short SNOWY_BEACH = 91;
+    /** 0.22.0 合成海岸带 id（PlanOps.coastal 重标记）。 */
+    public static final short MANGROVE_SHORE = 92;
+    public static final short GRAVEL_SHORE = 93;
+    public static final short COASTAL_MEADOW = 94;
+    public static final short COAST_CLIFF = 95;
+    /** 0.22.0 合成河流 id（RiverPlanner 栅格化标记）。 */
+    public static final short RIVER = 96;
+    public static final short FROZEN_RIVER = 97;
 
     private static final Map<Short, Eco> TABLE = Map.ofEntries(
             // ---- 森林类 ----
@@ -56,11 +64,17 @@ public final class EcoBiomes {
             e(44,  "ocean",        KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 海草甸/海带林
             e(46,  "cold_ocean",   KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 稀疏海草/砾石孤石
             e(48,  "frozen_ocean", KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 冰面压脊/冰丘
-            e(90,  "beach",        KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 浮木/甘蔗/棕榈
+            e(90,  "beach",        KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 椰林沙滩
             e(91,  "snowy_beach",  KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 浮木
+            e(92,  "mangrove_swamp", KIND_SIMPLE, null, new String[0], 0, Map.of()), // 红树滩
+            e(93,  "stony_shore",  KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 砾石滩
+            e(94,  "plains",       KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 滨海草甸
+            e(95,  "stony_shore",  KIND_SIMPLE, null, new String[0], 0, Map.of()),   // 海岸崖
             // ---- 不生态 ----
             e(33, "frozen_peaks", KIND_NONE, null, new String[0], 0, Map.of()),
-            e(35, "stony_peaks",  KIND_NONE, null, new String[0], 0, Map.of())
+            e(35, "stony_peaks",  KIND_NONE, null, new String[0], 0, Map.of()),
+            e(96, "river",        KIND_NONE, null, new String[0], 0, Map.of()),
+            e(97, "frozen_river", KIND_NONE, null, new String[0], 0, Map.of())
     );
 
     private static Map.Entry<Short, Eco> e(int id, String key, int kind, String theme,

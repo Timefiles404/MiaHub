@@ -115,7 +115,8 @@ public final class EcoManager {
                 cfg.getBoolean(tb + "cliff-erosion", true),
                 cfg.getBoolean(tb + "geo-features", true),
                 cfg.getInt(tb + "split-cells", 90000),
-                cfg.getInt(tb + "map-max-size", 10240)));
+                cfg.getInt(tb + "map-max-size", 10240),
+                cfg.getDouble(tb + "rivers", 1.0)));
         this.geoService = new dev.timefiles.miaeco.terrain.GeoService(plugin, workerPool);
 
         plugin.getLogger().info("MiaEco 引擎就绪：" + workerThreads + " 工作线程，已加载 "

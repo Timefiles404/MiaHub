@@ -92,6 +92,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 Long seed = null;
                 Integer size = null;
                 int scaleM = 30, sea = 63;
+                boolean openEdge = false;
+                double yscale = 1.0;
                 for (int i = 3; i < args.length; i++) {
                     String a = args[i];
                     int eq = a.indexOf('=');
@@ -111,6 +113,14 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                             case "size" -> size = Integer.parseInt(v);
                             case "scale" -> scaleM = Integer.parseInt(v);
                             case "sea" -> sea = Integer.parseInt(v);
+                            case "edge" -> {
+                                if (!v.equalsIgnoreCase("sea") && !v.equalsIgnoreCase("open")) {
+                                    sender.sendMessage(P + ChatColor.RED + "edge 只支持 sea（四周为海）/ open（断崖边缘+山体增幅）。");
+                                    return;
+                                }
+                                openEdge = v.equalsIgnoreCase("open");
+                            }
+                            case "yscale" -> yscale = Double.parseDouble(v);
                             default -> { sender.sendMessage(P + ChatColor.RED + "未知参数 " + k); return; }
                         }
                     } catch (NumberFormatException e) {
@@ -131,6 +141,10 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                         return;
                     }
                     if (sea < 0 || sea > 200) { sender.sendMessage(P + ChatColor.RED + "sea 需在 0~200。"); return; }
+                    if (yscale < 0.5 || yscale > 2.5) {
+                        sender.sendMessage(P + ChatColor.RED + "yscale 需在 0.5~2.5（1=默认，越大山越高）。");
+                        return;
+                    }
                     // CPU 推理耗时预估提示（512² 原生 ≈ 27s 标定）
                     long nativeSpan = scaleM <= 15 ? Math.max(1, size / 2L) : (long) size * (scaleM / 30);
                     double hours = nativeSpan * nativeSpan / (512.0 * 512.0) * 27 / 3600.0;
@@ -140,7 +154,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                                 "提示：这张图 CPU 推理预计约 %.1f 小时（分片推进可随时 cancel，"
                                         + "terra resume 续跑）。config 里 terrain.device=gpu 可大幅加速。", hours));
                     }
-                    map = new dev.timefiles.miaeco.world.EcoWorlds.MapSpec(size, scaleM, sea);
+                    map = new dev.timefiles.miaeco.world.EcoWorlds.MapSpec(size, scaleM, sea, openEdge, yscale);
                 }
                 sender.sendMessage(P + ChatColor.GRAY + "创建世界中…");
                 String err = worlds.create(args[2], seed, map);
@@ -149,6 +163,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 if (map != null) {
                     sender.sendMessage(P + ChatColor.GREEN + "地图世界 " + args[2] + " 已建（seed=" + s
                             + " size=" + size + " 比例尺=" + scaleM + "m/格 海平面=" + sea
+                            + (openEdge ? " 边缘=断崖" : "") + (yscale != 1.0 ? " yscale=" + yscale : "")
                             + "，覆盖真实地貌约 " + (size * scaleM / 1000) + "×" + (size * scaleM / 1000)
                             + "km），开始自动生成…");
                     String e2 = eco.terra().startMap(sender, args[2]);
@@ -239,8 +254,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
 
     private void helpWorld(CommandSender s) {
         msg(s, "/miaeco world create <名> [seed=N]", "新建平原画布世界（选区式 terra gen）");
-        msg(s, "/miaeco world create <名> size=N [scale=15|30|60|120] [sea=Y]",
-                "新建地图世界：虚空+中心 N×N 自动地形与生态；scale=每格米数");
+        msg(s, "/miaeco world create <名> size=N [scale=15|30|60|120] [sea=Y] [edge=sea|open] [yscale=X]",
+                "新建地图世界：虚空+中心 N×N 自动地形与生态；edge=open 四周不强制为海（断崖边缘+更强山体）；yscale 竖向缩放 0.5~2.5");
         msg(s, "/miaeco world list | tp <名>", "列出/传送");
         msg(s, "/miaeco world regen <名> [seed=N] confirm", "地图世界删档重生成（默认换新种子）");
         msg(s, "/miaeco world remove <名> confirm", "卸载并删除世界文件");
@@ -941,7 +956,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             else if (a0.equals("plant")) addMatches(out, args[2], "instant");
         } else if (args.length >= 4 && args[0].equalsIgnoreCase("world")
                 && args[1].equalsIgnoreCase("create")) {
-            addMatches(out, args[args.length - 1], "size=400", "scale=30", "scale=60", "sea=63", "seed=");
+            addMatches(out, args[args.length - 1], "size=400", "scale=30", "scale=60", "sea=63",
+                    "edge=open", "yscale=1.4", "seed=");
         } else if (args.length >= 4 && args[0].equalsIgnoreCase("world")
                 && args[1].equalsIgnoreCase("regen")) {
             addMatches(out, args[args.length - 1], "confirm", "seed=");

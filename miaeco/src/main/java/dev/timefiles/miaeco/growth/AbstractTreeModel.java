@@ -43,6 +43,7 @@ public abstract class AbstractTreeModel implements GrowthModel {
         }
         if (stage == GrowthStage.YOUNG || stage == GrowthStage.MATURE || stage == GrowthStage.OLD) {
             if (naturalize()) s.naturalizeLeaves(rng);
+            s.ensureCrownCover(rng);                    // 活树树干不裸露天空（CA 后兜底）
             s.pruneUnsupportedDecor();                  // CA 之后清掉失去支撑的草/花/雪
         }
         return s;

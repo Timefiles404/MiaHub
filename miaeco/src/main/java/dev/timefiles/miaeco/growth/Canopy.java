@@ -76,6 +76,10 @@ public final class Canopy {
      * 椭球叶壳：只放外壳 1~2 格厚，底面压平且更稀疏，随机开孔——
      * 内部完全中空，方块数是实心球的 1/3~1/5 且更透光。
      * <b>小裂片（rAvg&lt;2.3）自动转实心</b>：太小的壳会被元胞自动机蚕食成碎渣。
+     *
+     * <p>0.22.0 冠面粗糙化：上半球逐列随机内蚀（打破光滑穹顶轮廓）+ 顶面
+     * 成对凸簇——树顶从"圆整密壳"变成参差的松散冠面（内蚀/凸簇按列哈希确定，
+     * 成对凸起在元胞自动机下有足够邻居存活）。
      */
     public static ShellCells shell(TreeStructure s, Lobe l, double gapChance, Random rng) {
         ShellCells cells = new ShellCells();
@@ -83,6 +87,7 @@ public final class Canopy {
         boolean solid = rAvg < 2.3;
         double thick = Math.min(0.75, 2.0 / Math.max(2.0, rAvg));   // 壳厚（归一化）
         double inner = solid ? -1 : (1.0 - thick) * (1.0 - thick);
+        long jSeed = rng.nextLong();                                // 列蚀盐（确定性）
         int x0 = (int) Math.floor(l.cx() - l.rx()), x1 = (int) Math.ceil(l.cx() + l.rx());
         int y0 = (int) Math.floor(l.cy() - l.ry()), y1 = (int) Math.ceil(l.cy() + l.ry());
         int z0 = (int) Math.floor(l.cz() - l.rz()), z1 = (int) Math.ceil(l.cz() + l.rz());
@@ -95,6 +100,11 @@ public final class Canopy {
                     double nz = (z - l.cz()) / l.rz();
                     double d = nx * nx + ny * ny + nz * nz;
                     if (d > 1.0 || d < inner) continue;
+                    // 上半球逐列内蚀：外边界随列哈希收缩 ≤26%（d 为归一化平方距离）
+                    if (!solid && ny > 0.30) {
+                        double j = hash01(jSeed, x, z);
+                        if (d > 1.0 - 0.26 * j * j * (0.4 + 0.6 * ny)) continue;
+                    }
                     if (bottom && rng.nextDouble() < (solid ? 0.25 : 0.55)) continue;  // 平底
                     if (rng.nextDouble() < gapChance * (solid ? 0.5 : 1)) continue;    // 开孔
                     s.put(x, y, z, Part.LEAF, l.channel());
@@ -106,7 +116,33 @@ public final class Canopy {
                 }
             }
         }
+        // 顶面凸簇：约 1/6 的冠面列向上顶出 1（偶 2）格，成对放置抗 CA 蚕食
+        if (!solid) {
+            java.util.List<int[]> bumps = new java.util.ArrayList<>();
+            for (int[] c : cells.top) {
+                double j = hash01(jSeed ^ 0xB0B5L, c[0], c[2]);
+                if (j >= 0.16) continue;
+                s.put(c[0], c[1] + 1, c[2], Part.LEAF, l.channel());
+                bumps.add(new int[]{c[0], c[1] + 1, c[2]});
+                int sx = c[0] + (hash01(jSeed, c[0], c[2] + 7) < 0.5 ? 1 : -1);
+                s.put(sx, c[1] + 1, c[2], Part.LEAF, l.channel());
+                bumps.add(new int[]{sx, c[1] + 1, c[2]});
+                if (j < 0.04) {
+                    s.put(c[0], c[1] + 2, c[2], Part.LEAF, l.channel());
+                    bumps.add(new int[]{c[0], c[1] + 2, c[2]});
+                }
+            }
+            cells.top.addAll(bumps);
+        }
         return cells;
+    }
+
+    private static double hash01(long seed, int x, int z) {
+        long h = seed ^ (x * 0x9E3779B97F4A7C15L) ^ (z * 0xC2B2AE3D27D4EB4FL);
+        h = (h ^ (h >>> 30)) * 0xBF58476D1CE4E5B9L;
+        h = (h ^ (h >>> 27)) * 0x94D049BB133111EBL;
+        h ^= h >>> 31;
+        return (h >>> 11) / (double) (1L << 53);
     }
 
     /**
