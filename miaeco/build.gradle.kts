@@ -67,6 +67,28 @@ tasks.register<JavaExec>("dumpTerra") {
     args(layout.buildDirectory.dir("terradump").get().asFile.absolutePath)
 }
 
+// 离线河流地形平面图（edge=open + yscale，真实权重）：build/rivermap/river_map.png
+tasks.register<JavaExec>("riverMap") {
+    group = "verification"
+    description = "Render an open-edge map with global rivers to build/rivermap"
+    dependsOn("compileJava")
+    mainClass.set("dev.timefiles.miaeco.tool.RiverMapTool")
+    classpath = files(
+        provider { project.the<JavaPluginExtension>().sourceSets["main"].output },
+        provider { project.configurations["compileClasspath"] },
+        provider { terraTool }
+    )
+    jvmArgs("-Xmx" + (findProperty("miaeco.dumpXmx") ?: "3g"))
+    systemProperty("miaeco.modelDir",
+        (findProperty("miaeco.modelDir")
+            ?: rootProject.projectDir.parentFile.resolve("references/terrain-diffusion/weights").absolutePath).toString())
+    systemProperty("miaeco.device", (findProperty("miaeco.device") ?: "cpu").toString())
+    systemProperty("miaeco.mapSize", (findProperty("miaeco.mapSize") ?: "1024").toString())
+    systemProperty("miaeco.mapSeed", (findProperty("miaeco.mapSeed") ?: "20260707").toString())
+    systemProperty("miaeco.yscale", (findProperty("miaeco.yscale") ?: "2.0").toString())
+    args(layout.buildDirectory.dir("rivermap").get().asFile.absolutePath)
+}
+
 // 离线开发工具：导出各树种×阶段×体型的生成结构（无需服务器），供渲染核对形态。
 // classpath 用 provider 延迟解析（java 插件由根脚本 subprojects 注入，避免时序问题）。
 tasks.register<JavaExec>("dumpTrees") {

@@ -53,7 +53,13 @@ MiaEco 是 MiaHub monorepo（`Timefiles404/MiaHub`）里的一个 Paper 1.21.x /
   - **山侧月牙塘**：山肩选址（外向 3 格骤降≥4、背靠山体）→ 突出平台挖 1~2 格灌水，
     水面=双圆交集之补集的一半（月牙、凸弧朝崖外）；围水完整性预检防漏水
   - 特征间避让：湖/塘列 claimed，soil/树圈/paths 全部绕开
-- **0.22.0（本版）** 全局河流 + 海岸带 + 水岸齐平 + 树冠/奇观自然化 + 多核（回应用户
+- **0.22.1（本版）** 热修平地涡旋河：坡向≈0 时正弦摆单边持续转向→原地绕圈打结
+  （424242 种子平面图实锤）。turnEma=0.9·turnEma+turn，|EMA|>2.4 即内流收束——正常
+  蜿蜒左右交替 EMA 有界 ~1.2 不受影响；riverRun 加 chord/path<0.08 且 path>400 的
+  KNOT 断言。附离线出图工具 `gradle :miaeco:riverMap [-Pmiaeco.device=gpu]
+  [-Pmiaeco.mapSeed=N] [-Pmiaeco.yscale=2.0]`（真实权重渲染 open 地图河流平面图，
+  GPU 下 1024² 全图 ~15s）
+- **0.22.0** 全局河流 + 海岸带 + 水岸齐平 + 树冠/奇观自然化 + 多核（回应用户
   九条：直线平行河/海岸群系缺失/秃顶树/水岸 -_ 台阶/森林密度均匀/平原连片/奇观僵硬/
   地表过渡/edge&yscale）：
   - **RiverPlanner 全局河流**（`terrain/RiverPlanner`，纯函数）：runMapTiled 开始时

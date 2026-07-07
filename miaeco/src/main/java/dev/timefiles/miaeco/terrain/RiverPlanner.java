@@ -141,6 +141,7 @@ public final class RiverPlanner {
         double wavelen = 90 + hash01(seed, 1, 2) * 70;
         double phase = hash01(seed, 2, 1) * Math.PI * 2;
         int rising = 0;
+        double turnEma = 0;                                      // 同向转向累计（平地涡旋检测）
         for (int i = 0; i < 900; i++) {
             float ground = h.yAt(x, z);
             wl = Math.min(wl, ground);
@@ -168,8 +169,12 @@ public final class RiverPlanner {
                     * (0.85 / (1 + slope * 2.2));
             double jitter = (hash01(seed ^ 0x11EL, i, 0) - 0.5) * 0.22;
             double target = downA + sway + jitter;
-            double turn = angDiff(target, ang);
-            ang += Math.max(-0.35, Math.min(0.35, turn));
+            double turn = Math.max(-0.35, Math.min(0.35, angDiff(target, ang)));
+            ang += turn;
+            // 平地涡旋：坡向消失时正弦摆会单边持续转向→原地绕圈打结。
+            // 正常蜿蜒左右交替（EMA 有界 ~1.2），持续同向即止于此（终点潴留）
+            turnEma = turnEma * 0.9 + turn;
+            if (i > 20 && Math.abs(turnEma) > 2.4) return nodes;
             double nx = x + Math.cos(ang) * STEP;
             double nz = z + Math.sin(ang) * STEP;
             if (h.yAt(nx, nz) > ground + 0.02) {

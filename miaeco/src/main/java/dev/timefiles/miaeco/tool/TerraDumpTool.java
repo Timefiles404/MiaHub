@@ -101,6 +101,10 @@ public final class TerraDumpTool {
                     System.out.printf("RIVER TOO STRAIGHT chord/path=%.3f len=%.0f%n", chord / path, path);
                     fail = true;
                 }
+                if (chord / path < 0.08 && path > 400) {
+                    System.out.printf("RIVER KNOT (平地涡旋) chord/path=%.3f len=%.0f%n", chord / path, path);
+                    fail = true;
+                }
             }
         }
         // 栅格化：齐平岸 + 跨片一致
