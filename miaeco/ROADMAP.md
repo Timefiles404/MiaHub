@@ -53,7 +53,18 @@ MiaEco 是 MiaHub monorepo（`Timefiles404/MiaHub`）里的一个 Paper 1.21.x /
   - **山侧月牙塘**：山肩选址（外向 3 格骤降≥4、背靠山体）→ 突出平台挖 1~2 格灌水，
     水面=双圆交集之补集的一半（月牙、凸弧朝崖外）；围水完整性预检防漏水
   - 特征间避让：湖/塘列 claimed，soil/树圈/paths 全部绕开
-- **0.21.1（本版）** 热修：/miah update 热更新时服务器 OOM 崩溃（Paper PluginRemapper）：
+- **0.21.2（本版）** 配置自动升级（用户："没看到 device 啊"——老服 config.yml 是 0.1 时代
+  生成的，saveDefaultConfig 从不补新键，0.18+ 的整个 terrain 段都不在文件里）：
+  - **ConfigMigrator**：以内置默认配置原文为模板（中文注释全保留），把磁盘旧配置里
+    值不同的标量键原位替换（行尾注释重挂对齐；同名键按路径隔离——engine.blocks-per-tick
+    777 与 terrain.blocks-per-tick 20000 互不串位），列表键保持默认文本；旧文件备份
+    config.old.yml；键集齐全时幂等跳过。EcoManager.start 在读配置前调用
+  - plugin.yml 增 `restart-required: true`（PlugSite 0f2c576 起识别此键 → /miah 更新
+    走"落盘+提示重启"）；`gradle :miaeco:checkConfigMigration -Pmiaeco.oldConfig=…`
+    离线校验任务（用用户真实旧配置验过：新段注入/旧值保留/注释完整）
+  - 教训：**Bukkit saveDefaultConfig 只管首装**——加过配置键的插件必须自带迁移，
+    否则老服务器永远看不到新开关
+- **0.21.1** 热修：/miah update 热更新时服务器 OOM 崩溃（Paper PluginRemapper）：
   - 根因：Paper 1.21.4 运行时加载插件要**整 jar 重映射**——加载反向映射表即需数百 MB 堆
     （OOM 栈在 reversedMappingsFuture），热更新时旧 MiaEco 实例还在堆里 → 小堆服务器爆
   - 修复①：jar manifest 声明 `paperweight-mappings-namespace: mojang`（纯 Bukkit API、

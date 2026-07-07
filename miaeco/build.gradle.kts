@@ -28,6 +28,23 @@ tasks.jar {
     }
 }
 
+// 配置迁移离线校验：-Pmiaeco.oldConfig=<旧配置> [-Pmiaeco.mergedOut=<输出>]
+tasks.register<JavaExec>("checkConfigMigration") {
+    group = "verification"
+    description = "Merge an old config.yml against the bundled default (comment-preserving)"
+    dependsOn("compileJava")
+    mainClass.set("dev.timefiles.miaeco.util.ConfigMigrator")
+    classpath = files(
+        provider { project.the<JavaPluginExtension>().sourceSets["main"].output },
+        provider { project.configurations["compileClasspath"] }
+    )
+    args(
+        project.file("src/main/resources/config.yml").absolutePath,
+        (findProperty("miaeco.oldConfig") ?: project.file("src/main/resources/config.yml").absolutePath).toString(),
+        (findProperty("miaeco.mergedOut") ?: layout.buildDirectory.file("merged-config.yml").get().asFile.absolutePath).toString()
+    )
+}
+
 // 离线地形验证：真实权重跑扩散管线，导出高度场/群系/森林分区，供渲染与校验。
 // 需先把权重放到 references/terrain-diffusion/weights（或 -Pmiaeco.modelDir=… 指定）。
 tasks.register<JavaExec>("dumpTerra") {

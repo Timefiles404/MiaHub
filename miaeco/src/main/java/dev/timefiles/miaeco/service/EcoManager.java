@@ -53,6 +53,9 @@ public final class EcoManager {
 
     public void start() {
         plugin.saveDefaultConfig();
+        // 老配置自动补新键（注释与旧值保留，备份 config.old.yml）——
+        // saveDefaultConfig 只管"文件不存在"，升级插件后新配置项全靠这一步落盘
+        dev.timefiles.miaeco.util.ConfigMigrator.migrate(plugin);
         this.cfg = plugin.getConfig();
 
         int cores = Runtime.getRuntime().availableProcessors();

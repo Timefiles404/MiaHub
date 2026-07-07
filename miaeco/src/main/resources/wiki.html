@@ -61,6 +61,9 @@
 <tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（147 棵建筑师设计树）</td></tr>
 </table>
 
+<h2>0.21.2 配置自动升级</h2>
+<p><b>老服务器的 config.yml 会自动补齐新配置项了：</b>Bukkit 只在文件不存在时写默认配置，所以早期装的服务器永远看不到后来新增的开关（比如整个 <code>terrain:</code> 段——GPU 的 <code>device</code> 就在里面）。现在插件启动时自动升级：新键带着完整中文注释补进去，你改过的旧值原位保留，原文件备份为 <code>config.old.yml</code>。更新到本版重启一次，再打开 config.yml 就能看到全部配置项。</p>
+
 <h2>0.21.1 热修 · 更新崩溃与 jar 瘦身</h2>
 <p><b>修复 /miah update 时服务器 OOM 崩溃：</b>根因是 Paper 运行时加载插件要对整只 jar 做重映射（映射表就吃几百 MB 堆）。现在 jar 声明了 mojang 映射命名空间（本插件纯 Bukkit API）——<b>Paper 直接跳过重映射</b>；同时 ONNX 推理引擎的 native 库移出插件包（jar 12.6MB → 约 5MB），首次使用地形功能时自动下载（CPU 版 93MB，一次性，断点续传）。<b>MiaEco 更新现在标记为需重启生效</b>：/miah update 后请重启服务器——嵌入原生推理引擎的插件热替换有先天风险，重启是最稳的路径。</p>
 
