@@ -124,6 +124,36 @@ public final class PlanOps {
         return dist;
     }
 
+    // ============================ 河畔湿地 ============================
+
+    /**
+     * 宽缓大河两岸的湿地重标记：栅格化标出的湿地候选（L_WET，宽河齐平岸）±3 格内的
+     * 暖温带低地按斑块噪声改成沼泽(6)——大河沿岸自然长出柳树/红树与浓水氛围。
+     * 纯 (世界坐标, eLand) 函数，跨片一致（湿地带 ≤ 裙边）。
+     */
+    public static void riparian(short[] eBio, byte[] eLand, int EW, int EH,
+                                int ox, int oz, long seed) {
+        for (int lz = 0; lz < EH; lz++) {
+            for (int lx = 0; lx < EW; lx++) {
+                int i = lz * EW + lx;
+                short b = eBio[i];
+                // 只翻暖温带的低地开阔/森林类；雪原/荒漠/海岸带/河湖不动
+                if (!(b == 1 || b == 8 || b == 108 || b == 29 || b == 17 || b == 23)) continue;
+                boolean near = eLand[i] == RiverPlanner.L_WET;
+                for (int d = 1; d <= 3 && !near; d++) {
+                    if (lx - d >= 0 && eLand[i - d] == RiverPlanner.L_WET) near = true;
+                    else if (lx + d < EW && eLand[i + d] == RiverPlanner.L_WET) near = true;
+                    else if (lz - d >= 0 && eLand[i - d * EW] == RiverPlanner.L_WET) near = true;
+                    else if (lz + d < EH && eLand[i + d * EW] == RiverPlanner.L_WET) near = true;
+                }
+                if (!near) continue;
+                if (patch(seed ^ 0x3E77L, ox + lx, oz + lz, 46.0) > 0.42) {
+                    eBio[i] = 6;
+                }
+            }
+        }
+    }
+
     // ============================ 水岸齐平 ============================
 
     /**

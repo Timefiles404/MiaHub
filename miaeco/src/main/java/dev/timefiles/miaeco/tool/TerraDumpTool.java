@@ -61,7 +61,7 @@ public final class TerraDumpTool {
         if (fail) System.exit(1);
     }
 
-    /** 河流规划：合成山地→海的高度场上定线，验证 非空/水位单调/蜿蜒度/齐平岸/跨片一致。 */
+    /** 水文规划：合成 山地→海 + 内陆盆地 场上建流域，验证 湖/汇流/泉/单调/齐平/跨片一致。 */
     private static boolean riverRun() {
         final int SZ = 1200, sea = 63;
         var mapper = new HeightMapper(40, 250, 300, sea);
@@ -69,17 +69,53 @@ public final class TerraDumpTool {
             double base = 420 - (wx + SZ / 2.0) * 0.42;          // 西山东海（~10.5 格落差）
             double hills = 55 * Math.sin(wx / 97.0) * Math.cos(wz / 83.0)
                     + 34 * Math.sin((wx + wz) / 61.0);
-            return mapper.yOfF((float) (base + hills));
+            double bowl = -320 * Math.exp(-(Math.pow(wx + 210, 2) + Math.pow(wz - 140, 2))
+                    / (130.0 * 130.0));                          // 内陆封闭盆地（测湖）
+            return mapper.yOfF((float) (base + hills + bowl));
         };
-        var rivers = dev.timefiles.miaeco.terrain.RiverPlanner.plan(
+        var plan = dev.timefiles.miaeco.terrain.RiverPlanner.plan(
                 hf, sea, -SZ / 2, -SZ / 2, SZ, SEED, 1.3);
         boolean fail = false;
-        if (rivers.isEmpty()) {
+        if (plan.rivers().isEmpty()) {
             System.out.println("RIVER EMPTY");
             return true;
         }
+        var mains = plan.rivers().stream()
+                .filter(r -> r.kind() == dev.timefiles.miaeco.terrain.RiverPlanner.R_MAIN).toList();
+        if (plan.lakes().isEmpty()) {
+            System.out.println("RIVER LAKE FAIL（盆地未成湖）");
+            fail = true;
+        }
+        if (mains.size() < 4) {
+            System.out.println("RIVER NETWORK FAIL 干支流仅 " + mains.size());
+            fail = true;
+        }
+        // 汇流：某条干支流终点贴上另一条的河身
+        int junctions = 0, springs = 0;
+        for (var r : mains) {
+            var end = r.nodes().get(r.nodes().size() - 1);
+            if (r.nodes().get(0).kind() == dev.timefiles.miaeco.terrain.RiverPlanner.K_SPRING) springs++;
+            for (var o : mains) {
+                if (o == r) continue;
+                for (var n : o.nodes()) {
+                    if (Math.hypot(n.x() - end.x(), n.z() - end.z()) < 12) {
+                        junctions++;
+                        break;
+                    }
+                }
+                if (junctions > 0 && r == mains.get(mains.size() - 1)) break;
+            }
+        }
+        if (junctions == 0) {
+            System.out.println("RIVER JUNCTION FAIL（无汇流）");
+            fail = true;
+        }
+        if (springs == 0) {
+            System.out.println("RIVER SPRING FAIL（无泉眼源头）");
+            fail = true;
+        }
         double worstChord = 1;
-        for (var r : rivers) {
+        for (var r : mains) {
             var ns = r.nodes();
             int prevWl = Integer.MAX_VALUE;
             double path = 0;
@@ -93,7 +129,7 @@ public final class TerraDumpTool {
                 if (i > 0) path += Math.hypot(ns.get(i).x() - ns.get(i - 1).x(),
                         ns.get(i).z() - ns.get(i - 1).z());
             }
-            if (path > 220) {
+            if (path > 260) {
                 double chord = Math.hypot(ns.get(ns.size() - 1).x() - ns.get(0).x(),
                         ns.get(ns.size() - 1).z() - ns.get(0).z());
                 worstChord = Math.min(worstChord, chord / path);
@@ -102,28 +138,35 @@ public final class TerraDumpTool {
                     fail = true;
                 }
                 if (chord / path < 0.08 && path > 400) {
-                    System.out.printf("RIVER KNOT (平地涡旋) chord/path=%.3f len=%.0f%n", chord / path, path);
+                    System.out.printf("RIVER KNOT chord/path=%.3f len=%.0f%n", chord / path, path);
                     fail = true;
                 }
             }
         }
-        // 栅格化：齐平岸 + 跨片一致
-        int EW = 420, EH = 420, ox = -210, ozr = -210;
+        // 栅格化：齐平岸（河+湖）+ 跨片一致
+        int EW = 480, EH = 480, ox = -240, ozr = -60;            // 覆盖盆地湖区
         int[] ey = new int[EW * EH];
         boolean[] eWater = new boolean[EW * EH];
-        for (int z = 0; z < EH; z++)
-            for (int x = 0; x < EW; x++) ey[z * EW + x] = (int) Math.floor(hf.yAt(ox + x + 0.5, ozr + z + 0.5));
+        for (int z = 0; z < EH; z++) {
+            for (int x = 0; x < EW; x++) {
+                float y = hf.yAt(ox + x + 0.5, ozr + z + 0.5);
+                ey[z * EW + x] = (int) Math.floor(y);
+                eWater[z * EW + x] = y < sea - 0.5f;
+            }
+        }
         int[] eyB = ey.clone();
         boolean[] eRiver = new boolean[EW * EH];
         boolean[] eShoal = new boolean[EW * EH];
+        byte[] eLand = new byte[EW * EH];
         int[] eWl = new int[EW * EH];
         java.util.Arrays.fill(eWl, sea);
         dev.timefiles.miaeco.terrain.RiverPlanner.rasterize(
-                rivers, ey, eWater, eRiver, eWl, eShoal, EW, EH, ox, ozr);
-        int riverCols = 0, flushBank = 0, leaks = 0;
+                plan, ey, eWater, eRiver, eWl, eShoal, eLand, EW, EH, ox, ozr);
+        int riverCols = 0, flushBank = 0, leaks = 0, wetCols = 0;
         for (int z = 1; z < EH - 1; z++) {
             for (int x = 1; x < EW - 1; x++) {
                 int i = z * EW + x;
+                if (eLand[i] == dev.timefiles.miaeco.terrain.RiverPlanner.L_WET) wetCols++;
                 if (!eRiver[i]) continue;
                 riverCols++;
                 if (ey[i] >= eWl[i]) {
@@ -132,8 +175,16 @@ public final class TerraDumpTool {
                 }
                 for (int[] d : new int[][]{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
                     int ni = (z + d[1]) * EW + x + d[0];
-                    if (eRiver[ni]) continue;
-                    if (ey[ni] < eWl[i]) leaks++;               // 岸低于水位=漏水
+                    if (eRiver[ni] || eWater[ni]) continue;
+                    if (ey[ni] < eWl[i]) {
+                        leaks++;                                // 岸低于水位=漏水
+                        if (leaks <= 10) {
+                            System.out.printf("LEAK @(%d,%d)世界(%d,%d): 水列wl=%d floor=%d, "
+                                            + "岸ey=%d land=%d shoal=%b%n",
+                                    x, z, ox + x, ozr + z, eWl[i], ey[i],
+                                    ey[ni], eLand[ni], eShoal[ni]);
+                        }
+                    }
                     if (ey[ni] == eWl[i]) flushBank++;          // 齐平岸（--）
                 }
             }
@@ -142,31 +193,38 @@ public final class TerraDumpTool {
             System.out.println("RIVER BANK FAIL leaks=" + leaks + " flush=" + flushBank);
             fail = true;
         }
-        // 跨片一致：偏移窗口重算，重叠区必须逐位一致
-        int EW2 = 300, EH2 = 300, ox2 = ox + 100, oz2 = ozr + 100;
+        // 跨片一致：偏移窗口重算，重叠区必须逐位一致（含地貌层）
+        int EW2 = 340, EH2 = 340, ox2 = ox + 100, oz2 = ozr + 100;
         int[] ey2 = new int[EW2 * EH2];
-        for (int z = 0; z < EH2; z++)
-            for (int x = 0; x < EW2; x++) ey2[z * EW2 + x] = eyB[(z + 100) * EW + x + 100];
         boolean[] eWater2 = new boolean[EW2 * EH2];
+        for (int z = 0; z < EH2; z++) {
+            for (int x = 0; x < EW2; x++) {
+                ey2[z * EW2 + x] = eyB[(z + 100) * EW + x + 100];
+                eWater2[z * EW2 + x] = eWater[(z + 100) * EW + x + 100];
+            }
+        }
         boolean[] eRiver2 = new boolean[EW2 * EH2];
         boolean[] eShoal2 = new boolean[EW2 * EH2];
+        byte[] eLand2 = new byte[EW2 * EH2];
         int[] eWl2 = new int[EW2 * EH2];
         java.util.Arrays.fill(eWl2, sea);
         dev.timefiles.miaeco.terrain.RiverPlanner.rasterize(
-                rivers, ey2, eWater2, eRiver2, eWl2, eShoal2, EW2, EH2, ox2, oz2);
+                plan, ey2, eWater2, eRiver2, eWl2, eShoal2, eLand2, EW2, EH2, ox2, oz2);
         for (int z = 0; z < EH2 && !fail; z++) {
             for (int x = 0; x < EW2; x++) {
                 int a = (z + 100) * EW + x + 100, b = z * EW2 + x;
-                if (ey[a] != ey2[b] || eRiver[a] != eRiver2[b] || eWl[a] != eWl2[b]) {
+                if (ey[a] != ey2[b] || eRiver[a] != eRiver2[b] || eWl[a] != eWl2[b]
+                        || eLand[a] != eLand2[b]) {
                     System.out.println("RIVER TILE MISMATCH @" + x + "," + z);
                     fail = true;
                     break;
                 }
             }
         }
-        int nodes = rivers.stream().mapToInt(r -> r.nodes().size()).sum();
-        System.out.printf("river: %d 条 %d 节点, 蜿蜒(chord/path)最低 %.3f, 河道 %d 列, 齐平岸 %d, 漏水 %d%n",
-                rivers.size(), nodes, worstChord, riverCols, flushBank, leaks);
+        System.out.printf("river: 干支流 %d(汇流 %d, 泉 %d) 湖 %d 三角洲 %d 冲积扇 %d, 共 %d 节点, "
+                        + "蜿蜒最低 %.3f, 水列 %d, 齐平岸 %d, 漏水 %d, 湿地候选 %d%n",
+                mains.size(), junctions, springs, plan.lakes().size(), plan.deltas().size(),
+                plan.fans().size(), plan.nodeCount(), worstChord, riverCols, flushBank, leaks, wetCols);
         return fail;
     }
 

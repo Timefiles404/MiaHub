@@ -182,7 +182,7 @@ public final class TerraService {
         final AtomicBoolean cancelled = new AtomicBoolean(false);
         final TerraProgress progress;
         volatile String stageName = "准备";
-        volatile List<RiverPlanner.River> rivers = List.of();   // 全局河道（runMapTiled 规划一次）
+        volatile RiverPlanner.RiverPlan rivers = RiverPlanner.RiverPlan.EMPTY;  // 全图水系（规划一次）
 
         Job(CommandSender sender, String world, EcoWorlds.Entry entry, Region sel, boolean withEco) {
             this.sender = sender;
@@ -300,17 +300,25 @@ public final class TerraService {
             ensureModels();
             checkCancel();
             LocalTerrainProvider.init(entry.seed);
-            // 全局河流规划：coarse 粗扫整张地图（秒级），定线一次、逐片栅格化（断点续跑可重算，确定性）
+            // 全图水文规划：coarse 粗扫（秒级）→ 填洼/流向/汇水 → 树状河网+湖泊+地貌，
+            // 定线一次、逐片栅格化（断点续跑重算一致，确定性）
             if (st.riverDensity() > 0 && s >= 320) {
-                stage("河流规划（全图 coarse 粗扫）");
+                stage("水文规划（填洼/汇水/河网）");
                 try {
                     rivers = planRivers(mapX1, mapZ1, s);
-                    int nodes = rivers.stream().mapToInt(r -> r.nodes().size()).sum();
-                    progress.chat(rivers.isEmpty() ? "本图高地不足，未规划出河流。"
-                            : "规划出 " + rivers.size() + " 条河（" + nodes + " 节点，蜿蜒合流，源自高地入海）。");
+                    int main = 0, oxbow = 0;
+                    for (RiverPlanner.River r : rivers.rivers()) {
+                        if (r.kind() == RiverPlanner.R_MAIN) main++;
+                        else if (r.kind() == RiverPlanner.R_OXBOW) oxbow++;
+                    }
+                    progress.chat(rivers.isEmpty() ? "本图高地不足，未规划出水系。"
+                            : "水系就绪：干支流 " + main + " 条（" + rivers.nodeCount() + " 节点，树状汇流）、湖泊 "
+                            + rivers.lakes().size() + "、三角洲 " + rivers.deltas().size()
+                            + "、冲积扇 " + rivers.fans().size()
+                            + (oxbow > 0 ? "、牛轭湖 " + oxbow : "") + "。");
                 } catch (Exception e) {
                     plugin.getLogger().log(Level.WARNING, "river plan", e);
-                    progress.chat("河流规划失败（跳过河流）: " + rootMsg(e));
+                    progress.chat("水文规划失败（跳过河流）: " + rootMsg(e));
                 }
             }
             List<EcoWorlds.Patch> already = List.copyOf(entry.patches);
@@ -475,13 +483,14 @@ public final class TerraService {
                     eBio[i] = PlanOps.rhythm(data.biomeIds[ez][ex], gx, gz, entry.seed ^ 0x4174L);
                 }
             }
-            // ---- 全局河流栅格化：改写 ey、标河道/水位/浅滩，并写河群系 ----
+            // ---- 全图水系栅格化：湖/扇/洲/泉/河道一次写入，改写 ey、标水位/浅滩/地貌 ----
             boolean[] eRiver = new boolean[EW * EH];
             boolean[] eShoal = new boolean[EW * EH];
+            byte[] eLand = new byte[EW * EH];
             int[] eWl = new int[EW * EH];
             java.util.Arrays.fill(eWl, sea);
             if (!rivers.isEmpty()) {
-                RiverPlanner.rasterize(rivers, ey, eWater, eRiver, eWl, eShoal,
+                RiverPlanner.rasterize(rivers, ey, eWater, eRiver, eWl, eShoal, eLand,
                         EW, EH, x1 - apron, z1 - apron);
                 for (int i = 0; i < EW * EH; i++) {
                     if (eRiver[i]) {
@@ -489,6 +498,8 @@ public final class TerraService {
                                 ? EcoBiomes.FROZEN_RIVER : EcoBiomes.RIVER;
                     }
                 }
+                // 河畔湿地：宽缓大河两岸的低地重标记为沼泽（柳树/红树+浓水氛围接管）
+                PlanOps.riparian(eBio, eLand, EW, EH, x1 - apron, z1 - apron, entry.seed ^ 0x3E7L);
             }
             // ---- 水岸齐平：贴海的 sea+1 陆列压到 sea（-- 而非 -_）----
             PlanOps.flushShore(ey, eWater, eRiver, eShoal, EW, EH, sea);
@@ -519,6 +530,7 @@ public final class TerraService {
                     p.river[i] = eRiver[e];
                     p.wlvl[i] = eRiver[e] ? eWl[e] : sea;
                     p.shoal[i] = eShoal[e];
+                    p.land[i] = eLand[e];
                     p.rawOcean[i] = eOcean[e];
                     p.biome[i] = eBio[e];
                     p.slope[i] = eSlope[e];
@@ -545,8 +557,8 @@ public final class TerraService {
             return p;
         }
 
-        /** 全局河流规划：coarse 张量（~128 格/像素）双线性成高度场，与铺设同一映射链。 */
-        private List<RiverPlanner.River> planRivers(int mapX1, int mapZ1, int s) throws Exception {
+        /** 全图水文规划：coarse 张量（~128 格/像素）双线性成高度场，与铺设同一映射链。 */
+        private RiverPlanner.RiverPlan planRivers(int mapX1, int mapZ1, int s) throws Exception {
             double npb = mpb <= 15 ? 1.0 / Math.max(1, TerrainConfig.scale()) : mpb / 30.0; // 原生px/格
             int ci0 = (int) Math.floor(mapZ1 * npb / 256.0) - 1;
             int cj0 = (int) Math.floor(mapX1 * npb / 256.0) - 1;
@@ -929,6 +941,14 @@ public final class TerraService {
                         for (int k = 1; k <= ch; k++) {
                             edits.add(new BlockEdit(wx, y + k, wz, BlockSpec.of(Material.SUGAR_CANE)));
                         }
+                    } else if (p.land[i] == RiverPlanner.L_SPRING
+                            && hash01(entry.seed ^ 0x59A6L, wx, wz) < 0.3) {
+                        edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.of(Material.MOSS_CARPET)));
+                    } else if (p.land[i] == RiverPlanner.L_FAN
+                            && hash01(entry.seed ^ 0x59A7L, wx, wz) < 0.012
+                            && hash01(entry.seed, wx, wz) >= 0.45) {
+                        // 枯灌只落在扇面的沙/干土顶（砾石面不合法支撑）
+                        edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.of(Material.DEAD_BUSH)));
                     }
                     // 陡坡崖面凹蚀：柱身中段抠内凹，悬出的表皮从崖侧看即是外挑岩檐
                     if (carver != null && st.cliffErosion() && !water && p.slope[i] >= 5) {
@@ -1065,17 +1085,35 @@ public final class TerraService {
             double hash = hash01(entry.seed, wx, wz);
             if (p.water[i]) {
                 int depth = p.wlvl[i] - y;
-                if (b == 92) return new Material[]{Material.MUD, Material.MUD, Material.CLAY};
+                if (p.land[i] == RiverPlanner.L_DELTA || b == 92) {
+                    return new Material[]{Material.MUD, Material.MUD, Material.CLAY};
+                }
                 if (depth <= 4) return new Material[]{Material.SAND, Material.SAND, Material.GRAVEL};
                 return hash < 0.5
                         ? new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE}
                         : new Material[]{Material.GRAVEL, Material.CLAY, Material.STONE};
+            }
+            // 泉眼沿口：苔石圈（高山涌泉的钙华/苔痕）
+            if (p.land[i] == RiverPlanner.L_SPRING) {
+                return hash < 0.45 ? new Material[]{Material.MOSSY_COBBLESTONE, Material.STONE, Material.STONE}
+                        : hash < 0.8 ? new Material[]{Material.COBBLESTONE, Material.STONE, Material.STONE}
+                        : new Material[]{Material.STONE, Material.STONE, Material.STONE};
+            }
+            // 三角洲泥岛：湿泥滩
+            if (p.land[i] == RiverPlanner.L_DELTA) {
+                return new Material[]{Material.MUD, Material.MUD, Material.CLAY};
             }
             // 齐平浅滩岸：贴水第一圈用沙/砾（冷区砾石），平滑不碎
             if (p.shoal[i]) {
                 boolean cold = EcoBiomes.snowySurface(b) || b == 93;
                 return cold ? new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE}
                         : new Material[]{Material.SAND, Material.SAND, Material.GRAVEL};
+            }
+            // 冲积扇：砾沙混杂的辫状堆积面
+            if (p.land[i] == RiverPlanner.L_FAN) {
+                Material top = hash < 0.45 ? Material.GRAVEL : hash < 0.8 ? Material.SAND
+                        : Material.COARSE_DIRT;
+                return new Material[]{top, Material.GRAVEL, Material.STONE};
             }
             boolean rock = slope >= 5 || (slope >= 3 && y > 190) || b == 35 || b == 95;
             if (rock) {
@@ -1425,9 +1463,10 @@ public final class TerraService {
         final boolean[] rawOcean;
         final boolean[] beach;
         final byte[] slope;
-        final int[] wlvl;        // 逐列水面 Y（海=sea，河=河段水位；无水列无意义）
-        final boolean[] river;   // 河道水列
+        final int[] wlvl;        // 逐列水面 Y（海=sea，河/湖=段水位；无水列无意义）
+        final boolean[] river;   // 河道/湖泊水列
         final boolean[] shoal;   // 齐平浅滩岸（皮肤沙/砾）
+        final byte[] land;       // 河流地貌标记（RiverPlanner.L_*：扇/三角洲/泉/湿地）
         final short[] mix;       // 交界混合的邻群系（0=不混）
         final byte[] mixP;       // 混合概率 %
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
@@ -1444,6 +1483,7 @@ public final class TerraService {
             wlvl = new int[w * h];
             river = new boolean[w * h];
             shoal = new boolean[w * h];
+            land = new byte[w * h];
             mix = new short[w * h];
             mixP = new byte[w * h];
         }

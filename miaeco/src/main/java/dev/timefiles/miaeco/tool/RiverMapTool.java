@@ -58,10 +58,19 @@ public final class RiverMapTool {
             double gj = wx * npb / 256.0 - fcj0 - 0.5;
             return mapper.yOfF(boost(TerraService.bilinear(coarse, CH, CW, gi, gj)));
         };
-        List<RiverPlanner.River> rivers = RiverPlanner.plan(hf, sea, x1, z1, size, seed ^ 0x51E77AL, 1.0);
-        int nodes = rivers.stream().mapToInt(r -> r.nodes().size()).sum();
-        System.out.printf("coarse %.1fs, 规划 %d 条河（%d 节点）%n",
-                (System.currentTimeMillis() - t0) / 1000.0, rivers.size(), nodes);
+        RiverPlanner.RiverPlan plan = RiverPlanner.plan(hf, sea, x1, z1, size, seed ^ 0x51E77AL, 1.0);
+        int mains = 0, oxbows = 0, springs = 0;
+        for (RiverPlanner.River r : plan.rivers()) {
+            if (r.kind() == RiverPlanner.R_MAIN) {
+                mains++;
+                if (!r.nodes().isEmpty() && r.nodes().get(0).kind() == RiverPlanner.K_SPRING) springs++;
+            } else if (r.kind() == RiverPlanner.R_OXBOW) {
+                oxbows++;
+            }
+        }
+        System.out.printf("coarse %.1fs, 水系：干支流 %d（泉眼 %d）湖 %d 三角洲 %d 冲积扇 %d 牛轭湖 %d，共 %d 节点%n",
+                (System.currentTimeMillis() - t0) / 1000.0, mains, springs, plan.lakes().size(),
+                plan.deltas().size(), plan.fans().size(), oxbows, plan.nodeCount());
 
         // ---- 精细高程（池化推理，与铺设一致）----
         t0 = System.currentTimeMillis();
@@ -81,9 +90,10 @@ public final class RiverMapTool {
         }
         boolean[] eRiver = new boolean[N];
         boolean[] eShoal = new boolean[N];
+        byte[] eLand = new byte[N];
         int[] eWl = new int[N];
         java.util.Arrays.fill(eWl, sea);
-        RiverPlanner.rasterize(rivers, ey, eWater, eRiver, eWl, eShoal, size, size, x1, z1);
+        RiverPlanner.rasterize(plan, ey, eWater, eRiver, eWl, eShoal, eLand, size, size, x1, z1);
         PlanOps.flushShore(ey, eWater, eRiver, eShoal, size, size, sea);
 
         // ---- 渲染：高程分层设色 × 山体阴影 + 水体 ----
@@ -108,9 +118,14 @@ public final class RiverMapTool {
                 } else if (eWater[i]) {
                     int depth = sea - y;
                     rgb = lerp(0x4F86C8, 0x11274E, Math.min(1, depth / 60.0));
+                    if (eLand[i] == RiverPlanner.L_DELTA) rgb = lerp(rgb, 0x8A7854, 0.45);
                 } else {
                     rgb = hypso(y, sea, maxY);
                     if (eShoal[i]) rgb = lerp(rgb, 0xD9C98A, 0.75);
+                    if (eLand[i] == RiverPlanner.L_FAN) rgb = lerp(rgb, 0xC9B37E, 0.42);
+                    else if (eLand[i] == RiverPlanner.L_DELTA) rgb = lerp(rgb, 0x9A8560, 0.6);
+                    else if (eLand[i] == RiverPlanner.L_SPRING) rgb = lerp(rgb, 0x54D08A, 0.7);
+                    else if (eLand[i] == RiverPlanner.L_WET) rgb = lerp(rgb, 0x4E7A52, 0.35);
                     // 山体阴影（西北光）
                     int yE = x + 1 < size ? ey[i + 1] : y;
                     int yS = z + 1 < size ? ey[i + size] : y;
