@@ -17,6 +17,7 @@ import org.bukkit.World;
 import org.bukkit.WorldCreator;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.block.data.Directional;
 import org.bukkit.block.data.type.Snow;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.ConfigurationSection;
@@ -32,12 +33,14 @@ import org.bukkit.map.MapCanvas;
 import org.bukkit.map.MapRenderer;
 import org.bukkit.map.MapView;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.util.BoundingBox;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
@@ -52,32 +55,44 @@ import java.util.regex.Pattern;
 
 /**
  * MiaEco 大厅（/miaeco hub）：固定虚空世界 {@value #HUB_WORLD}，每个受管世界一块
- * {@value #SB}×{@value #SB} <b>积雪沙盘</b>——高度用 雪块+雪层 表现（1 层 = 1/8 格精度），
- * 水面铺浅蓝玻璃，最高/最低点悬浮字标注；<b>生成中的世界随分片完成实时"长出来"</b>。
+ * <b>积雪沙盘</b>——高度用 雪块+雪层 表现（1 层 = 1/8 格精度），水面铺浅蓝玻璃，
+ * 最高/最低点悬浮字标注；<b>生成中的世界随分片完成实时"长出来"</b>。
  *
- * <p>造新世界的完整草稿流：{@code hub new} 开一块草稿沙盘 → {@code hub roll} 无限抽
- * 种子（coarse 粗扫秒级铺盘）→ 玩家手动堆/铲雪修形（1 层雪 ≈ {@value #M_PER_LEVEL} 米）→
- * {@code hub water} 预览水系（滴水粒子沿雪面画河 + 沙盘旁地图画俯视图）→
- * {@code hub confirm} 读回雪面差量作为草图（低频修正混入扩散地形）送入生产。
+ * <p>0.25.0 重构：
+ * <ul>
+ *   <li><b>性能</b>——采样按区块去重后经全局队列限流（≤4 组并发/tick），结果快照
+ *       持久化进 hub.yml：地形没变的世界进大厅<b>零区块加载</b>直接重建；雪盘写块
+ *       分批（每 tick 3 行）不再一口气打满主线程；</li>
+ *   <li><b>沙盘尺寸独立</b>——draft 创建时 preview=P（12~48）设定沙盘边长，与地图
+ *       实际大小解耦；视图沙盘也可经控制台调节；</li>
+ *   <li><b>拼接地图画墙</b>——水系俯视图渲染 (128K)² 并切成 K×K 张地图画挂在平台
+ *       东侧的画墙上（默认 4×4，控制台可调），远离沙盘不再被雪柱遮挡；</li>
+ *   <li><b>操作台</b>——出生平台的主控制台（世界增删查改/生成配置）与每块沙盘旁的
+ *       参数操作台（讲台，右键打开 GUI，见 {@link HubConsole}）；</li>
+ *   <li><b>draft 生命周期</b>——confirm 送产时草稿存档；由草稿创建的世界被删除时
+ *       草稿自动恢复为可编辑形态（雪面保留 confirm 时的样子）。</li>
+ * </ul>
  */
 public final class HubService {
 
     public static final String HUB_WORLD = "miaeco_hub";
 
-    static final int SB = 20;               // 沙盘格数（用户可手修的草图分辨率）
-    static final int PITCH = 48;            // 沙盘地块间距
-    static final int PLOT_W = 26;           // 地块平台边长
+    static final int DEFAULT_SB = 20;       // 默认沙盘格数
+    static final int MIN_SB = 12, MAX_SB = 48;
+    static final int PITCH = 80;            // 沙盘地块间距（布局 v2）
     static final int INSET = 3;             // 沙盘在平台内的内缩
     static final int BASE_Y = 64;           // 平台面 Y（雪柱从 65 起）
     static final int MAX_LVL = 96;          // 雪高层级上限（12 格 × 8 层）
     static final int SEA_LVL = 24;          // 草稿映射的海平面层级（3 格雪）
     static final double M_PER_LEVEL = 45.0; // 草稿映射：1 层雪 = 45 米
-    static final int PLOTS_PER_ROW = 8;
+    static final int PLOTS_PER_ROW = 6;
+    static final int DEFAULT_MAP_K = 4;     // 预览画墙默认 4×4
+    static final int LAYOUT = 2;
 
     private static final Pattern NAME_OK = Pattern.compile("^[a-zA-Z0-9_-]{1,32}$");
     private static final String P = ChatColor.DARK_GREEN + "[MiaEco] " + ChatColor.RESET;
 
-    /** 一份新世界草稿：参数 + 沙盘位 + 最近抽卡（seed/基线层级）。 */
+    /** 一份新世界草稿：参数 + 沙盘位 + 最近抽卡（seed/基线层级）+ 最近雪面。 */
     static final class Draft {
         String name;
         int plot;
@@ -86,23 +101,43 @@ public final class HubService {
         int sea;
         boolean openEdge;
         double yscale;
-        Long seed;              // null = 还没抽过
-        byte[] baseLvl;         // SB×SB 基线层级（confirm 时与当前雪面求差）
+        int preview = DEFAULT_SB;   // 沙盘边长（创建时定，独立于 size）
+        Long seed;                  // null = 还没抽过
+        byte[] baseLvl;             // 抽卡基线层级（confirm 时与雪面求差）
+        byte[] lastLvl;             // 最近一次已知雪面（confirm 存档/恢复重铺用）
+    }
+
+    /** 一个世界的采样快照（floor/surf 为 sb² 的 short，MIN_VALUE=虚空）。 */
+    static final class Snap {
+        int patchCount;
+        short[] floor;
+        short[] surf;
     }
 
     private final Plugin plugin;
     private final EcoManager eco;
 
-    private final Map<String, Integer> plots = new LinkedHashMap<>();   // 世界名 → 沙盘位
+    private final Map<String, Integer> plots = new LinkedHashMap<>();     // 世界名 → 沙盘位
+    private final Map<String, Integer> plotSb = new LinkedHashMap<>();    // 视图沙盘尺寸
+    private final Map<String, Integer> mapKs = new LinkedHashMap<>();     // 预览画墙 K
     private final Map<String, Draft> drafts = new LinkedHashMap<>();
-    private final Map<String, Integer> previewMaps = new LinkedHashMap<>(); // 名 → 地图画 id
+    private final Map<String, Draft> produced = new LinkedHashMap<>();    // confirm 后的草稿存档
+    private final Map<String, List<Integer>> previewMaps = new LinkedHashMap<>();
+    private final Map<String, Snap> snaps = new LinkedHashMap<>();
     private final List<Integer> freePlots = new ArrayList<>();
     private int nextPlot;
+    private int layout = LAYOUT;
 
-    private final Set<String> refreshing = new HashSet<>();
-    /** 活跃的水系粒子预览：plot → {expireTick, points(x,y,z…)} */
+    // ---- 运行时 ----
+    private final Map<String, Integer> builtView = new HashMap<>();       // 本会话已铺（patch 戳）
+    private final Set<String> builtDrafts = new HashSet<>();
+    private final Set<Integer> buildingPlots = new HashSet<>();
+    private final Map<Integer, Runnable> pendingBuild = new HashMap<>();
+    private final ArrayDeque<String> sampleQueue = new ArrayDeque<>();
+    private final Set<String> queuedSamples = new HashSet<>();
+    private SampleRun sampling;
+    private int pumpTaskId = -1, statusTaskId = -1, particleTaskId = -1;
     private final Map<Integer, ParticleShow> particleShows = new HashMap<>();
-    private int statusTaskId = -1, particleTaskId = -1;
 
     private record ParticleShow(long expireMs, List<double[]> pts) { }
 
@@ -113,7 +148,6 @@ public final class HubService {
 
     // ============================ 生命周期 ============================
 
-    /** 启动：读 hub.yml；若大厅世界已存在则加载并重挂地图画渲染器。 */
     public void init() {
         load();
         if (new File(Bukkit.getWorldContainer(), HUB_WORLD).exists()) {
@@ -124,21 +158,21 @@ public final class HubService {
 
     public void save() {
         YamlConfiguration yml = new YamlConfiguration();
+        yml.set("layout", layout);
         yml.set("nextPlot", nextPlot);
         yml.set("free", freePlots);
         for (var e : plots.entrySet()) yml.set("plots." + e.getKey(), e.getValue());
+        for (var e : plotSb.entrySet()) yml.set("plotSb." + e.getKey(), e.getValue());
+        for (var e : mapKs.entrySet()) yml.set("mapK." + e.getKey(), e.getValue());
         for (var e : previewMaps.entrySet()) yml.set("maps." + e.getKey(), e.getValue());
-        for (Draft d : drafts.values()) {
-            String b = "drafts." + d.name + ".";
-            yml.set(b + "plot", d.plot);
-            yml.set(b + "size", d.size);
-            yml.set(b + "mpb", d.mpb);
-            yml.set(b + "sea", d.sea);
-            yml.set(b + "edge", d.openEdge ? "open" : "sea");
-            yml.set(b + "yscale", d.yscale);
-            if (d.seed != null) yml.set(b + "seed", d.seed);
-            if (d.baseLvl != null) yml.set(b + "base", Base64.getEncoder().encodeToString(d.baseLvl));
+        for (var e : snaps.entrySet()) {
+            String b = "snap." + e.getKey() + ".";
+            yml.set(b + "patches", e.getValue().patchCount);
+            yml.set(b + "floor", shortsB64(e.getValue().floor));
+            yml.set(b + "surf", shortsB64(e.getValue().surf));
         }
+        saveDrafts(yml, "drafts", drafts);
+        saveDrafts(yml, "produced", produced);
         try {
             yml.save(file());
         } catch (IOException io) {
@@ -146,38 +180,106 @@ public final class HubService {
         }
     }
 
+    private void saveDrafts(YamlConfiguration yml, String root, Map<String, Draft> map) {
+        for (Draft d : map.values()) {
+            String b = root + "." + d.name + ".";
+            yml.set(b + "plot", d.plot);
+            yml.set(b + "size", d.size);
+            yml.set(b + "mpb", d.mpb);
+            yml.set(b + "sea", d.sea);
+            yml.set(b + "edge", d.openEdge ? "open" : "sea");
+            yml.set(b + "yscale", d.yscale);
+            yml.set(b + "preview", d.preview);
+            if (d.seed != null) yml.set(b + "seed", d.seed);
+            if (d.baseLvl != null) yml.set(b + "base", Base64.getEncoder().encodeToString(d.baseLvl));
+            if (d.lastLvl != null) yml.set(b + "last", Base64.getEncoder().encodeToString(d.lastLvl));
+        }
+    }
+
     private void load() {
         File f = file();
         if (!f.exists()) return;
         YamlConfiguration yml = YamlConfiguration.loadConfiguration(f);
+        layout = yml.getInt("layout", 1);
         nextPlot = yml.getInt("nextPlot", 0);
         freePlots.clear();
         freePlots.addAll(yml.getIntegerList("free"));
         ConfigurationSection ps = yml.getConfigurationSection("plots");
         if (ps != null) for (String k : ps.getKeys(false)) plots.put(k, ps.getInt(k));
+        ConfigurationSection sbs = yml.getConfigurationSection("plotSb");
+        if (sbs != null) for (String k : sbs.getKeys(false)) plotSb.put(k, sbs.getInt(k));
+        ConfigurationSection ks = yml.getConfigurationSection("mapK");
+        if (ks != null) for (String k : ks.getKeys(false)) mapKs.put(k, ks.getInt(k));
         ConfigurationSection ms = yml.getConfigurationSection("maps");
-        if (ms != null) for (String k : ms.getKeys(false)) previewMaps.put(k, ms.getInt(k));
-        ConfigurationSection ds = yml.getConfigurationSection("drafts");
-        if (ds != null) {
-            for (String k : ds.getKeys(false)) {
-                Draft d = new Draft();
-                d.name = k;
-                d.plot = ds.getInt(k + ".plot");
-                d.size = ds.getInt(k + ".size", 1024);
-                d.mpb = ds.getInt(k + ".mpb", 30);
-                d.sea = ds.getInt(k + ".sea", 63);
-                d.openEdge = "open".equals(ds.getString(k + ".edge", "sea"));
-                d.yscale = ds.getDouble(k + ".yscale", 1.0);
-                if (ds.contains(k + ".seed")) d.seed = ds.getLong(k + ".seed");
-                String b64 = ds.getString(k + ".base");
-                if (b64 != null) {
-                    try {
-                        byte[] raw = Base64.getDecoder().decode(b64);
-                        if (raw.length == SB * SB) d.baseLvl = raw;
-                    } catch (IllegalArgumentException ignored) { }
-                }
-                drafts.put(k, d);
+        if (ms != null) for (String k : ms.getKeys(false)) previewMaps.put(k, yml.getIntegerList("maps." + k));
+        ConfigurationSection sn = yml.getConfigurationSection("snap");
+        if (sn != null) {
+            for (String k : sn.getKeys(false)) {
+                Snap s = new Snap();
+                s.patchCount = sn.getInt(k + ".patches");
+                s.floor = b64Shorts(sn.getString(k + ".floor"));
+                s.surf = b64Shorts(sn.getString(k + ".surf"));
+                if (s.floor != null && s.surf != null && s.floor.length == s.surf.length) snaps.put(k, s);
             }
+        }
+        loadDrafts(yml, "drafts", drafts);
+        loadDrafts(yml, "produced", produced);
+        // 0.24 老档：maps 段是单 int
+        if (ms != null) {
+            for (String k : ms.getKeys(false)) {
+                if (previewMaps.get(k) == null || previewMaps.get(k).isEmpty()) {
+                    int one = yml.getInt("maps." + k, -1);
+                    if (one >= 0) previewMaps.put(k, List.of(one));
+                }
+            }
+        }
+    }
+
+    private void loadDrafts(YamlConfiguration yml, String root, Map<String, Draft> map) {
+        ConfigurationSection ds = yml.getConfigurationSection(root);
+        if (ds == null) return;
+        for (String k : ds.getKeys(false)) {
+            Draft d = new Draft();
+            d.name = k;
+            d.plot = ds.getInt(k + ".plot");
+            d.size = ds.getInt(k + ".size", 1024);
+            d.mpb = ds.getInt(k + ".mpb", 30);
+            d.sea = ds.getInt(k + ".sea", 63);
+            d.openEdge = "open".equals(ds.getString(k + ".edge", "sea"));
+            d.yscale = ds.getDouble(k + ".yscale", 1.0);
+            d.preview = Math.max(MIN_SB, Math.min(MAX_SB, ds.getInt(k + ".preview", DEFAULT_SB)));
+            if (ds.contains(k + ".seed")) d.seed = ds.getLong(k + ".seed");
+            d.baseLvl = b64Bytes(ds.getString(k + ".base"), d.preview * d.preview);
+            d.lastLvl = b64Bytes(ds.getString(k + ".last"), d.preview * d.preview);
+            map.put(k, d);
+        }
+    }
+
+    private static byte[] b64Bytes(String s, int expectLen) {
+        if (s == null) return null;
+        try {
+            byte[] raw = Base64.getDecoder().decode(s);
+            return raw.length == expectLen ? raw : null;
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static String shortsB64(short[] a) {
+        java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(a.length * 2);
+        bb.asShortBuffer().put(a);
+        return Base64.getEncoder().encodeToString(bb.array());
+    }
+
+    private static short[] b64Shorts(String s) {
+        if (s == null) return null;
+        try {
+            byte[] raw = Base64.getDecoder().decode(s);
+            short[] out = new short[raw.length / 2];
+            java.nio.ByteBuffer.wrap(raw).asShortBuffer().get(out);
+            return out;
+        } catch (IllegalArgumentException e) {
+            return null;
         }
     }
 
@@ -195,25 +297,68 @@ public final class HubService {
 
     private World ensureWorld() {
         World w = Bukkit.getWorld(HUB_WORLD);
-        if (w != null) return w;
-        w = new WorldCreator(HUB_WORLD)
-                .environment(World.Environment.NORMAL)
-                .seed(0)
-                .generator(new PlainChunkGenerator(true))
-                .generateStructures(false)
-                .createWorld();
-        if (w == null) return null;
-        ruleBool(w, "doMobSpawning", false);
-        ruleBool(w, "doPatrolSpawning", false);
-        ruleBool(w, "doTraderSpawning", false);
-        ruleBool(w, "doDaylightCycle", false);
-        ruleBool(w, "doWeatherCycle", false);
-        ruleInt(w, "spawnChunkRadius", 0);
-        w.setDifficulty(Difficulty.PEACEFUL);
-        w.setTime(6000);
-        buildSpawnPlatform(w);
-        w.setSpawnLocation(-10, BASE_Y + 1, 12);
+        if (w == null) {
+            w = new WorldCreator(HUB_WORLD)
+                    .environment(World.Environment.NORMAL)
+                    .seed(0)
+                    .generator(new PlainChunkGenerator(true))
+                    .generateStructures(false)
+                    .createWorld();
+            if (w == null) return null;
+            ruleBool(w, "doMobSpawning", false);
+            ruleBool(w, "doPatrolSpawning", false);
+            ruleBool(w, "doTraderSpawning", false);
+            ruleBool(w, "doDaylightCycle", false);
+            ruleBool(w, "doWeatherCycle", false);
+            ruleInt(w, "spawnChunkRadius", 0);
+            w.setDifficulty(Difficulty.PEACEFUL);
+            w.setTime(6000);
+            buildSpawnPlatform(w);
+            w.setSpawnLocation(-10, BASE_Y + 1, 12);
+        }
+        if (layout < LAYOUT) migrateLayout(w);
         return w;
+    }
+
+    /** 布局升级（48 间距 → 80 间距）：读回旧草稿雪面，清扫旧地块，按新几何重建。 */
+    private void migrateLayout(World w) {
+        plugin.getLogger().info("[hub] 布局升级 v" + layout + " → v" + LAYOUT + "，搬迁沙盘…");
+        Set<Integer> oldPlots = new HashSet<>(plots.values());
+        for (Draft d : drafts.values()) {
+            // 旧几何读回雪面（旧布局 8/行 × 48 间距、沙盘 20）
+            int opx = (d.plot % 8) * 48, opz = (d.plot / 8) * 48;
+            byte[] lvl = new byte[DEFAULT_SB * DEFAULT_SB];
+            for (int i = 0; i < lvl.length; i++) {
+                lvl[i] = (byte) readColumnLvl(w, opx + 3 + i % DEFAULT_SB, opz + 3 + i / DEFAULT_SB);
+            }
+            d.lastLvl = lvl;
+            if (d.preview != DEFAULT_SB) d.preview = DEFAULT_SB;   // 旧盘尺寸固定 20
+            oldPlots.add(d.plot);
+        }
+        for (int plot : oldPlots) {
+            int opx = (plot % 8) * 48, opz = (plot / 8) * 48;
+            clearBox(w, opx - 1, opz - 1, opx + 28, opz + 28, BASE_Y, BASE_Y + 24);
+            for (Entity e : w.getNearbyEntities(new BoundingBox(opx - 2, BASE_Y - 2, opz - 2,
+                    opx + 29, BASE_Y + 26, opz + 29),
+                    en -> en.getScoreboardTags().stream().anyMatch(t -> t.startsWith("miaeco_hub")))) {
+                e.remove();
+            }
+        }
+        builtView.clear();
+        builtDrafts.clear();
+        layout = LAYOUT;
+        save();
+    }
+
+    private void clearBox(World w, int x1, int z1, int x2, int z2, int y1, int y2) {
+        for (int x = x1; x <= x2; x++) {
+            for (int z = z1; z <= z2; z++) {
+                for (int y = y1; y <= y2; y++) {
+                    Block b = w.getBlockAt(x, y, z);
+                    if (b.getType() != Material.AIR) b.setType(Material.AIR, false);
+                }
+            }
+        }
     }
 
     private void buildSpawnPlatform(World w) {
@@ -222,7 +367,7 @@ public final class HubService {
                 w.getBlockAt(x, BASE_Y, z).setType(Material.SMOOTH_QUARTZ, false);
             }
         }
-        for (int z = 8; z <= 16; z++) {                       // 通往 0 号沙盘的短桥
+        for (int z = 8; z <= 16; z++) {
             for (int x = -6; x <= -1; x++) {
                 w.getBlockAt(x, BASE_Y, z).setType(Material.SMOOTH_STONE, false);
             }
@@ -241,44 +386,161 @@ public final class HubService {
         if (r != null && r.getType() == Integer.class) w.setGameRule((GameRule<Integer>) r, v);
     }
 
+    // ============================ 几何 ============================
+
+    private int plotX(int plot) {
+        return (plot % PLOTS_PER_ROW) * PITCH;
+    }
+
+    private int plotZ(int plot) {
+        return (plot / PLOTS_PER_ROW) * PITCH;
+    }
+
+    /** 平台边长（沙盘 + 两侧内缩）。 */
+    private int platW(int sb) {
+        return sb + 2 * INSET;
+    }
+
+    /** 该名字的沙盘边长。 */
+    public int sbOf(String name) {
+        Draft d = drafts.get(name);
+        if (d != null) return d.preview;
+        return Math.max(MIN_SB, Math.min(MAX_SB, plotSb.getOrDefault(name, DEFAULT_SB)));
+    }
+
+    public int mapKOf(String name) {
+        return Math.max(1, Math.min(6, mapKs.getOrDefault(name, DEFAULT_MAP_K)));
+    }
+
+    private Location plotViewLoc(World w, int plot, int sb) {
+        return new Location(w, plotX(plot) + platW(sb) / 2.0, BASE_Y + 1, plotZ(plot) - 1.5, 0f, 18f);
+    }
+
+    /** 主控制台（出生平台）。 */
+    public Location mainConsoleLoc(World w) {
+        return new Location(w, -10, BASE_Y + 1, 9);
+    }
+
+    /** 沙盘参数操作台（平台北缘中间偏西）。 */
+    public Location plotConsoleLoc(World w, int plot, int sb) {
+        return new Location(w, plotX(plot) + platW(sb) / 2 - 3, BASE_Y + 1, plotZ(plot));
+    }
+
+    /** 讲台位置反查沙盘名（HubConsole 交互用）；null=不是操作台。 */
+    public String consoleTarget(Location loc) {
+        if (loc.getWorld() == null || !HUB_WORLD.equals(loc.getWorld().getName())) return null;
+        int x = loc.getBlockX(), y = loc.getBlockY(), z = loc.getBlockZ();
+        if (y != BASE_Y + 1) return null;
+        for (String name : sandboxNames()) {
+            Integer plot = plotOf(name);
+            if (plot == null || plot < 0) continue;
+            int sb = sbOf(name);
+            if (x == plotX(plot) + platW(sb) / 2 - 3 && z == plotZ(plot)) return name;
+        }
+        return null;
+    }
+
+    public boolean isMainConsole(Location loc) {
+        return loc.getWorld() != null && HUB_WORLD.equals(loc.getWorld().getName())
+                && loc.getBlockX() == -10 && loc.getBlockY() == BASE_Y + 1 && loc.getBlockZ() == 9;
+    }
+
+    public boolean isDraft(String name) {
+        return drafts.containsKey(name);
+    }
+
+    Draft draft(String name) {
+        return drafts.get(name);
+    }
+
+    private Integer plotOf(String name) {
+        Integer p = plots.get(name);
+        if (p != null) return p;
+        Draft d = drafts.get(name);
+        return d != null ? d.plot : null;
+    }
+
+    private int allocPlot() {
+        if (!freePlots.isEmpty()) return freePlots.remove(freePlots.size() - 1);
+        return nextPlot++;
+    }
+
     // ============================ 对外命令 ============================
 
-    /** /miaeco hub：建/进大厅并确保所有受管世界的沙盘存在（异步刷新）。 */
+    /** /miaeco hub：建/进大厅并确保所有沙盘存在（快照秒开，脏的入队重采）。 */
     public String enter(Player p) {
         World w = ensureWorld();
         if (w == null) return "大厅世界创建失败（见后台日志）。";
         p.teleport(w.getSpawnLocation().add(0.5, 0, 0.5));
-        ensureStatusTask();
-        int n = 0;
+        ensureMainConsole(w);
+        ensureTasks();
+        int queued = 0, fromSnap = 0;
         for (String name : eco.worlds().all().keySet()) {
-            if (refreshWorldPlot(name, null)) n++;
+            int r = ensureViewPlot(w, name);
+            if (r == 1) fromSnap++;
+            else if (r == 2) queued++;
         }
+        for (Draft d : drafts.values()) ensureDraftPlot(w, d);
         p.sendMessage(P + ChatColor.GREEN + "欢迎来到 MiaEco 大厅——" + plots.size() + " 块世界沙盘"
                 + (drafts.isEmpty() ? "" : "、" + drafts.size() + " 份草稿") + "。"
-                + (n > 0 ? ChatColor.GRAY + "（" + n + " 块正在后台刷新）" : ""));
-        p.sendMessage(P + ChatColor.GRAY + "hub new <名> size=… 开草稿沙盘 → roll 抽地形 → 手修积雪 → "
-                + "water 预览水系 → confirm 送入生产；hub tp <名> 传送到某沙盘。");
+                + ChatColor.GRAY + (queued > 0 ? "（" + queued + " 块在后台温和重采，" + fromSnap + " 块从快照秒开）"
+                : fromSnap > 0 ? "（" + fromSnap + " 块从快照重建）" : ""));
+        p.sendMessage(P + ChatColor.GRAY + "右键出生台的" + ChatColor.YELLOW + "主控制台（讲台）"
+                + ChatColor.GRAY + "管理世界与配置；每块沙盘旁也有自己的操作台。");
         return null;
     }
 
-    /** /miaeco hub tp <名>：传送到世界沙盘或草稿沙盘。 */
+    /** 视图沙盘就位：0=已新鲜 1=快照重建 2=入队采样。 */
+    private int ensureViewPlot(World w, String name) {
+        EcoWorlds.Entry entry = eco.worlds().entry(name);
+        if (entry == null) return 0;
+        int plot = plots.computeIfAbsent(name, k -> allocPlot());
+        int sb = sbOf(name);
+        buildPlatform(w, plot, sb);
+        ensurePlotConsole(w, plot, sb);
+        updateTitle(w, plot, sb, viewTitle(name));
+        Integer built = builtView.get(name);
+        if (built != null && built == entry.patches.size()) return 0;
+        Snap s = snaps.get(name);
+        if (s != null && s.patchCount == entry.patches.size() && s.floor.length == sb * sb) {
+            buildViewFromSnap(w, name, plot, sb, s);
+            return 1;
+        }
+        enqueueSample(name);
+        return 2;
+    }
+
+    private void ensureDraftPlot(World w, Draft d) {
+        buildPlatform(w, d.plot, d.preview);
+        ensurePlotConsole(w, d.plot, d.preview);
+        updateTitle(w, d.plot, d.preview, draftTitle(d));
+        if (builtDrafts.contains(d.name)) return;
+        byte[] lvl = d.lastLvl != null ? d.lastLvl : d.baseLvl;
+        if (lvl == null || lvl.length != d.preview * d.preview) {
+            lvl = new byte[d.preview * d.preview];
+            java.util.Arrays.fill(lvl, (byte) SEA_LVL);
+        }
+        buildDraftFromLevels(w, d, lvl, null);
+        builtDrafts.add(d.name);
+    }
+
+    /** /miaeco hub tp <名>。 */
     public String tp(Player p, String name) {
         World w = ensureWorld();
         if (w == null) return "大厅世界不可用。";
-        Integer plot = plots.get(name);
-        Draft d = drafts.get(name);
-        if (plot == null && d != null) plot = d.plot;
+        Integer plot = plotOf(name);
         if (plot == null) return "没有叫 " + name + " 的沙盘（hub 里看看，或先 hub new）。";
-        p.teleport(plotViewLoc(w, plot));
+        p.teleport(plotViewLoc(w, plot, sbOf(name)));
         return null;
     }
 
-    /** /miaeco hub new：开一块草稿沙盘。 */
+    /** /miaeco hub new：开一块草稿沙盘（preview=沙盘边长，独立于 size）。 */
     public String newDraft(Player p, String name, int size, int mpb, int sea,
-                           boolean openEdge, double yscale) {
+                           boolean openEdge, double yscale, int preview) {
         if (!NAME_OK.matcher(name).matches()) return "名字只能用字母/数字/下划线/横线（≤32 字符）。";
         if (drafts.containsKey(name)) return "已有同名草稿（hub tp " + name + " 去看看）。";
         if (eco.worlds().isManaged(name) || Bukkit.getWorld(name) != null) return "已有同名世界。";
+        if (preview < MIN_SB || preview > MAX_SB) return "preview 需在 " + MIN_SB + "~" + MAX_SB + "。";
         World w = ensureWorld();
         if (w == null) return "大厅世界不可用。";
         Draft d = new Draft();
@@ -289,19 +551,19 @@ public final class HubService {
         d.sea = sea;
         d.openEdge = openEdge;
         d.yscale = yscale;
-        d.baseLvl = new byte[SB * SB];
+        d.preview = preview;
+        d.baseLvl = new byte[preview * preview];
         java.util.Arrays.fill(d.baseLvl, (byte) SEA_LVL);
+        d.lastLvl = d.baseLvl.clone();
         drafts.put(name, d);
-        buildPlatform(w, d.plot);
-        buildDraftSandbox(w, d, null);
-        updateTitle(w, d.plot, draftTitle(d));
+        ensureDraftPlot(w, d);
         save();
-        ensureStatusTask();
-        p.teleport(plotViewLoc(w, d.plot));
-        p.sendMessage(P + ChatColor.GREEN + "草稿沙盘 " + name + " 已开（" + size + "² @" + mpb
-                + "m/格，海平面 " + sea + (openEdge ? "，断崖边缘" : "") + "）。");
-        p.sendMessage(P + ChatColor.GRAY + "先 /miaeco hub roll " + name
-                + " 抽一张地形，或直接堆雪画地形（1 层雪 ≈ 45 米，海平面 = 3 格雪）。");
+        ensureTasks();
+        p.teleport(plotViewLoc(w, d.plot, d.preview));
+        p.sendMessage(P + ChatColor.GREEN + "草稿沙盘 " + name + " 已开（世界 " + size + "² @" + mpb
+                + "m/格，沙盘 " + preview + "²，海平面 " + sea + (openEdge ? "，断崖边缘" : "") + "）。");
+        p.sendMessage(P + ChatColor.GRAY + "沙盘旁的操作台可调参数/抽卡/预览/送产；"
+                + "或命令 /miaeco hub roll " + name + " 抽地形（1 层雪 ≈ 45 米，海平面 = 3 格雪）。");
         return null;
     }
 
@@ -310,30 +572,30 @@ public final class HubService {
         Draft d = drafts.get(name);
         if (d == null) return "没有草稿 " + name + "（先 /miaeco hub new）。";
         long seed = seedOrNull != null ? seedOrNull : new java.util.Random().nextLong();
-        String err = eco.terra().hubPreview(sender, seed, d.size, d.mpb, d.openEdge, SB, meters ->
+        return eco.terra().hubPreview(sender, seed, d.size, d.mpb, d.openEdge, d.preview, meters ->
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     Draft cur = drafts.get(name);
-                    if (cur == null) return;                   // 抽卡途中被 cancel
+                    if (cur == null) return;
                     cur.seed = seed;
                     World w = ensureWorld();
                     if (w == null) return;
-                    buildDraftSandbox(w, cur, meters);
-                    updateTitle(w, cur.plot, draftTitle(cur));
+                    buildDraftFromMeters(w, cur, meters);
+                    updateTitle(w, cur.plot, cur.preview, draftTitle(cur));
                     save();
                 }));
-        if (err != null) return err;
-        return null;
     }
 
-    /** /miaeco hub water：按当前雪面预览水系（滴水粒子 + 沙盘旁地图画）。 */
+    /** /miaeco hub water：按当前雪面预览水系（滴水粒子 + 沙盘旁地图画墙）。 */
     public String water(CommandSender sender, String name) {
         Draft d = drafts.get(name);
         if (d == null) return "没有草稿 " + name + "。水系预览目前只支持草稿沙盘。";
         World w = ensureWorld();
         if (w == null) return "大厅世界不可用。";
-        byte[] snowNow = readSnowLevels(w, d.plot);
-        float[] meters = new float[SB * SB];
-        for (int i = 0; i < SB * SB; i++) {
+        int sb = d.preview;
+        byte[] snowNow = readSnowLevels(w, d.plot, sb);
+        d.lastLvl = snowNow.clone();
+        float[] meters = new float[sb * sb];
+        for (int i = 0; i < sb * sb; i++) {
             meters[i] = (float) (((snowNow[i] & 0xFF) - SEA_LVL) * M_PER_LEVEL);
         }
         sender.sendMessage(P + ChatColor.GRAY + "按雪面规划水系中…（近似走线，实际以生成为准）");
@@ -342,13 +604,14 @@ public final class HubService {
         double ys = Math.max(0.5, Math.min(2.5, d.yscale));
         HeightMapper mapper = new HeightMapper(st.vScale() / ys, st.softStartY(), st.maxY(), d.sea);
         int x1 = -d.size / 2, z1 = -d.size / 2;
+        int k = mapKOf(name);
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
                 RiverPlanner.HeightField hf = (wx, wz) ->
-                        mapper.yOfF(TerraService.sketchAt(meters, SB, x1, z1, d.size, wx, wz));
+                        mapper.yOfF(TerraService.sketchAt(meters, sb, x1, z1, d.size, wx, wz));
                 RiverPlanner.RiverPlan plan = RiverPlanner.plan(hf, d.sea, x1, z1, d.size,
                         planSeed, st.riverDensity());
-                BufferedImage img = renderPreview(meters, plan, mapper, d);
+                BufferedImage img = renderPreview(meters, plan, mapper, d, 128 * k);
                 try {
                     ImageIO.write(img, "png", mapPng(name));
                 } catch (IOException ignored) { }
@@ -356,7 +619,8 @@ public final class HubService {
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     World hub = Bukkit.getWorld(HUB_WORLD);
                     if (hub == null) return;
-                    attachPreviewMap(hub, name, plotOfDraftOrView(name), img);
+                    Integer plot = plotOf(name);
+                    if (plot != null) attachPreviewWall(hub, name, plot, img, k);
                     int mains = 0;
                     for (RiverPlanner.River r : plan.rivers()) {
                         if (r.kind() == RiverPlanner.R_MAIN) mains++;
@@ -365,12 +629,12 @@ public final class HubService {
                         sender.sendMessage(P + ChatColor.YELLOW + "这版雪面规划不出水系（高地/落差不足）——"
                                 + "试试把内陆堆高些，或 roll 换一张。");
                     } else {
-                        particleShows.put(plotOf(name), new ParticleShow(
+                        particleShows.put(plot == null ? -1 : plot, new ParticleShow(
                                 System.currentTimeMillis() + 90_000L, pts));
-                        ensureParticleTask();
+                        ensureTasks();
                         sender.sendMessage(P + ChatColor.GREEN + "水系预览就绪：干支流 " + mains
                                 + " 条、湖泊 " + plan.lakes().size() + "、三角洲 " + plan.deltas().size()
-                                + "——滴水粒子沿雪面显示 90 秒，俯视图挂在沙盘旁画框。");
+                                + "——滴水粒子沿雪面显示 90 秒，俯视图挂在画墙（" + k + "×" + k + "）。");
                     }
                 });
             } catch (Throwable t) {
@@ -382,18 +646,20 @@ public final class HubService {
         return null;
     }
 
-    /** /miaeco hub confirm：读回雪面差量作为草图，创建世界并送入生产。 */
+    /** /miaeco hub confirm：读回雪面差量作为草图，创建世界并送入生产；草稿转存档。 */
     public String confirm(CommandSender sender, String name) {
         Draft d = drafts.get(name);
         if (d == null) return "没有草稿 " + name + "。";
-        if (d.seed == null) return "还没抽过地形（先 /miaeco hub roll " + name + "），雪面差量需要基线。";
+        if (d.seed == null) return "还没抽过地形（先 roll），雪面差量需要基线。";
         if (eco.terra().busy()) return "有地形任务在跑，等它完成（或 terra cancel）再 confirm。";
         World w = ensureWorld();
         if (w == null) return "大厅世界不可用。";
-        byte[] now = readSnowLevels(w, d.plot);
-        float[] sketch = new float[SB * SB];
+        int sb = d.preview;
+        byte[] now = readSnowLevels(w, d.plot, sb);
+        d.lastLvl = now.clone();
+        float[] sketch = new float[sb * sb];
         int changed = 0;
-        for (int i = 0; i < SB * SB; i++) {
+        for (int i = 0; i < sb * sb; i++) {
             int dl = (now[i] & 0xFF) - (d.baseLvl[i] & 0xFF);
             if (dl != 0) changed++;
             sketch[i] = (float) (dl * M_PER_LEVEL);
@@ -404,35 +670,44 @@ public final class HubService {
         EcoWorlds.Entry entry = eco.worlds().entry(name);
         if (changed > 0) {
             entry.sketch = sketch;
-            entry.sketchN = SB;
+            entry.sketchN = sb;
             eco.worlds().save();
         }
-        plots.put(name, d.plot);            // 草稿位转正：同一沙盘继续显示生产进度
+        plots.put(name, d.plot);
+        plotSb.put(name, d.preview);
         drafts.remove(name);
+        produced.put(name, d);               // 世界被删时草稿可恢复
+        builtDrafts.remove(name);
         save();
-        updateTitle(w, plots.get(name), viewTitle(name));
+        updateTitle(w, d.plot, d.preview, viewTitle(name));
         sender.sendMessage(P + ChatColor.GREEN + "草稿 " + name + " 已送入生产（seed=" + d.seed
                 + (changed > 0 ? "，含 " + changed + " 格雪面修形" : "，未修形")
-                + "）。沙盘会随生成逐片长出来。");
+                + "）。沙盘会随生成逐片长出来；删除该世界会恢复草稿。");
         String e2 = eco.terra().startMap(sender, name);
         if (e2 != null) sender.sendMessage(P + ChatColor.RED + e2);
         return null;
     }
 
-    /** /miaeco hub cancel：丢弃草稿并清空沙盘。 */
+    /** /miaeco hub cancel：丢弃草稿（沙盘清空、地块释放、存档删除）。 */
     public String cancelDraft(String name) {
         Draft d = drafts.remove(name);
         if (d == null) return "没有草稿 " + name + "。";
         World w = Bukkit.getWorld(HUB_WORLD);
-        if (w != null) {
-            clearSandbox(w, d.plot);
-            updateTitle(w, d.plot, ChatColor.DARK_GRAY + "（空位）");
-            clearPreviewFrame(w, d.plot);
-        }
+        if (w != null) freePlot(w, d.plot, d.preview);
         previewMaps.remove(name);
+        mapKs.remove(name);
+        builtDrafts.remove(name);
+        mapPng(name).delete();
         freePlots.add(d.plot);
         save();
         return null;
+    }
+
+    private void freePlot(World w, int plot, int sb) {
+        clearSandbox(w, plot, sb);
+        updateTitle(w, plot, sb, ChatColor.DARK_GRAY + "（空位）");
+        removeTagged(w, plot, sb, "miaeco_hub_frame_" + plot);
+        clearWall(w, plot, sb);
     }
 
     public Set<String> draftNames() {
@@ -445,41 +720,166 @@ public final class HubService {
         return s;
     }
 
-    /** 世界被删除（world remove）：清沙盘、释放地块。主线程调用。 */
+    /** 世界被删除：草稿出身的恢复为可编辑草稿；否则清区释放。主线程调用。 */
     public void onWorldRemoved(String name) {
+        int sbOld = sbOf(name);          // 在记录删除前取，保证清扫范围正确
         Integer plot = plots.remove(name);
+        snaps.remove(name);
+        builtView.remove(name);
+        Draft back = produced.remove(name);
+        World w = Bukkit.getWorld(HUB_WORLD);
+        if (back != null) {
+            back.plot = plot != null ? plot : back.plot;
+            drafts.put(name, back);
+            plotSb.remove(name);
+            if (w != null) {
+                byte[] lvl = back.lastLvl != null ? back.lastLvl : back.baseLvl;
+                buildPlatform(w, back.plot, back.preview);
+                ensurePlotConsole(w, back.plot, back.preview);
+                if (lvl != null && lvl.length == back.preview * back.preview) {
+                    buildDraftFromLevels(w, back, lvl, null);
+                }
+                updateTitle(w, back.plot, back.preview, draftTitle(back));
+                builtDrafts.add(name);
+            }
+            save();
+            return;
+        }
+        plotSb.remove(name);
         previewMaps.remove(name);
+        mapKs.remove(name);
+        mapPng(name).delete();
         if (plot == null) return;
         freePlots.add(plot);
-        World w = Bukkit.getWorld(HUB_WORLD);
-        if (w != null) {
-            clearSandbox(w, plot);
-            updateTitle(w, plot, ChatColor.DARK_GRAY + "（空位）");
-            clearPreviewFrame(w, plot);
-        }
+        if (w != null) freePlot(w, plot, sbOld);
         save();
     }
 
-    /** TerraService 分片落成回调（pool 线程）：大厅在用时实时刷新该世界沙盘。 */
+    /** TerraService 分片落成回调（pool 线程）：大厅在用时置脏并温和重采。 */
     public void onPatchAdded(String worldName) {
         Bukkit.getScheduler().runTask(plugin, () -> {
-            if (Bukkit.getWorld(HUB_WORLD) == null) return;    // 大厅没开过就不花这个钱
-            refreshWorldPlot(worldName, null);
+            if (Bukkit.getWorld(HUB_WORLD) == null) return;
+            World w = Bukkit.getWorld(HUB_WORLD);
+            ensureViewPlot(w, worldName);
         });
     }
 
-    // ============================ 视图沙盘（真实世界采样） ============================
+    // ============================ 控制台联动（HubConsole 调用） ============================
 
-    /** 刷新（必要时新建）某受管世界的沙盘。返回是否启动了刷新。主线程调用。 */
-    public boolean refreshWorldPlot(String worldName, Runnable onDone) {
-        EcoWorlds.Entry entry = eco.worlds().entry(worldName);
+    /** 强制重采某世界沙盘。 */
+    public void refreshWorld(String name) {
+        snaps.remove(name);
+        builtView.remove(name);
+        World w = Bukkit.getWorld(HUB_WORLD);
+        if (w != null) ensureViewPlot(w, name);
+    }
+
+    /** 调整视图沙盘尺寸（清区重建 + 重采样）。 */
+    public String setPlotSb(String name, int sb) {
+        if (drafts.containsKey(name)) return "草稿沙盘尺寸在创建时固定（preview=）。";
+        Integer plot = plots.get(name);
+        if (plot == null) return "没有该世界的沙盘。";
+        int old = sbOf(name);
+        sb = Math.max(MIN_SB, Math.min(MAX_SB, sb));
+        if (sb == old) return null;
+        World w = Bukkit.getWorld(HUB_WORLD);
+        if (w != null) {
+            clearBox(w, plotX(plot) - 1, plotZ(plot) - 1,
+                    plotX(plot) + platW(Math.max(old, sb)) + 4, plotZ(plot) + platW(Math.max(old, sb)) + 1,
+                    BASE_Y, BASE_Y + 24);
+            removeAllPlotTags(w, plot, Math.max(old, sb));
+        }
+        plotSb.put(name, sb);
+        snaps.remove(name);
+        builtView.remove(name);
+        if (w != null) ensureViewPlot(w, name);
+        save();
+        return null;
+    }
+
+    /** 调整预览画墙 K（1~6）；有已渲染的 PNG 时立刻重切重挂。 */
+    public void setMapK(String name, int k) {
+        mapKs.put(name, Math.max(1, Math.min(6, k)));
+        save();
+        World w = Bukkit.getWorld(HUB_WORLD);
+        Integer plot = plotOf(name);
+        if (w == null || plot == null) return;
+        clearWall(w, plot, sbOf(name));
+        File png = mapPng(name);
+        if (png.exists()) {
+            try {
+                BufferedImage img = ImageIO.read(png);
+                if (img != null) attachPreviewWall(w, name, plot, img, mapKOf(name));
+            } catch (IOException ignored) { }
+        }
+    }
+
+    /** 草稿参数修改后：存盘 + 刷新状态牌（预览需重新 roll/water 才反映）。 */
+    void draftParamsChanged(Draft d) {
+        save();
+        World w = Bukkit.getWorld(HUB_WORLD);
+        if (w != null) updateTitle(w, d.plot, d.preview, draftTitle(d));
+    }
+
+    // ============================ 采样（限流队列 + 快照） ============================
+
+    private static final class SampleRun {
+        String name;
+        World target;
+        int plot, sb;
+        int[] wxs, wzs;
+        List<List<Integer>> groups = new ArrayList<>();
+        int nextGroup, inFlight, done;
+        short[] floor, surf;
+    }
+
+    private void enqueueSample(String name) {
+        if (queuedSamples.contains(name) || (sampling != null && sampling.name.equals(name))) return;
+        queuedSamples.add(name);
+        sampleQueue.add(name);
+        ensureTasks();
+    }
+
+    /** 每 tick 泵：一次最多 4 组区块在途——温和、不 overload。 */
+    private void pump() {
+        if (sampling == null) {
+            String name = sampleQueue.poll();
+            if (name == null) return;
+            queuedSamples.remove(name);
+            sampling = startRun(name);
+            if (sampling == null) return;
+        }
+        SampleRun r = sampling;
+        while (r.inFlight < 4 && r.nextGroup < r.groups.size()) {
+            List<Integer> cells = r.groups.get(r.nextGroup++);
+            r.inFlight++;
+            int cx = r.wxs[cells.get(0)] >> 4, cz = r.wzs[cells.get(0)] >> 4;
+            r.target.getChunkAtAsync(cx, cz).whenComplete((chunk, err) ->
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (err == null && chunk != null) {
+                            for (int i : cells) {
+                                int fy = r.target.getHighestBlockYAt(r.wxs[i], r.wzs[i],
+                                        org.bukkit.HeightMap.OCEAN_FLOOR);
+                                int sy = r.target.getHighestBlockYAt(r.wxs[i], r.wzs[i],
+                                        org.bukkit.HeightMap.MOTION_BLOCKING);
+                                r.floor[i] = fy <= r.target.getMinHeight() ? Short.MIN_VALUE : (short) fy;
+                                r.surf[i] = (short) Math.max(-32000, Math.min(32000, sy));
+                            }
+                        }
+                        r.done += cells.size();
+                        r.inFlight--;
+                        if (r.done >= r.sb * r.sb && r.inFlight == 0) finishRun(r);
+                    }));
+        }
+    }
+
+    private SampleRun startRun(String name) {
+        EcoWorlds.Entry entry = eco.worlds().entry(name);
+        World target = Bukkit.getWorld(name);
         World hub = Bukkit.getWorld(HUB_WORLD);
-        World target = Bukkit.getWorld(worldName);
-        if (entry == null || hub == null || target == null) return false;
-        if (!refreshing.add(worldName)) return false;
-        int plot = plots.computeIfAbsent(worldName, k -> allocPlot());
-        buildPlatform(hub, plot);
-        updateTitle(hub, plot, viewTitle(worldName));
+        Integer plot = plots.get(name);
+        if (entry == null || target == null || hub == null || plot == null) return null;
+        int sb = sbOf(name);
         int x1, z1, span;
         if (entry.map != null) {
             span = entry.map.size();
@@ -487,10 +887,9 @@ public final class HubService {
             z1 = -span / 2;
         } else {
             if (entry.patches.isEmpty()) {
-                clearSandbox(hub, plot);
-                refreshing.remove(worldName);
-                if (onDone != null) onDone.run();
-                return true;
+                clearSandbox(hub, plot, sb);
+                builtView.put(name, 0);
+                return null;
             }
             int minX = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
             int maxX = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
@@ -504,177 +903,201 @@ public final class HubService {
             x1 = minX;
             z1 = minZ;
         }
-        sampleWorld(target, x1, z1, span, (floorY, surfY) -> {
-            try {
-                buildViewSandbox(hub, plot, target, floorY, surfY);
-                updateTitle(hub, plot, viewTitle(worldName));
-            } finally {
-                refreshing.remove(worldName);
-                if (onDone != null) onDone.run();
-            }
-        });
-        return true;
-    }
-
-    /** SB×SB 采样：并发异步加载全部涉及区块，各自回主线程读高度，齐了回调。 */
-    private void sampleWorld(World w, int x1, int z1, int span,
-                             java.util.function.BiConsumer<int[], int[]> onDone) {
-        int n = SB * SB;
-        int[] floorY = new int[n];
-        int[] surfY = new int[n];
-        java.util.Arrays.fill(floorY, Integer.MIN_VALUE);
-        int[] wxs = new int[n], wzs = new int[n];
+        SampleRun r = new SampleRun();
+        r.name = name;
+        r.target = target;
+        r.plot = plot;
+        r.sb = sb;
+        int n = sb * sb;
+        r.wxs = new int[n];
+        r.wzs = new int[n];
+        r.floor = new short[n];
+        r.surf = new short[n];
+        java.util.Arrays.fill(r.floor, Short.MIN_VALUE);
         Map<Long, List<Integer>> byChunk = new LinkedHashMap<>();
         for (int i = 0; i < n; i++) {
-            int cx = i % SB, cz = i / SB;
-            wxs[i] = x1 + (int) ((cx + 0.5) * span / (double) SB);
-            wzs[i] = z1 + (int) ((cz + 0.5) * span / (double) SB);
-            long key = ((long) (wxs[i] >> 4) << 32) ^ ((wzs[i] >> 4) & 0xFFFFFFFFL);
+            r.wxs[i] = x1 + (int) ((i % sb + 0.5) * span / (double) sb);
+            r.wzs[i] = z1 + (int) ((i / sb + 0.5) * span / (double) sb);
+            long key = ((long) (r.wxs[i] >> 4) << 32) ^ ((r.wzs[i] >> 4) & 0xFFFFFFFFL);
             byChunk.computeIfAbsent(key, k -> new ArrayList<>()).add(i);
         }
-        int[] pending = {byChunk.size()};
-        for (var e : byChunk.entrySet()) {
-            List<Integer> cells = e.getValue();
-            int scx = wxs[cells.get(0)] >> 4, scz = wzs[cells.get(0)] >> 4;
-            w.getChunkAtAsync(scx, scz).whenComplete((chunk, err) ->
-                    Bukkit.getScheduler().runTask(plugin, () -> {
-                        if (err == null && chunk != null) {
-                            for (int i : cells) {
-                                int fy = w.getHighestBlockYAt(wxs[i], wzs[i], org.bukkit.HeightMap.OCEAN_FLOOR);
-                                int sy = w.getHighestBlockYAt(wxs[i], wzs[i], org.bukkit.HeightMap.MOTION_BLOCKING);
-                                floorY[i] = fy <= w.getMinHeight() ? Integer.MIN_VALUE : fy;
-                                surfY[i] = sy;
-                            }
-                        }
-                        if (--pending[0] == 0) onDone.accept(floorY, surfY);
-                    }));
-        }
-        if (byChunk.isEmpty()) onDone.accept(floorY, surfY);
+        r.groups.addAll(byChunk.values());
+        return r;
     }
 
-    /** 采样结果 → 雪柱沙盘：高度自适应分层，水列铺浅蓝玻璃，标注最高/最低。 */
-    private void buildViewSandbox(World hub, int plot, World target, int[] floorY, int[] surfY) {
+    private void finishRun(SampleRun r) {
+        sampling = null;
+        EcoWorlds.Entry entry = eco.worlds().entry(r.name);
+        Snap s = new Snap();
+        s.patchCount = entry == null ? 0 : entry.patches.size();
+        s.floor = r.floor;
+        s.surf = r.surf;
+        snaps.put(r.name, s);
+        save();
+        World hub = Bukkit.getWorld(HUB_WORLD);
+        if (hub != null) buildViewFromSnap(hub, r.name, r.plot, r.sb, s);
+    }
+
+    // ============================ 沙盘铺设（分批） ============================
+
+    /** 一格沙盘柱：雪层级 + 玻璃水面 Y（<0 无）。 */
+    private record Col(int snow, int glassY) { }
+
+    private void buildViewFromSnap(World w, String name, int plot, int sb, Snap s) {
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
-        for (int i = 0; i < SB * SB; i++) {
-            if (floorY[i] == Integer.MIN_VALUE) continue;
-            int top = Math.max(floorY[i], surfY[i]);
-            minY = Math.min(minY, floorY[i]);
-            maxY = Math.max(maxY, top);
+        for (int i = 0; i < sb * sb; i++) {
+            if (s.floor[i] == Short.MIN_VALUE) continue;
+            minY = Math.min(minY, s.floor[i]);
+            maxY = Math.max(maxY, Math.max(s.floor[i], s.surf[i]));
         }
-        clearSandbox(hub, plot);
-        if (minY == Integer.MAX_VALUE) return;                 // 全是虚空：留空
-        int span = Math.max(8, maxY - minY);
-        int px = plotX(plot), pz = plotZ(plot);
+        Col[] cols = new Col[sb * sb];
         int hiCell = -1, loCell = -1, hiY = Integer.MIN_VALUE, loY = Integer.MAX_VALUE;
-        for (int i = 0; i < SB * SB; i++) {
-            if (floorY[i] == Integer.MIN_VALUE) continue;
-            boolean water = surfY[i] > floorY[i];
-            int lvl = 4 + (int) Math.round(92.0 * (floorY[i] - minY) / span);
-            int bx = px + INSET + i % SB, bz = pz + INSET + i / SB;
-            if (water) {
-                int glassLvl = Math.max(lvl, 4 + (int) Math.round(92.0 * (surfY[i] - minY) / span));
-                int glassY = blockTopY(glassLvl);
-                placeSnowColumn(hub, bx, bz, Math.min(lvl, (glassY - BASE_Y - 1) * 8));
-                hub.getBlockAt(bx, glassY, bz).setType(Material.LIGHT_BLUE_STAINED_GLASS, false);
-            } else {
-                placeSnowColumn(hub, bx, bz, lvl);
-                if (floorY[i] > hiY) { hiY = floorY[i]; hiCell = i; }
-                if (floorY[i] < loY) { loY = floorY[i]; loCell = i; }
+        if (minY != Integer.MAX_VALUE) {
+            int span = Math.max(8, maxY - minY);
+            for (int i = 0; i < sb * sb; i++) {
+                if (s.floor[i] == Short.MIN_VALUE) {
+                    cols[i] = new Col(0, -1);
+                    continue;
+                }
+                boolean water = s.surf[i] > s.floor[i];
+                int lvl = 4 + (int) Math.round(92.0 * (s.floor[i] - minY) / span);
+                if (water) {
+                    int glassLvl = Math.max(lvl, 4 + (int) Math.round(92.0 * (s.surf[i] - minY) / span));
+                    int glassY = blockTopY(glassLvl);
+                    cols[i] = new Col(Math.min(lvl, (glassY - BASE_Y - 1) * 8), glassY);
+                } else {
+                    cols[i] = new Col(lvl, -1);
+                    if (s.floor[i] > hiY) { hiY = s.floor[i]; hiCell = i; }
+                    if (s.floor[i] < loY) { loY = s.floor[i]; loCell = i; }
+                }
             }
+        } else {
+            java.util.Arrays.fill(cols, new Col(0, -1));
         }
-        if (hiCell >= 0) {
-            markCell(hub, plot, hiCell, ChatColor.GOLD + "▲ 最高 y=" + hiY, "hi");
-        }
-        if (loCell >= 0 && loCell != hiCell) {
-            markCell(hub, plot, loCell, ChatColor.AQUA + "▼ 最低 y=" + loY, "lo");
-        }
+        final int fHi = hiCell, fLo = loCell, fHiY = hiY, fLoY = loY;
+        EcoWorlds.Entry entry = eco.worlds().entry(name);
+        final int stamp = entry == null ? 0 : entry.patches.size();
+        placeSandbox(w, plot, sb, cols, () -> {
+            builtView.put(name, stamp);
+            removeTagged(w, plot, sb, "miaeco_hub_mark_" + plot);
+            if (fHi >= 0) markCell(w, plot, sb, fHi, ChatColor.GOLD + "▲ 最高 y=" + fHiY);
+            if (fLo >= 0 && fLo != fHi) markCell(w, plot, sb, fLo, ChatColor.AQUA + "▼ 最低 y=" + fLoY);
+            updateTitle(w, plot, sb, viewTitle(name));
+        });
     }
 
-    // ============================ 草稿沙盘 ============================
-
-    /** 高度（米）→ 草稿层级（可逆：米 = (层级-24)×45）。离线工具校验用，公开。 */
-    public static int lvlOfMeters(float m) {
-        return Math.max(0, Math.min(MAX_LVL, SEA_LVL + (int) Math.round(m / M_PER_LEVEL)));
-    }
-
-    /** meters=null 时铺平盘（海平面）。 */
-    private void buildDraftSandbox(World w, Draft d, float[] meters) {
-        clearSandbox(w, d.plot);
-        int px = plotX(d.plot), pz = plotZ(d.plot);
-        byte[] base = new byte[SB * SB];
+    private void buildDraftFromMeters(World w, Draft d, float[] meters) {
+        int sb = d.preview;
+        Col[] cols = new Col[sb * sb];
+        byte[] base = new byte[sb * sb];
         int hiCell = -1, loCell = -1;
         float hiM = -Float.MAX_VALUE, loM = Float.MAX_VALUE;
-        for (int i = 0; i < SB * SB; i++) {
-            float m = meters == null ? 0 : meters[i];
+        for (int i = 0; i < sb * sb; i++) {
+            float m = meters[i];
             int lvl = lvlOfMeters(m);
-            int bx = px + INSET + i % SB, bz = pz + INSET + i / SB;
             int placed;
             if (m < 0) {
                 int glassY = blockTopY(SEA_LVL);
-                placed = Math.min(lvl, (glassY - BASE_Y - 1) * 8);   // 水下柱止于玻璃之下
-                placeSnowColumn(w, bx, bz, placed);
-                w.getBlockAt(bx, glassY, bz).setType(Material.LIGHT_BLUE_STAINED_GLASS, false);
+                placed = Math.min(lvl, (glassY - BASE_Y - 1) * 8);
+                cols[i] = new Col(placed, glassY);
             } else {
                 placed = Math.max(lvl, 1);
-                placeSnowColumn(w, bx, bz, placed);
+                cols[i] = new Col(placed, -1);
                 if (m > hiM) { hiM = m; hiCell = i; }
                 if (m < loM) { loM = m; loCell = i; }
             }
-            base[i] = (byte) placed;      // 基线=实际摆放层级：不动雪面 → confirm 差量必为 0
+            base[i] = (byte) placed;
         }
         d.baseLvl = base;
-        if (meters != null && hiCell >= 0) {
-            markCell(w, d.plot, hiCell, ChatColor.GOLD + "▲ 最高 ~" + (int) hiM + "m", "hi");
-            if (loCell >= 0 && loCell != hiCell) {
-                markCell(w, d.plot, loCell, ChatColor.AQUA + "▼ 最低 ~" + (int) loM + "m", "lo");
-            }
+        d.lastLvl = base.clone();
+        final int fHi = hiCell, fLo = loCell;
+        final float fHiM = hiM, fLoM = loM;
+        placeSandbox(w, d.plot, sb, cols, () -> {
+            removeTagged(w, d.plot, sb, "miaeco_hub_mark_" + d.plot);
+            if (fHi >= 0) markCell(w, d.plot, sb, fHi, ChatColor.GOLD + "▲ 最高 ~" + (int) fHiM + "m");
+            if (fLo >= 0 && fLo != fHi) markCell(w, d.plot, sb, fLo, ChatColor.AQUA + "▼ 最低 ~" + (int) fLoM + "m");
+        });
+        builtDrafts.add(d.name);
+    }
+
+    private void buildDraftFromLevels(World w, Draft d, byte[] lvl, Runnable onDone) {
+        int sb = d.preview;
+        Col[] cols = new Col[sb * sb];
+        for (int i = 0; i < sb * sb; i++) {
+            int v = lvl[i] & 0xFF;
+            // 低于海平面层级的柱按水显示（草稿玻璃恒在海平面层）
+            cols[i] = v < SEA_LVL ? new Col(v, blockTopY(SEA_LVL)) : new Col(Math.max(v, 1), -1);
         }
+        placeSandbox(w, d.plot, sb, cols, onDone);
+    }
+
+    /** 分批铺盘：每 tick 清+铺 3 行；同地块并发时挂起后跑（最后一次生效）。 */
+    private void placeSandbox(World w, int plot, int sb, Col[] cols, Runnable onDone) {
+        if (buildingPlots.contains(plot)) {
+            pendingBuild.put(plot, () -> placeSandbox(w, plot, sb, cols, onDone));
+            return;
+        }
+        buildingPlots.add(plot);
+        int px = plotX(plot), pz = plotZ(plot);
+        new BukkitRunnable() {
+            int row = 0;
+
+            @Override
+            public void run() {
+                int rows = 0;
+                while (row < sb && rows < 3) {
+                    for (int x = 0; x < sb; x++) {
+                        int bx = px + INSET + x, bz = pz + INSET + row;
+                        for (int y = BASE_Y + 1; y <= BASE_Y + 16; y++) {
+                            Block b = w.getBlockAt(bx, y, bz);
+                            if (b.getType() != Material.AIR) b.setType(Material.AIR, false);
+                        }
+                        Col c = cols[row * sb + x];
+                        placeSnowColumn(w, bx, bz, c.snow());
+                        if (c.glassY() > 0) {
+                            w.getBlockAt(bx, c.glassY(), bz)
+                                    .setType(Material.LIGHT_BLUE_STAINED_GLASS, false);
+                        }
+                    }
+                    row++;
+                    rows++;
+                }
+                if (row >= sb) {
+                    cancel();
+                    buildingPlots.remove(plot);
+                    if (onDone != null) onDone.run();
+                    Runnable next = pendingBuild.remove(plot);
+                    if (next != null) next.run();
+                }
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
     }
 
     /** 读当前雪面层级（confirm/water 用）。 */
-    private byte[] readSnowLevels(World w, int plot) {
-        byte[] out = new byte[SB * SB];
+    private byte[] readSnowLevels(World w, int plot, int sb) {
+        byte[] out = new byte[sb * sb];
         int px = plotX(plot), pz = plotZ(plot);
-        for (int i = 0; i < SB * SB; i++) {
-            int bx = px + INSET + i % SB, bz = pz + INSET + i / SB;
-            int lvl = 0;
-            for (int y = BASE_Y + 16; y > BASE_Y; y--) {
-                Block b = w.getBlockAt(bx, y, bz);
-                Material t = b.getType();
-                if (t == Material.SNOW_BLOCK) {
-                    lvl = (y - BASE_Y) * 8;
-                    break;
-                }
-                if (t == Material.SNOW) {
-                    lvl = (y - BASE_Y - 1) * 8 + ((Snow) b.getBlockData()).getLayers();
-                    break;
-                }
-            }
-            out[i] = (byte) Math.max(0, Math.min(MAX_LVL, lvl));
+        for (int i = 0; i < sb * sb; i++) {
+            out[i] = (byte) readColumnLvl(w, px + INSET + i % sb, pz + INSET + i / sb);
         }
         return out;
     }
 
-    private float[] readSnowMeters(World w, Draft d) {
-        byte[] lvl = readSnowLevels(w, d.plot);
-        float[] m = new float[SB * SB];
-        for (int i = 0; i < SB * SB; i++) m[i] = (float) (((lvl[i] & 0xFF) - SEA_LVL) * M_PER_LEVEL);
-        return m;
+    private static int readColumnLvl(World w, int bx, int bz) {
+        for (int y = BASE_Y + 16; y > BASE_Y; y--) {
+            Block b = w.getBlockAt(bx, y, bz);
+            Material t = b.getType();
+            if (t == Material.SNOW_BLOCK) return Math.min(MAX_LVL, (y - BASE_Y) * 8);
+            if (t == Material.SNOW) {
+                return Math.min(MAX_LVL, (y - BASE_Y - 1) * 8 + ((Snow) b.getBlockData()).getLayers());
+            }
+        }
+        return 0;
     }
 
-    // ============================ 沙盘方块工具 ============================
-
-    private int plotX(int plot) {
-        return (plot % PLOTS_PER_ROW) * PITCH;
-    }
-
-    private int plotZ(int plot) {
-        return (plot / PLOTS_PER_ROW) * PITCH;
-    }
-
-    private Location plotViewLoc(World w, int plot) {
-        return new Location(w, plotX(plot) + PLOT_W / 2.0, BASE_Y + 1, plotZ(plot) - 1.5,
-                0f, 20f);
+    /** 高度（米）→ 草稿层级（可逆：米 = (层级-24)×45）。离线工具校验用，公开。 */
+    public static int lvlOfMeters(float m) {
+        return Math.max(0, Math.min(MAX_LVL, SEA_LVL + (int) Math.round(m / M_PER_LEVEL)));
     }
 
     /** 层级 → 顶面所在方块 Y（部分层占一格）。 */
@@ -697,49 +1120,51 @@ public final class HubService {
         }
     }
 
-    private void buildPlatform(World w, int plot) {
+    // ============================ 平台/操作台/悬浮字 ============================
+
+    private void buildPlatform(World w, int plot, int sb) {
         int px = plotX(plot), pz = plotZ(plot);
-        Block probe = w.getBlockAt(px, BASE_Y, pz);
-        boolean fresh = probe.getType() != Material.SMOOTH_STONE;
-        if (!fresh) return;
-        for (int x = 0; x < PLOT_W; x++) {
-            for (int z = 0; z < PLOT_W; z++) {
+        int pw = platW(sb);
+        if (w.getBlockAt(px, BASE_Y, pz).getType() == Material.SMOOTH_STONE
+                && w.getBlockAt(px + pw - 1, BASE_Y, pz + pw - 1).getType() == Material.SMOOTH_STONE) {
+            return;
+        }
+        for (int x = 0; x < pw; x++) {
+            for (int z = 0; z < pw; z++) {
                 w.getBlockAt(px + x, BASE_Y, pz + z).setType(Material.SMOOTH_STONE, false);
             }
         }
-        for (int x = -1; x <= PLOT_W; x++) {                  // 石英包边
+        for (int x = -1; x <= pw; x++) {
             w.getBlockAt(px + x, BASE_Y, pz - 1).setType(Material.SMOOTH_QUARTZ, false);
-            w.getBlockAt(px + x, BASE_Y, pz + PLOT_W).setType(Material.SMOOTH_QUARTZ, false);
+            w.getBlockAt(px + x, BASE_Y, pz + pw).setType(Material.SMOOTH_QUARTZ, false);
         }
-        for (int z = 0; z < PLOT_W; z++) {
+        for (int z = 0; z < pw; z++) {
             w.getBlockAt(px - 1, BASE_Y, pz + z).setType(Material.SMOOTH_QUARTZ, false);
-            w.getBlockAt(px + PLOT_W, BASE_Y, pz + z).setType(Material.SMOOTH_QUARTZ, false);
+            w.getBlockAt(px + pw, BASE_Y, pz + z).setType(Material.SMOOTH_QUARTZ, false);
         }
-        // 画架立柱（沙盘东侧，画朝西对着沙盘）
-        w.getBlockAt(px + PLOT_W - 2, BASE_Y + 1, pz + PLOT_W / 2).setType(Material.SMOOTH_STONE, false);
-        w.getBlockAt(px + PLOT_W - 2, BASE_Y + 2, pz + PLOT_W / 2).setType(Material.SMOOTH_STONE, false);
     }
 
-    private void clearSandbox(World w, int plot) {
-        int px = plotX(plot), pz = plotZ(plot);
-        for (int x = 0; x < SB; x++) {
-            for (int z = 0; z < SB; z++) {
-                for (int y = BASE_Y + 1; y <= BASE_Y + 16; y++) {
-                    Block b = w.getBlockAt(px + INSET + x, y, pz + INSET + z);
-                    if (b.getType() != Material.AIR) b.setType(Material.AIR, false);
-                }
-            }
-        }
-        removeTagged(w, plot, "miaeco_hub_mark_" + plot);
+    private void ensureMainConsole(World w) {
+        placeLectern(w, mainConsoleLoc(w), BlockFace.SOUTH);   // 面向出生点方向
     }
 
-    // ============================ 悬浮字/画框 ============================
+    private void ensurePlotConsole(World w, int plot, int sb) {
+        placeLectern(w, plotConsoleLoc(w, plot, sb), BlockFace.NORTH);
+    }
 
-    private void updateTitle(World w, int plot, String text) {
+    private void placeLectern(World w, Location loc, BlockFace face) {
+        Block b = w.getBlockAt(loc);
+        if (b.getType() == Material.LECTERN) return;
+        Directional d = (Directional) Material.LECTERN.createBlockData();
+        d.setFacing(face);
+        b.setBlockData(d, false);
+    }
+
+    private void updateTitle(World w, int plot, int sb, String text) {
         String tag = "miaeco_hub_title_" + plot;
-        removeTagged(w, plot, tag);
-        Location loc = new Location(w, plotX(plot) + PLOT_W / 2.0, BASE_Y + 15.5,
-                plotZ(plot) + PLOT_W / 2.0);
+        removeTagged(w, plot, sb, tag);
+        Location loc = new Location(w, plotX(plot) + platW(sb) / 2.0, BASE_Y + 15.5,
+                plotZ(plot) + platW(sb) / 2.0);
         w.spawn(loc, TextDisplay.class, td -> {
             td.setText(text);
             td.setBillboard(Display.Billboard.CENTER);
@@ -752,9 +1177,9 @@ public final class HubService {
         });
     }
 
-    private void markCell(World w, int plot, int cell, String text, String kind) {
+    private void markCell(World w, int plot, int sb, int cell, String text) {
         String tag = "miaeco_hub_mark_" + plot;
-        int bx = plotX(plot) + INSET + cell % SB, bz = plotZ(plot) + INSET + cell / SB;
+        int bx = plotX(plot) + INSET + cell % sb, bz = plotZ(plot) + INSET + cell / sb;
         int topY = w.getHighestBlockYAt(bx, bz) + 1;
         Location loc = new Location(w, bx + 0.5, topY + 0.8, bz + 0.5);
         w.spawn(loc, TextDisplay.class, td -> {
@@ -766,13 +1191,33 @@ public final class HubService {
         });
     }
 
-    private void removeTagged(World w, int plot, String tag) {
+    private void removeTagged(World w, int plot, int sb, String tag) {
         int px = plotX(plot), pz = plotZ(plot);
+        int pw = platW(Math.max(sb, MAX_SB));
         BoundingBox box = new BoundingBox(px - 2, BASE_Y - 2, pz - 2,
-                px + PLOT_W + 2, BASE_Y + 24, pz + PLOT_W + 2);
+                px + pw + 8, BASE_Y + 24, pz + pw + 2);
         for (Entity e : w.getNearbyEntities(box, en -> en.getScoreboardTags().contains(tag))) {
             e.remove();
         }
+    }
+
+    /** 清掉该地块上全部 hub 实体（换沙盘尺寸重建时）。 */
+    private void removeAllPlotTags(World w, int plot, int sb) {
+        int px = plotX(plot), pz = plotZ(plot);
+        int pw = platW(Math.max(sb, MAX_SB));
+        BoundingBox box = new BoundingBox(px - 2, BASE_Y - 2, pz - 2,
+                px + pw + 8, BASE_Y + 24, pz + pw + 2);
+        for (Entity e : w.getNearbyEntities(box,
+                en -> en.getScoreboardTags().stream().anyMatch(t -> t.startsWith("miaeco_hub")))) {
+            e.remove();
+        }
+    }
+
+    private void clearSandbox(World w, int plot, int sb) {
+        int px = plotX(plot), pz = plotZ(plot);
+        clearBox(w, px + INSET, pz + INSET, px + INSET + sb - 1, pz + INSET + sb - 1,
+                BASE_Y + 1, BASE_Y + 16);
+        removeTagged(w, plot, sb, "miaeco_hub_mark_" + plot);
     }
 
     private String viewTitle(String worldName) {
@@ -803,48 +1248,80 @@ public final class HubService {
     }
 
     private String draftTitle(Draft d) {
-        return ChatColor.WHITE + "" + ChatColor.BOLD + d.name + ChatColor.RESET + ChatColor.LIGHT_PURPLE + "（草稿）"
+        return ChatColor.WHITE + "" + ChatColor.BOLD + d.name + ChatColor.RESET
+                + ChatColor.LIGHT_PURPLE + "（草稿）"
                 + '\n' + ChatColor.GRAY + d.size + "² @" + d.mpb + "m/格 海平面 " + d.sea
-                + (d.openEdge ? " 断崖边缘" : "") + (d.yscale != 1.0 ? " y×" + d.yscale : "")
+                + (d.openEdge ? " 断崖边缘" : "") + (d.yscale != 1.0 ? " y×" + fmt1(d.yscale) : "")
                 + '\n' + (d.seed == null
-                ? ChatColor.YELLOW + "还没抽卡：/miaeco hub roll " + d.name
+                ? ChatColor.YELLOW + "还没抽卡——右键旁边的操作台"
                 : ChatColor.AQUA + "seed=" + d.seed + ChatColor.GRAY + " · 手修雪面后 confirm 送产");
     }
 
-    private int plotOf(String name) {
-        Integer p = plots.get(name);
-        if (p != null) return p;
-        Draft d = drafts.get(name);
-        return d != null ? d.plot : -1;
+    static String fmt1(double v) {
+        return String.format(java.util.Locale.ROOT, "%.1f", v);
     }
 
-    private int plotOfDraftOrView(String name) {
-        return plotOf(name);
+    // ============================ 地图画墙（K×K 拼接） ============================
+
+    /** 画墙几何：支撑墙在平台东侧外 2 格，画面朝西对着沙盘，底行 y=BASE_Y+3。 */
+    private int wallFrameX(int plot, int sb) {
+        return plotX(plot) + platW(sb) + 1;
     }
 
-    private int allocPlot() {
-        if (!freePlots.isEmpty()) return freePlots.remove(freePlots.size() - 1);
-        return nextPlot++;
+    private int wallZ0(int plot, int sb, int k) {
+        return plotZ(plot) + Math.max(0, (platW(sb) - k) / 2);
     }
 
-    // ============================ 地图画 ============================
+    private void clearWall(World w, int plot, int sb) {
+        int fx = wallFrameX(plot, sb);
+        removeTagged(w, plot, sb, "miaeco_hub_frame_" + plot);
+        clearBox(w, fx, plotZ(plot) - 1, fx + 1, plotZ(plot) + platW(MAX_SB) + 1,
+                BASE_Y + 1, BASE_Y + 12);
+    }
 
-    /** 把渲染图挂到该沙盘的画框（无框则生成）。 */
-    private void attachPreviewMap(World hub, String name, int plot, BufferedImage img) {
-        if (plot < 0) return;
-        MapView view = null;
-        Integer id = previewMaps.get(name);
-        if (id != null) view = mapById(id);
-        if (view == null) {
-            view = Bukkit.createMap(hub);
-            previewMaps.put(name, view.getId());
-            save();
+    private void attachPreviewWall(World w, String name, int plot, BufferedImage img, int k) {
+        int sb = sbOf(name);
+        clearWall(w, plot, sb);
+        List<Integer> ids = new ArrayList<>(previewMaps.getOrDefault(name, List.of()));
+        while (ids.size() < k * k) ids.add(-1);
+        int fx = wallFrameX(plot, sb), z0 = wallZ0(plot, sb, k);
+        int yTop = BASE_Y + 3 + k - 1;
+        List<Integer> newIds = new ArrayList<>(k * k);
+        for (int ky = 0; ky < k; ky++) {
+            for (int kx = 0; kx < k; kx++) {
+                int idx = ky * k + kx;
+                MapView view = ids.get(idx) >= 0 ? mapById(ids.get(idx)) : null;
+                if (view == null) view = Bukkit.createMap(w);
+                newIds.add(view.getId());
+                for (MapRenderer r : new ArrayList<>(view.getRenderers())) view.removeRenderer(r);
+                view.setScale(MapView.Scale.CLOSEST);
+                view.setTrackingPosition(false);
+                int cellW = img.getWidth() / k, cellH = img.getHeight() / k;
+                view.addRenderer(new ImageRenderer(
+                        img.getSubimage(kx * cellW, ky * cellH, cellW, cellH)));
+                // 支撑 + 画框
+                int fz = z0 + kx, fy = yTop - ky;
+                w.getBlockAt(fx + 1, fy, fz).setType(Material.SMOOTH_STONE, false);
+                spawnFrame(w, plot, new Location(w, fx + 0.5, fy + 0.5, fz + 0.5), view);
+            }
         }
-        for (MapRenderer r : new ArrayList<>(view.getRenderers())) view.removeRenderer(r);
-        view.setScale(MapView.Scale.CLOSEST);
-        view.setTrackingPosition(false);
-        view.addRenderer(new ImageRenderer(img));
-        ensureFrame(hub, plot, view);
+        previewMaps.put(name, newIds);
+        save();
+    }
+
+    private void spawnFrame(World w, int plot, Location loc, MapView view) {
+        GlowItemFrame frame = w.spawn(loc, GlowItemFrame.class, f -> {
+            f.setFacingDirection(BlockFace.WEST, true);
+            f.setFixed(true);
+            f.setInvulnerable(true);
+            f.addScoreboardTag("miaeco_hub_frame_" + plot);
+            f.addScoreboardTag("miaeco_hub_any");
+        });
+        ItemStack item = new ItemStack(Material.FILLED_MAP);
+        MapMeta meta = (MapMeta) item.getItemMeta();
+        meta.setMapView(view);
+        item.setItemMeta(meta);
+        frame.setItem(item, false);
     }
 
     @SuppressWarnings("deprecation")
@@ -856,47 +1333,26 @@ public final class HubService {
         }
     }
 
-    private void ensureFrame(World w, int plot, MapView view) {
-        String tag = "miaeco_hub_frame_" + plot;
-        int px = plotX(plot), pz = plotZ(plot);
-        Location loc = new Location(w, px + PLOT_W - 3 + 0.5, BASE_Y + 2 + 0.5, pz + PLOT_W / 2 + 0.5);
-        GlowItemFrame frame = null;
-        for (Entity e : w.getNearbyEntities(new BoundingBox(px, BASE_Y, pz,
-                px + PLOT_W, BASE_Y + 6, pz + PLOT_W), en -> en.getScoreboardTags().contains(tag))) {
-            if (e instanceof GlowItemFrame gif) frame = gif;
-        }
-        if (frame == null) {
-            frame = w.spawn(loc, GlowItemFrame.class, f -> {
-                f.setFacingDirection(BlockFace.WEST, true);
-                f.setFixed(true);
-                f.setInvulnerable(true);
-                f.addScoreboardTag(tag);
-                f.addScoreboardTag("miaeco_hub_any");
-            });
-        }
-        ItemStack item = new ItemStack(Material.FILLED_MAP);
-        MapMeta meta = (MapMeta) item.getItemMeta();
-        meta.setMapView(view);
-        item.setItemMeta(meta);
-        frame.setItem(item, false);
-    }
-
-    private void clearPreviewFrame(World w, int plot) {
-        removeTagged(w, plot, "miaeco_hub_frame_" + plot);
-    }
-
-    /** 启动时给持久化过的预览地图重挂渲染器（PNG 落盘在 hub-maps/）。 */
+    /** 启动时给持久化过的预览地图重挂渲染器（PNG 大图切片）。 */
     private void reattachMaps() {
         for (var e : previewMaps.entrySet()) {
             File png = mapPng(e.getKey());
-            if (!png.exists()) continue;
-            MapView v = mapById(e.getValue());
-            if (v == null) continue;
+            if (!png.exists() || e.getValue().isEmpty()) continue;
             try {
                 BufferedImage img = ImageIO.read(png);
                 if (img == null) continue;
-                for (MapRenderer r : new ArrayList<>(v.getRenderers())) v.removeRenderer(r);
-                v.addRenderer(new ImageRenderer(img));
+                int k = (int) Math.round(Math.sqrt(e.getValue().size()));
+                if (k * k != e.getValue().size()) continue;
+                int cellW = img.getWidth() / k, cellH = img.getHeight() / k;
+                for (int ky = 0; ky < k; ky++) {
+                    for (int kx = 0; kx < k; kx++) {
+                        MapView v = mapById(e.getValue().get(ky * k + kx));
+                        if (v == null) continue;
+                        for (MapRenderer r : new ArrayList<>(v.getRenderers())) v.removeRenderer(r);
+                        v.addRenderer(new ImageRenderer(
+                                img.getSubimage(kx * cellW, ky * cellH, cellW, cellH)));
+                    }
+                }
             } catch (IOException ignored) { }
         }
     }
@@ -904,7 +1360,8 @@ public final class HubService {
     /** 静态图渲染器（每张画布画一次）。 */
     private static final class ImageRenderer extends MapRenderer {
         private final BufferedImage img;
-        private final Set<MapCanvas> drawn = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        private final Set<MapCanvas> drawn =
+                java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 
         ImageRenderer(BufferedImage img) {
             this.img = img;
@@ -924,10 +1381,10 @@ public final class HubService {
 
     // ============================ 水系预览渲染 ============================
 
-    /** 128×128 俯视图：高程分层设色 + 湖/河/海（与 riverMap 工具同风格）。 */
+    /** R×R 俯视图：高程分层设色 + 湖/河/海（与 riverMap 工具同风格）。 */
     private BufferedImage renderPreview(float[] meters, RiverPlanner.RiverPlan plan,
-                                        HeightMapper mapper, Draft d) {
-        final int R = 128;
+                                        HeightMapper mapper, Draft d, int R) {
+        int sb = d.preview;
         int x1 = -d.size / 2, z1 = -d.size / 2;
         BufferedImage img = new BufferedImage(R, R, BufferedImage.TYPE_INT_RGB);
         int sea = d.sea;
@@ -937,9 +1394,9 @@ public final class HubService {
             for (int px = 0; px < R; px++) {
                 double wx = x1 + (px + 0.5) * d.size / (double) R;
                 double wz = z1 + (pz + 0.5) * d.size / (double) R;
-                float m = TerraService.sketchAt(meters, SB, x1, z1, d.size, wx, wz);
+                float m = TerraService.sketchAt(meters, sb, x1, z1, d.size, wx, wz);
                 int y = mapper.yOf(m);
-                ys[pz][px] = m < 0 ? -Math.max(1, sea - y) : y;   // 负数=水深
+                ys[pz][px] = m < 0 ? -Math.max(1, sea - y) : y;
                 if (y > maxY) maxY = y;
             }
         }
@@ -960,7 +1417,6 @@ public final class HubService {
             }
         }
         double pxPerBlock = R / (double) d.size;
-        // 湖泊
         for (RiverPlanner.Lake lk : plan.lakes()) {
             for (int gz = 0; gz < lk.gh(); gz++) {
                 for (int gx = 0; gx < lk.gw(); gx++) {
@@ -977,7 +1433,6 @@ public final class HubService {
                 }
             }
         }
-        // 河流折线
         for (RiverPlanner.River r : plan.rivers()) {
             int col = r.kind() == RiverPlanner.R_MAIN ? 0x59D6F2 : 0x77C6E8;
             List<RiverPlanner.Node> ns = r.nodes();
@@ -1003,17 +1458,17 @@ public final class HubService {
         return img;
     }
 
-    /** 河/湖 → 沙盘上贴雪面的粒子点（大厅世界坐标）。纯计算，worker 线程安全：
-     *  雪面高度用调用前在主线程读好的当前层级快照。 */
+    /** 河/湖 → 沙盘上贴雪面的粒子点（大厅世界坐标）。纯计算，worker 线程安全。 */
     private List<double[]> particlePoints(Draft d, byte[] snowLvl, RiverPlanner.RiverPlan plan,
                                           int x1, int z1) {
         List<double[]> pts = new ArrayList<>();
+        int sb = d.preview;
         double px0 = plotX(d.plot) + INSET, pz0 = plotZ(d.plot) + INSET;
-        double blocksPerCell = d.size / (double) SB;
+        double blocksPerCell = d.size / (double) sb;
         java.util.function.BiFunction<Double, Double, double[]> toHub = (wx, wz) -> {
             double fx = (wx - x1) / blocksPerCell, fz = (wz - z1) / blocksPerCell;
-            if (fx < 0 || fz < 0 || fx > SB || fz > SB) return null;
-            int ci = Math.min(SB - 1, (int) fz) * SB + Math.min(SB - 1, (int) fx);
+            if (fx < 0 || fz < 0 || fx > sb || fz > sb) return null;
+            int ci = Math.min(sb - 1, (int) (double) fz) * sb + Math.min(sb - 1, (int) (double) fx);
             int lvl = snowLvl == null ? SEA_LVL : (snowLvl[ci] & 0xFF);
             double y = BASE_Y + 1 + lvl / 8.0 + 0.15;
             return new double[]{px0 + fx, y, pz0 + fz};
@@ -1021,32 +1476,28 @@ public final class HubService {
         for (RiverPlanner.River r : plan.rivers()) {
             if (r.kind() == RiverPlanner.R_OXBOW) continue;
             List<RiverPlanner.Node> ns = r.nodes();
-            double acc = 0;
             for (int i = 0; i + 1 < ns.size(); i++) {
                 RiverPlanner.Node a = ns.get(i), b = ns.get(i + 1);
                 double len = Math.hypot(b.x() - a.x(), b.z() - a.z());
-                double step = blocksPerCell * 0.55;               // 每 ~0.55 沙盘格一个点
-                for (double t = acc; t < len; t += step) {
-                    double wx = a.x() + (b.x() - a.x()) * t / len;
-                    double wz = a.z() + (b.z() - a.z()) * t / len;
-                    double[] hp = toHub.apply(wx, wz);
+                double step = blocksPerCell * 0.55;
+                for (double t = 0; t < len; t += step) {
+                    double[] hp = toHub.apply(a.x() + (b.x() - a.x()) * t / len,
+                            a.z() + (b.z() - a.z()) * t / len);
                     if (hp != null) pts.add(hp);
                 }
-                acc = 0;
             }
         }
         for (RiverPlanner.Lake lk : plan.lakes()) {
             for (int gz = 0; gz < lk.gh(); gz++) {
                 for (int gx = 0; gx < lk.gw(); gx++) {
                     if (!lk.mask().get(gz * lk.gw() + gx)) continue;
-                    double wx = lk.ox() + (gx + 0.5) * lk.cell();
-                    double wz = lk.oz() + (gz + 0.5) * lk.cell();
-                    double[] hp = toHub.apply(wx, wz);
+                    double[] hp = toHub.apply(lk.ox() + (gx + 0.5) * lk.cell(),
+                            lk.oz() + (gz + 0.5) * lk.cell());
                     if (hp != null) pts.add(hp);
                 }
             }
         }
-        if (pts.size() > 1400) {                                  // 粒子预算
+        if (pts.size() > 1400) {
             List<double[]> slim = new ArrayList<>(1400);
             double stride = pts.size() / 1400.0;
             for (double i = 0; i < pts.size(); i += stride) slim.add(pts.get((int) i));
@@ -1057,35 +1508,37 @@ public final class HubService {
 
     // ============================ 周期任务 ============================
 
-    /** 生成中的沙盘状态牌低频刷新（5s；只动 TextDisplay，便宜）。 */
-    private void ensureStatusTask() {
-        if (statusTaskId != -1) return;
-        statusTaskId = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
-            World w = Bukkit.getWorld(HUB_WORLD);
-            if (w == null) return;
-            String busy = eco.terra().busyWorld();
-            if (busy != null && plots.containsKey(busy)) {
-                updateTitle(w, plots.get(busy), viewTitle(busy));
-            }
-        }, 100L, 100L).getTaskId();
-    }
-
-    private void ensureParticleTask() {
-        if (particleTaskId != -1) return;
-        particleTaskId = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
-            World w = Bukkit.getWorld(HUB_WORLD);
-            if (w == null || particleShows.isEmpty()) return;
-            long now = System.currentTimeMillis();
-            particleShows.values().removeIf(s -> s.expireMs() < now);
-            for (ParticleShow s : particleShows.values()) {
-                for (double[] pt : s.pts()) {
-                    w.spawnParticle(Particle.DRIPPING_WATER, pt[0], pt[1], pt[2], 1, 0.04, 0.02, 0.04, 0);
+    private void ensureTasks() {
+        if (pumpTaskId == -1) {
+            pumpTaskId = Bukkit.getScheduler().runTaskTimer(plugin, this::pump, 2L, 2L).getTaskId();
+        }
+        if (statusTaskId == -1) {
+            statusTaskId = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+                World w = Bukkit.getWorld(HUB_WORLD);
+                if (w == null) return;
+                String busy = eco.terra().busyWorld();
+                if (busy != null && plots.containsKey(busy)) {
+                    updateTitle(w, plots.get(busy), sbOf(busy), viewTitle(busy));
                 }
-            }
-        }, 4L, 4L).getTaskId();
+            }, 100L, 100L).getTaskId();
+        }
+        if (particleTaskId == -1) {
+            particleTaskId = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+                World w = Bukkit.getWorld(HUB_WORLD);
+                if (w == null || particleShows.isEmpty()) return;
+                long now = System.currentTimeMillis();
+                particleShows.values().removeIf(s -> s.expireMs() < now);
+                for (ParticleShow s : particleShows.values()) {
+                    for (double[] pt : s.pts()) {
+                        w.spawnParticle(Particle.DRIPPING_WATER, pt[0], pt[1], pt[2],
+                                1, 0.04, 0.02, 0.04, 0);
+                    }
+                }
+            }, 4L, 4L).getTaskId();
+        }
     }
 
-    // ============================ 调色（与 riverMap 工具同风格） ============================
+    // ============================ 调色 ============================
 
     private static int hypso(int y, int sea, int maxY) {
         int[] stops = {sea, sea + 14, sea + 40, sea + 80, sea + 130, Math.max(sea + 180, maxY)};

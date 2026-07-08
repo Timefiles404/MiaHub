@@ -47,8 +47,10 @@ public final class GeoFeatures {
     private static final Map<String, Style> STYLES = Map.of(
             "stone", STONE, "karst", KARST, "sand", SAND, "red", RED, "ice", ICE);
 
+    // 0.25.0：stone_forest（石林）暂时下线——柱簇观感僵硬，待按真实石林参考
+    // 精细化采样后回归（生成代码保留，仅撤出命令入口与 terra 自动散布）
     public static final List<String> TYPES = List.of(
-            "stone_forest", "karst_towers", "hoodoos", "arch", "monoliths", "hot_spring");
+            "karst_towers", "hoodoos", "arch", "monoliths", "hot_spring");
 
     private GeoFeatures() { }
 
@@ -90,8 +92,9 @@ public final class GeoFeatures {
     /** rh=区域哈希 0..1——让同群系“有的区有、有的区没有”，避免奇观满地跑。 */
     public static BiomeGeo geoFor(short id, double rh) {
         return switch (id) {
-            case 35 -> new BiomeGeo("stone_forest", 1.0, STONE);                      // 裸峰：岩针石林
-            case 33 -> new BiomeGeo("stone_forest", 0.6, ICE);                        // 冰封峰：冰塔林
+            // 35/33 裸峰/冰封峰原配石林/冰塔林——0.25.0 下线（roadmap 精细化后回归），
+            // 裸峰改偶发孤石阵，冰峰暂不配地貌
+            case 35 -> rh < 0.35 ? new BiomeGeo("monoliths", 0.6, STONE) : null;
             case 26 -> new BiomeGeo("hoodoos", 1.0, RED);                             // 恶地：红岩蘑菇
             case 5 -> rh < 0.45 ? new BiomeGeo("hoodoos", 0.35, SAND) : null;         // 沙漠：偶见风蚀柱
             case 19 -> rh < 0.30 ? new BiomeGeo("arch", 1.0, STONE)

@@ -654,8 +654,7 @@ public final class TerraDumpTool {
             System.out.printf("geo %-13s %2d 处 %6d 方块 y[%d..%d] 楼梯 %d%n", type, spots.size(),
                     edits.size(), minY == Integer.MAX_VALUE ? 0 : minY,
                     maxY == Integer.MIN_VALUE ? 0 : maxY, stairs);
-            if (spots.isEmpty() && (type.equals("stone_forest") || type.equals("hoodoos")
-                    || type.equals("monoliths"))) {
+            if (spots.isEmpty() && (type.equals("hoodoos") || type.equals("monoliths"))) {
                 System.out.println("GEO EMPTY " + type);
                 fail = true;
             }

@@ -100,30 +100,15 @@ public final class EcoManager {
                 cfg.getStringList(tb + "download-endpoints"),
                 cfg.getBoolean(tb + "gpu-auto-cuda", true));
         this.terraService = new dev.timefiles.miaeco.terrain.TerraService(plugin, this, ecoWorlds,
-                workerPool, new dev.timefiles.miaeco.terrain.TerraService.Settings(
-                cfg.getBoolean(tb + "enabled", true),
-                cfg.getInt(tb + "blocks-per-tick", 20000),
-                cfg.getInt(tb + "max-selection", 1024),
-                cfg.getInt(tb + "feather", 12),
-                cfg.getDouble(tb + "vertical-meters-per-block", 40.0),
-                cfg.getInt(tb + "soft-cap-y", 250),
-                cfg.getInt(tb + "max-y", 300),
-                cfg.getBoolean(tb + "auto-eco", true),
-                cfg.getInt(tb + "eco-region-min-cells", 300),
-                cfg.getInt(tb + "eco-region-cap", 24),
-                cfg.getLong(tb + "max-eco-footprint", 480000L),
-                cfg.getBoolean(tb + "caves", true),
-                cfg.getBoolean(tb + "cliff-erosion", true),
-                cfg.getBoolean(tb + "geo-features", true),
-                cfg.getInt(tb + "split-cells", 90000),
-                cfg.getInt(tb + "map-max-size", 10240),
-                cfg.getDouble(tb + "rivers", 1.0)));
+                workerPool, buildTerraSettings());
         this.geoService = new dev.timefiles.miaeco.terrain.GeoService(plugin, workerPool);
 
-        // ---- 大厅：世界沙盘可视化 + 新世界草稿流（/miaeco hub）----
+        // ---- 大厅：世界沙盘可视化 + 新世界草稿流 + 控制台 GUI（/miaeco hub）----
         this.hubService = new dev.timefiles.miaeco.hub.HubService(plugin, this);
         hubService.init();
         terraService.setPatchListener(hubService::onPatchAdded);
+        org.bukkit.Bukkit.getPluginManager().registerEvents(
+                new dev.timefiles.miaeco.hub.HubConsole(plugin, this, hubService), plugin);
 
         plugin.getLogger().info("MiaEco 引擎就绪：" + workerThreads + " 工作线程，已加载 "
                 + forests.size() + " 片森林、" + ecoWorlds.all().size() + " 个生态世界。");
@@ -145,6 +130,35 @@ public final class EcoManager {
                 Thread.currentThread().interrupt();
             }
         }
+    }
+
+    /** 从 config 组 terrain.* 快照（启动与 hub 控制台热更共用）。 */
+    private dev.timefiles.miaeco.terrain.TerraService.Settings buildTerraSettings() {
+        String tb = "terrain.";
+        return new dev.timefiles.miaeco.terrain.TerraService.Settings(
+                cfg.getBoolean(tb + "enabled", true),
+                cfg.getInt(tb + "blocks-per-tick", 20000),
+                cfg.getInt(tb + "max-selection", 1024),
+                cfg.getInt(tb + "feather", 12),
+                cfg.getDouble(tb + "vertical-meters-per-block", 40.0),
+                cfg.getInt(tb + "soft-cap-y", 250),
+                cfg.getInt(tb + "max-y", 300),
+                cfg.getBoolean(tb + "auto-eco", true),
+                cfg.getInt(tb + "eco-region-min-cells", 300),
+                cfg.getInt(tb + "eco-region-cap", 24),
+                cfg.getLong(tb + "max-eco-footprint", 480000L),
+                cfg.getBoolean(tb + "caves", true),
+                cfg.getBoolean(tb + "cliff-erosion", true),
+                cfg.getBoolean(tb + "geo-features", true),
+                cfg.getInt(tb + "split-cells", 90000),
+                cfg.getInt(tb + "map-max-size", 10240),
+                cfg.getDouble(tb + "rivers", 1.0));
+    }
+
+    /** hub 控制台改完 config 后调用：落盘并热更 terra 配置快照（下个任务生效）。 */
+    public void reloadTerraSettings() {
+        plugin.saveConfig();
+        terraService.updateSettings(buildTerraSettings());
     }
 
     /** 依据 config 的 species-defaults 生成一个新树种模板。 */

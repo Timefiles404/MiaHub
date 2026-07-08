@@ -337,10 +337,12 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 if (!(sender instanceof Player p)) { sender.sendMessage(P + ChatColor.RED + "只有玩家能开草稿。"); return; }
                 if (args.length < 3) {
                     sender.sendMessage(P + ChatColor.RED
-                            + "用法: /miaeco hub new <名> [size=N] [scale=15|30|60|120] [sea=Y] [edge=sea|open] [yscale=X]");
+                            + "用法: /miaeco hub new <名> [size=N] [preview=P] [scale=15|30|60|120] [sea=Y] [edge=sea|open] [yscale=X]");
+                    sender.sendMessage(P + ChatColor.GRAY
+                            + "size=世界大小（创建后固定）；preview=沙盘边长 12~48（想看得大就调大）。");
                     return;
                 }
-                int size = 1024, scaleM = 30, sea = 63;
+                int size = 1024, scaleM = 30, sea = 63, preview = 20;
                 boolean openEdge = false;
                 double yscale = 1.0;
                 for (int i = 3; i < args.length; i++) {
@@ -352,6 +354,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                     try {
                         switch (k) {
                             case "size" -> size = Integer.parseInt(v);
+                            case "preview" -> preview = Integer.parseInt(v);
                             case "scale" -> scaleM = Integer.parseInt(v);
                             case "sea" -> sea = Integer.parseInt(v);
                             case "edge" -> openEdge = v.equalsIgnoreCase("open");
@@ -374,7 +377,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 }
                 if (sea < 0 || sea > 200) { sender.sendMessage(P + ChatColor.RED + "sea 需在 0~200。"); return; }
                 if (yscale < 0.5 || yscale > 2.5) { sender.sendMessage(P + ChatColor.RED + "yscale 需在 0.5~2.5。"); return; }
-                String err = hub.newDraft(p, args[2], size, scaleM, sea, openEdge, yscale);
+                String err = hub.newDraft(p, args[2], size, scaleM, sea, openEdge, yscale, preview);
                 if (err != null) sender.sendMessage(P + ChatColor.RED + err);
             }
             case "roll" -> {
@@ -410,11 +413,13 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
     private void helpHub(CommandSender s) {
         msg(s, "/miaeco hub", "进入大厅：每个世界一块积雪沙盘（雪高=地形、蓝玻璃=水面，生成中的世界实时长出）");
         msg(s, "/miaeco hub tp <名>", "传送到某块沙盘");
-        msg(s, "/miaeco hub new <名> [size=…] [scale=…] [sea=…] [edge=…] [yscale=…]", "开一块新世界草稿沙盘");
+        msg(s, "/miaeco hub new <名> [size=…] [preview=12~48] [scale=…] [sea=…] [edge=…] [yscale=…]",
+                "开草稿沙盘（preview=沙盘边长，独立于世界大小）");
         msg(s, "/miaeco hub roll <名> [seed]", "抽一张地形铺到草稿沙盘（无限抽，抽到满意为止）");
-        msg(s, "/miaeco hub water <名>", "按当前雪面预览水系：滴水粒子画河 + 沙盘旁地图画俯视图");
+        msg(s, "/miaeco hub water <名>", "按当前雪面预览水系：滴水粒子画河 + 沙盘旁拼接地图画墙");
         msg(s, "/miaeco hub confirm <名>", "读回雪面修形（1 层≈45 米）作为草图，创建世界并开始生成");
         msg(s, "/miaeco hub cancel <名>", "丢弃草稿");
+        msg(s, "大厅内右键讲台", "主控制台=世界增删查改+生成配置；沙盘旁操作台=草稿参数/抽卡/预览/送产");
     }
 
     // ---- geo（地貌奇观：独立于树木与氛围的第三类生成） ----
@@ -1075,8 +1080,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             addMatches(out, args[args.length - 1], "confirm", "seed=");
         } else if (args.length >= 4 && args[0].equalsIgnoreCase("hub")
                 && args[1].equalsIgnoreCase("new")) {
-            addMatches(out, args[args.length - 1], "size=1024", "scale=30", "scale=60", "sea=63",
-                    "edge=open", "yscale=1.4");
+            addMatches(out, args[args.length - 1], "size=1024", "preview=32", "scale=30", "scale=60",
+                    "sea=63", "edge=open", "yscale=1.4");
         } else if (args.length == 4) {
             String a0 = args[0].toLowerCase(Locale.ROOT);
             String a1 = args[1].toLowerCase(Locale.ROOT);

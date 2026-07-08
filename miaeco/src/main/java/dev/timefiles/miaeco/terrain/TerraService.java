@@ -54,10 +54,13 @@ public final class TerraService implements Listener {
 
     public Settings settings() { return st; }
 
+    /** 热更新配置快照（hub 控制台的开关写回 config 后调用；对下一个任务生效）。 */
+    public void updateSettings(Settings s) { this.st = s; }
+
     private final Plugin plugin;
     private final EcoManager eco;
     private final EcoWorlds worlds;
-    private final Settings st;
+    private volatile Settings st;      // hub 控制台可热更（rivers/caves/崖蚀/geo 等，下个任务生效）
     private final ExecutorService pool;
     private final AsyncWorldEditor terraEditor;
     private final GrowthService terraGrowth;
@@ -1054,16 +1057,21 @@ public final class TerraService implements Listener {
                         }
                     } else if (EcoBiomes.snowySurface(b) && skin[0] != Material.SNOW_BLOCK) {
                         edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.snow(1)));
-                    } else if (p.shoal[i] && !EcoBiomes.snowySurface(b)
-                            && (y == mapper.sea() || riverBankWl(p, W, H, x, z) == y)) {
-                        // 齐平水岸芦苇（支撑面与邻水同高才合法）：缓流河岸茂、湍流稀
+                    } else if (!EcoBiomes.snowySurface(b)
+                            && ((p.shoal[i] && y == mapper.sea()) || riverBankWl(p, W, H, x, z) == y)) {
+                        // 齐平水岸植被（0.25.0 不再依赖滩皮）：芦苇贴水合法即可长；
+                        // 草皮河岸另有蕨/矮草点缀——水线嵌进草坪，只有植物没有换皮
                         boolean river = y != mapper.sea() || (p.flow[i] & 0xFF) > 0;
-                        double caneP = river ? ((p.flow[i] & 0xFF) <= 40 ? 0.11 : 0.04) : 0.05;
-                        if (hash01(entry.seed ^ 0x2EEDL, wx, wz) < caneP) {
+                        double h1 = hash01(entry.seed ^ 0x2EEDL, wx, wz);
+                        double caneP = river ? ((p.flow[i] & 0xFF) <= 40 ? 0.10 : 0.04) : 0.05;
+                        if (h1 < caneP) {
                             int ch = 1 + (int) (hash01(entry.seed ^ 0x2EEEL, wx, wz) * 3);
                             for (int k = 1; k <= ch; k++) {
                                 edits.add(new BlockEdit(wx, y + k, wz, BlockSpec.of(Material.SUGAR_CANE)));
                             }
+                        } else if (river && skin[0] == Material.GRASS_BLOCK && h1 < caneP + 0.15) {
+                            edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.of(
+                                    h1 < caneP + 0.06 ? Material.FERN : Material.SHORT_GRASS)));
                         }
                     } else if (p.land[i] == RiverPlanner.L_SPRING) {
                         double h2 = hash01(entry.seed ^ 0x59A6L, wx, wz);
@@ -1248,21 +1256,14 @@ public final class TerraService implements Listener {
             if (p.land[i] == RiverPlanner.L_DELTA) {
                 return new Material[]{Material.MUD, Material.MUD, Material.CLAY};
             }
-            // 齐平浅滩岸：贴水第一圈用沙/砾（冷区砾石），平滑不碎；
-            // 河岸按流速分材——缓流泥沙滩涂岸、湍流卵石滚石岸
+            // 齐平浅滩岸：海滩/湖滨/河心洲/大缓河散点沙洲（冷区砾石）。
+            // 0.25.0：小河两岸不再标 shoal——群系原皮直到水边，河岸的
+            // 沙砾/卵石镶边（与环境割裂的"石头沙砾带"）整体废除
             if (p.shoal[i]) {
                 boolean cold = EcoBiomes.snowySurface(b) || b == 93;
                 if (cold) return new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
-                int fl = p.flow[i] & 0xFF;
-                if (fl >= 60) {
-                    return hash < 0.5 ? new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE}
-                            : hash < 0.8 ? new Material[]{Material.COBBLESTONE, Material.GRAVEL, Material.STONE}
-                            : new Material[]{Material.STONE, Material.GRAVEL, Material.STONE};
-                }
-                if (fl > 0 && fl <= 40) {
-                    return hash < 0.55 ? new Material[]{Material.SAND, Material.SAND, Material.GRAVEL}
-                            : hash < 0.82 ? new Material[]{Material.MUD, Material.CLAY, Material.GRAVEL}
-                            : new Material[]{Material.GRAVEL, Material.SAND, Material.STONE};
+                if ((p.flow[i] & 0xFF) > 0 && hash > 0.68) {
+                    return new Material[]{Material.MUD, Material.CLAY, Material.GRAVEL};   // 河滩泥斑
                 }
                 return new Material[]{Material.SAND, Material.SAND, Material.GRAVEL};
             }

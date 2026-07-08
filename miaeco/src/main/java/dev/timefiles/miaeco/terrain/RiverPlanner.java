@@ -86,7 +86,7 @@ public final class RiverPlanner {
 
         // ---- 高度场：coarse 双线性 - 双尺度侵蚀谷噪声 - 下切偏置（|noise| 只削不抬：
         //      不造幻影脊 → 水位永不高出真实地形太多，河道偏爱被"侵蚀"出的谷线；
-        //      恒定 -1.5 偏置让水位系统性低于精细地表——河默认往下挖，而不是垫堤抬水
+        //      恒定 -1.0 偏置让水位系统性低于精细地表——河默认往下挖，而不是垫堤抬水
         //      （coarse 与精细推理的局部高差是"高架桥河"的根源之一，0.24.1）----
         FastNoiseLite fnl = new FastNoiseLite((int) (seed ^ 0x7A11E7L));
         fnl.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
@@ -104,12 +104,14 @@ public final class RiverPlanner {
             for (int gx = 0; gx < G; gx++) {
                 double wx = x1 + (gx + 0.5) * cell, wz = z1 + (gz + 0.5) * cell;
                 float y0 = hf.yAt(wx, wz);
-                float amp = (float) Math.min(10, 4 + 0.07 * Math.max(0, y0 - sea));
+                // 低地侵蚀调浅（0.25.0）：平原溪流水面只低于草皮 ~2 格（细水路嵌在草地里），
+                // 高地随海拔加深（山涧深切依旧）
+                float amp = (float) Math.min(10, 2.2 + 0.08 * Math.max(0, y0 - sea));
                 raw[gz * G + gx] = y0;
                 gh[gz * G + gx] = y0
                         - Math.abs(fnl.GetNoise((float) wx, (float) wz)) * amp
                         - Math.abs(fnl2.GetNoise((float) wx, (float) wz)) * (amp * 0.7f)
-                        - 1.5f;
+                        - 1.0f;
             }
         }
 
@@ -323,6 +325,17 @@ public final class RiverPlanner {
             detectOxbows(r, rivers, seed);
         }
         return new RiverPlan(rivers, lakes, fans, deltas);
+    }
+
+    /**
+     * 河岸滩皮（0.25.0 收敛）：只有<b>宽缓大河</b>的贴水线偶发沙洲斑（散点 ~45%），
+     * 小河/山涧两岸一律保留所在群系原皮——草坪边的溪流就是草坪里一条细水路，
+     * 不再有连续的沙/砾镶边。
+     */
+    private static void markBankShoal(boolean[] eShoal, int i, float hw, float flow,
+                                      int EW, int ox, int oz) {
+        if (hw < 3.2f || flow > 0.5f) return;
+        if (PlanOps.hash01(0x5E0A1L, ox + i % EW, oz + i / EW) < 0.45) eShoal[i] = true;
     }
 
     /** 回滚一条被丢弃路径的 claim（只清本路径打的标，终点格属他河不动）。 */
@@ -757,8 +770,8 @@ public final class RiverPlanner {
                         boolean canyon = orig - wlB > 10;
                         if (ey[i] <= wlB + 1 && !canyon) {
                             if (d <= hw + 1.6f) {
-                                eShoal[i] = true;                 // 贴水线滩皮一圈
                                 if (eFlow != null) eFlow[i] = flowByte(bestFlow[i]);
+                                markBankShoal(eShoal, i, hw, bestFlow[i], EW, ox, oz);
                             }
                             if (hw >= 3.2f && d <= hw + BANK_W) {
                                 eLand[i] = maxL(eLand[i], L_WET); // 宽河两岸=湿地候选
@@ -774,8 +787,8 @@ public final class RiverPlanner {
                         double s = t * t * (3 - 2 * t);
                         ey[i] = wlB + (int) Math.round(s * (orig - wlB));
                         if (d <= hw + 1.6f) {
-                            eShoal[i] = true;
                             if (eFlow != null) eFlow[i] = flowByte(bestFlow[i]);
+                            markBankShoal(eShoal, i, hw, bestFlow[i], EW, ox, oz);
                         } else if (hw >= 3.2f && d <= hw + BANK_W) {
                             eLand[i] = maxL(eLand[i], L_WET);
                         }
@@ -815,7 +828,7 @@ public final class RiverPlanner {
         }
 
         // ---- 围护扫描：全部特征落位后，保证水体四邻不低于水位 ----
-        containSweep(ey, eWater, eRiver, eWl, eShoal, EW, EH);
+        containSweep(ey, eWater, eRiver, eWl, EW, EH);
     }
 
     /**
@@ -823,27 +836,24 @@ public final class RiverPlanner {
      * 岸带 smoothstep 负责形态，这一道负责水永远被围住（特征交叠的角落也不例外）。
      */
     private static void containSweep(int[] ey, boolean[] eWater, boolean[] eRiver,
-                                     int[] eWl, boolean[] eShoal, int EW, int EH) {
+                                     int[] eWl, int EW, int EH) {
         for (int lz = 0; lz < EH; lz++) {
             for (int lx = 0; lx < EW; lx++) {
                 int i = lz * EW + lx;
                 if (!eRiver[i]) continue;
                 int wl = eWl[i];
-                if (lx > 0) contain(ey, eWater, eRiver, eShoal, i - 1, wl);
-                if (lx < EW - 1) contain(ey, eWater, eRiver, eShoal, i + 1, wl);
-                if (lz > 0) contain(ey, eWater, eRiver, eShoal, i - EW, wl);
-                if (lz < EH - 1) contain(ey, eWater, eRiver, eShoal, i + EW, wl);
+                if (lx > 0) contain(ey, eWater, eRiver, i - 1, wl);
+                if (lx < EW - 1) contain(ey, eWater, eRiver, i + 1, wl);
+                if (lz > 0) contain(ey, eWater, eRiver, i - EW, wl);
+                if (lz < EH - 1) contain(ey, eWater, eRiver, i + EW, wl);
             }
         }
     }
 
-    private static void contain(int[] ey, boolean[] eWater, boolean[] eRiver,
-                                boolean[] eShoal, int n, int wl) {
+    /** 兜底抬堤保留群系原皮（0.25.0：不再标 shoal 沙皮）。 */
+    private static void contain(int[] ey, boolean[] eWater, boolean[] eRiver, int n, int wl) {
         if (eWater[n] || eRiver[n]) return;
-        if (ey[n] < wl) {
-            ey[n] = wl;
-            eShoal[n] = true;
-        }
+        if (ey[n] < wl) ey[n] = wl;
     }
 
     /** 湖掩码的双线性指示（网格单元角插值，边界外=0）。 */
