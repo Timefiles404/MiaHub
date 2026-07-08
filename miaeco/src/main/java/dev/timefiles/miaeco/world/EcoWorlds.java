@@ -58,6 +58,9 @@ public final class EcoWorlds {
         /** null=经典平原画布（选区式 terra gen）；非 null=有限地图世界。 */
         public final MapSpec map;
         public final List<Patch> patches = new ArrayList<>();
+        /** hub 雪面草图：米偏移，sketchN×sketchN 双线性铺满地图（null=无）。 */
+        public float[] sketch;
+        public int sketchN;
 
         Entry(String name, long seed, MapSpec map) {
             this.name = name;
@@ -91,6 +94,19 @@ public final class EcoWorlds {
                             "open".equals(sec.getString(name + ".map.edge", "sea")),
                             sec.getDouble(name + ".map.yscale", 1.0)) : null;
                     Entry e = new Entry(name, seed, map);
+                    int skn = sec.getInt(name + ".map.sketchn", 0);
+                    String skb = sec.getString(name + ".map.sketch");
+                    if (map != null && skn > 0 && skb != null) {
+                        try {
+                            byte[] raw = java.util.Base64.getDecoder().decode(skb);
+                            if (raw.length == skn * skn * 4) {
+                                float[] sk = new float[skn * skn];
+                                java.nio.ByteBuffer.wrap(raw).asFloatBuffer().get(sk);
+                                e.sketch = sk;
+                                e.sketchN = skn;
+                            }
+                        } catch (IllegalArgumentException ignored) { }
+                    }
                     for (String s : sec.getStringList(name + ".patches")) {
                         String[] p = s.trim().split("\\s*,\\s*");
                         if (p.length == 4) {
@@ -128,6 +144,12 @@ public final class EcoWorlds {
                 yml.set(base + "map.sea", e.map.seaLevel());
                 yml.set(base + "map.edge", e.map.openEdge() ? "open" : "sea");
                 yml.set(base + "map.yscale", e.map.yScale());
+                if (e.sketch != null && e.sketchN > 0) {
+                    java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(e.sketch.length * 4);
+                    bb.asFloatBuffer().put(e.sketch);
+                    yml.set(base + "map.sketchn", e.sketchN);
+                    yml.set(base + "map.sketch", java.util.Base64.getEncoder().encodeToString(bb.array()));
+                }
             }
             List<String> ps = new ArrayList<>(e.patches.size());
             for (Patch p : e.patches) ps.add(p.minX() + "," + p.minZ() + "," + p.maxX() + "," + p.maxZ());

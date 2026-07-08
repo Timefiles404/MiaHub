@@ -55,6 +55,7 @@ public final class TerraDumpTool {
         fail |= splitterRun();
         fail |= simpleEcoRun();
         fail |= riverRun();
+        fail |= sketchRun();
         fail |= coastRun();
         fail |= canopyRun();
         System.out.println(fail ? "TERRA CHECK: FAIL" : "TERRA CHECK: PASS");
@@ -86,8 +87,9 @@ public final class TerraDumpTool {
             System.out.println("RIVER LAKE FAIL（盆地未成湖）");
             fail = true;
         }
-        if (mains.size() < 4) {
-            System.out.println("RIVER NETWORK FAIL 干支流仅 " + mains.size());
+        if (mains.size() < 10) {
+            System.out.println("RIVER NETWORK FAIL 干支流仅 " + mains.size()
+                    + "（0.24.0 起流面积调低后源头应显著增多）");
             fail = true;
         }
         // 汇流：某条干支流终点贴上另一条的河身
@@ -110,8 +112,23 @@ public final class TerraDumpTool {
             System.out.println("RIVER JUNCTION FAIL（无汇流）");
             fail = true;
         }
-        if (springs == 0) {
-            System.out.println("RIVER SPRING FAIL（无泉眼源头）");
+        if (springs < 3) {
+            System.out.println("RIVER SPRING FAIL（泉眼源头仅 " + springs + "）");
+            fail = true;
+        }
+        // 流速物理（0.24.0）：陡段（flow 高）的深宽比必须显著高于平缓段——窄深 vs 宽浅
+        double flatAsp = 0, steepAsp = 0, flatW = 0, steepW = 0;
+        int flatN = 0, steepN = 0;
+        for (var r : mains) {
+            for (var nd : r.nodes()) {
+                double asp = nd.depth() / Math.max(0.5, nd.halfW());
+                if (nd.flow() < 0.25) { flatAsp += asp; flatW += nd.halfW(); flatN++; }
+                else if (nd.flow() > 0.6) { steepAsp += asp; steepW += nd.halfW(); steepN++; }
+            }
+        }
+        if (flatN > 20 && steepN > 20 && steepAsp / steepN <= flatAsp / flatN * 1.3) {
+            System.out.printf("RIVER HYDRAULIC FAIL 深宽比 陡=%.2f 缓=%.2f（应陡≫缓）%n",
+                    steepAsp / steepN, flatAsp / flatN);
             fail = true;
         }
         double worstChord = 1;
@@ -158,17 +175,20 @@ public final class TerraDumpTool {
         boolean[] eRiver = new boolean[EW * EH];
         boolean[] eShoal = new boolean[EW * EH];
         byte[] eLand = new byte[EW * EH];
+        byte[] eFlow = new byte[EW * EH];
         int[] eWl = new int[EW * EH];
         java.util.Arrays.fill(eWl, sea);
         dev.timefiles.miaeco.terrain.RiverPlanner.rasterize(
-                plan, ey, eWater, eRiver, eWl, eShoal, eLand, EW, EH, ox, ozr);
-        int riverCols = 0, flushBank = 0, leaks = 0, wetCols = 0;
+                plan, ey, eWater, eRiver, eWl, eShoal, eLand, eFlow, EW, EH, ox, ozr);
+        int riverCols = 0, flushBank = 0, leaks = 0, wetCols = 0, slowCols = 0, fastCols = 0;
         for (int z = 1; z < EH - 1; z++) {
             for (int x = 1; x < EW - 1; x++) {
                 int i = z * EW + x;
                 if (eLand[i] == dev.timefiles.miaeco.terrain.RiverPlanner.L_WET) wetCols++;
                 if (!eRiver[i]) continue;
                 riverCols++;
+                if ((eFlow[i] & 0xFF) <= 40) slowCols++;
+                else if ((eFlow[i] & 0xFF) >= 60) fastCols++;
                 if (ey[i] >= eWl[i]) {
                     System.out.println("RIVER FLOOR ABOVE WL @" + x + "," + z);
                     fail = true;
@@ -206,15 +226,16 @@ public final class TerraDumpTool {
         boolean[] eRiver2 = new boolean[EW2 * EH2];
         boolean[] eShoal2 = new boolean[EW2 * EH2];
         byte[] eLand2 = new byte[EW2 * EH2];
+        byte[] eFlow2 = new byte[EW2 * EH2];
         int[] eWl2 = new int[EW2 * EH2];
         java.util.Arrays.fill(eWl2, sea);
         dev.timefiles.miaeco.terrain.RiverPlanner.rasterize(
-                plan, ey2, eWater2, eRiver2, eWl2, eShoal2, eLand2, EW2, EH2, ox2, oz2);
+                plan, ey2, eWater2, eRiver2, eWl2, eShoal2, eLand2, eFlow2, EW2, EH2, ox2, oz2);
         for (int z = 0; z < EH2 && !fail; z++) {
             for (int x = 0; x < EW2; x++) {
                 int a = (z + 100) * EW + x + 100, b = z * EW2 + x;
                 if (ey[a] != ey2[b] || eRiver[a] != eRiver2[b] || eWl[a] != eWl2[b]
-                        || eLand[a] != eLand2[b]) {
+                        || eLand[a] != eLand2[b] || eFlow[a] != eFlow2[b]) {
                     System.out.println("RIVER TILE MISMATCH @" + x + "," + z);
                     fail = true;
                     break;
@@ -222,9 +243,63 @@ public final class TerraDumpTool {
             }
         }
         System.out.printf("river: 干支流 %d(汇流 %d, 泉 %d) 湖 %d 三角洲 %d 冲积扇 %d, 共 %d 节点, "
-                        + "蜿蜒最低 %.3f, 水列 %d, 齐平岸 %d, 漏水 %d, 湿地候选 %d%n",
+                        + "蜿蜒最低 %.3f, 水列 %d(缓 %d/湍 %d), 齐平岸 %d, 漏水 %d, 湿地候选 %d, "
+                        + "深宽比 陡=%.2f 缓=%.2f%n",
                 mains.size(), junctions, springs, plan.lakes().size(), plan.deltas().size(),
-                plan.fans().size(), plan.nodeCount(), worstChord, riverCols, flushBank, leaks, wetCols);
+                plan.fans().size(), plan.nodeCount(), worstChord, riverCols, slowCols, fastCols,
+                flushBank, leaks, wetCols,
+                steepN > 0 ? steepAsp / steepN : 0, flatN > 0 ? flatAsp / flatN : 0);
+        return fail;
+    }
+
+    /** hub 雪面草图：双线性纯函数的往返/平滑/钳边校验（无需权重）。 */
+    private static boolean sketchRun() {
+        final int SBN = 20, SIZE = 1024, X1 = -SIZE / 2;
+        float[] sk = new float[SBN * SBN];
+        for (int i = 0; i < sk.length; i++) {
+            sk[i] = (float) (((i % SBN) - SBN / 2.0) * 90 + ((i / SBN) % 4) * 45);
+        }
+        boolean fail = false;
+        // 单元中心处应精确还原网格值
+        for (int cz = 0; cz < SBN; cz += 3) {
+            for (int cx = 0; cx < SBN; cx += 3) {
+                double wx = X1 + (cx + 0.5) * SIZE / (double) SBN;
+                double wz = X1 + (cz + 0.5) * SIZE / (double) SBN;
+                float v = dev.timefiles.miaeco.terrain.TerraService.sketchAt(sk, SBN, X1, X1, SIZE, wx, wz);
+                if (Math.abs(v - sk[cz * SBN + cx]) > 0.01) {
+                    System.out.printf("SKETCH CENTER FAIL @%d,%d got %.2f want %.2f%n",
+                            cx, cz, v, sk[cz * SBN + cx]);
+                    fail = true;
+                }
+            }
+        }
+        // 相邻世界坐标间必须平滑（≤ 网格步长斜率）且钳边不越界
+        float prev = dev.timefiles.miaeco.terrain.TerraService.sketchAt(sk, SBN, X1, X1, SIZE, X1 - 50, 0);
+        for (int wx = X1 - 40; wx <= X1 + SIZE + 40; wx += 4) {
+            float v = dev.timefiles.miaeco.terrain.TerraService.sketchAt(sk, SBN, X1, X1, SIZE, wx, 0);
+            if (Math.abs(v - prev) > 90.0 * 4 / (SIZE / (double) SBN) + 0.01) {
+                System.out.println("SKETCH SMOOTH FAIL @" + wx);
+                fail = true;
+                break;
+            }
+            prev = v;
+        }
+        // hub 层级映射往返：米 → 层级 → 米，误差 ≤ 半层
+        for (float m : new float[]{-3000, -500, -45, 0, 45, 400, 1500, 3200}) {
+            int lvl = dev.timefiles.miaeco.hub.HubService.lvlOfMeters(m);
+            if (lvl < 0 || lvl > 96) {
+                System.out.println("SKETCH LVL RANGE FAIL m=" + m + " lvl=" + lvl);
+                fail = true;
+            }
+            if (m >= -45 * 24 && m <= 45 * 72) {                 // 未饱和区间应可逆
+                double back = (lvl - 24) * 45.0;
+                if (Math.abs(back - m) > 22.6) {
+                    System.out.println("SKETCH ROUNDTRIP FAIL m=" + m + " back=" + back);
+                    fail = true;
+                }
+            }
+        }
+        System.out.println("sketch: 双线性/平滑/钳边/层级往返 OK");
         return fail;
     }
 

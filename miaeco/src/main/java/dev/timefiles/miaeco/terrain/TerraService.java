@@ -22,6 +22,9 @@ import org.bukkit.Registry;
 import org.bukkit.World;
 import org.bukkit.block.Biome;
 import org.bukkit.command.CommandSender;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
@@ -37,9 +40,10 @@ import java.util.logging.Level;
 /**
  * 大地形生成编排：选区 → 扩散推理（高程+群系）→ 世界级高度映射与边缘羽化 →
  * 条带式方块柱重建 + biome 写入（主线程限速）→ 生态分区 → 每区自动种树(instant)+氛围。
- * 全程聊天栏/BossBar 双通道进度；同一时刻只允许一个任务（模型内存 2.5GB 级）。
+ * 全程聊天栏/BossBar 双通道进度（0.24.0 起全服广播，中途进服自动补挂）；
+ * 同一时刻只允许一个任务（模型内存 2.5GB 级）。
  */
-public final class TerraService {
+public final class TerraService implements Listener {
 
     /** config.yml terrain.* 的快照。 */
     public record Settings(boolean enabled, int blocksPerTick, int maxSelection, int feather,
@@ -60,6 +64,8 @@ public final class TerraService {
     private final AtmosphereService terraAtmo;
 
     private volatile Job job;
+    /** 分片/选区落成回调（大厅沙盘实时刷新用；世界名参数，pool 线程调用）。 */
+    private volatile java.util.function.Consumer<String> patchListener;
 
     public TerraService(Plugin plugin, EcoManager eco, EcoWorlds worlds,
                         ExecutorService pool, Settings settings) {
@@ -71,6 +77,18 @@ public final class TerraService {
         this.terraEditor = new AsyncWorldEditor(plugin, settings.blocksPerTick());
         this.terraGrowth = new GrowthService(plugin, pool, terraEditor);
         this.terraAtmo = new AtmosphereService(plugin, pool, terraEditor);
+        Bukkit.getPluginManager().registerEvents(this, plugin);
+    }
+
+    public void setPatchListener(java.util.function.Consumer<String> l) {
+        this.patchListener = l;
+    }
+
+    /** 中途进服的玩家补上当前任务的进度（全服广播的接线）。 */
+    @EventHandler
+    public void onJoin(PlayerJoinEvent e) {
+        Job j = job;
+        if (j != null) j.progress.welcome(e.getPlayer());
     }
 
     // ============================ 对外 API ============================
@@ -145,6 +163,34 @@ public final class TerraService {
     /** 是否有任务在跑（world regen 等外部编排用）。 */
     public boolean busy() { return job != null; }
 
+    /** 当前任务的世界名（无任务/预热任务=null；大厅沙盘状态牌用）。 */
+    public String busyWorld() {
+        Job j = job;
+        return j == null ? null : j.world;
+    }
+
+    /** 当前任务进度一行（"地形铺设 42%"；无任务=null）。 */
+    public String progressLine() {
+        Job j = job;
+        return j == null ? null : j.progress.line();
+    }
+
+    /**
+     * 大厅沙盘"抽卡"：只跑 coarse 粗扫（秒级；首次含权重下载/装载），把 size×size
+     * 地图按 sb×sb 网格出高度缩略（<b>米</b>，openEdge 时含山体增幅、edge=sea 时含
+     * 海环衰减——与真实生成同链），回调在工作线程。
+     */
+    public String hubPreview(CommandSender sender, long seed, int size, int mpb,
+                             boolean openEdge, int sb,
+                             java.util.function.Consumer<float[]> onDone) {
+        if (!st.enabled()) return "地形生成未启用（config.yml terrain.enabled）。";
+        if (job != null) return "已有地形任务在跑（/miaeco terra status 查看），稍后再抽。";
+        Job j = new Job(sender, null, null, null, false);
+        this.job = j;
+        pool.execute(() -> j.runHubPreview(seed, size, mpb, openEdge, sb, onDone));
+        return null;
+    }
+
     public String status() {
         Job j = job;
         if (j == null) {
@@ -181,6 +227,8 @@ public final class TerraService {
         final CaveCarver carver;       // 洞穴/崖蚀共用噪声（都关则 null）
         final AtomicBoolean cancelled = new AtomicBoolean(false);
         final TerraProgress progress;
+        final float[] sketch;          // hub 草图（米偏移，sketchN×sketchN；null=无）
+        final int sketchN;
         volatile String stageName = "准备";
         volatile RiverPlanner.RiverPlan rivers = RiverPlanner.RiverPlan.EMPTY;  // 全图水系（规划一次）
 
@@ -193,6 +241,8 @@ public final class TerraService {
             this.mapMode = entry != null && entry.map != null;
             this.mpb = mapMode ? entry.map.metersPerBlock() : 0;   // 0=画布模式走 provider 默认路径
             this.openEdge = mapMode && entry.map.openEdge();
+            this.sketch = mapMode ? entry.sketch : null;
+            this.sketchN = mapMode ? entry.sketchN : 0;
             double ys = mapMode ? Math.max(0.5, Math.min(2.5, entry.map.yScale())) : 1.0;
             this.mapper = new HeightMapper(st.vScale() / ys, st.softStartY(), st.maxY(),
                     mapMode ? entry.map.seaLevel() : HeightMapper.SEA_LEVEL);
@@ -266,6 +316,61 @@ public final class TerraService {
                         + ")。tp 过去后 pos1/pos2 框选再 terra gen。");
             } catch (Throwable t) {
                 fail("探测失败: " + rootMsg(t), t);
+            } finally {
+                job = null;
+            }
+        }
+
+        /** hub 抽卡：coarse 粗扫 → sb×sb 高度缩略（米，与真实生成同映射前段）。 */
+        void runHubPreview(long seed, int size, int mpb2, boolean open, int sb,
+                           java.util.function.Consumer<float[]> onDone) {
+            try {
+                ensureModels();
+                checkCancel();
+                stage("抽卡预览（coarse 粗扫 seed=" + seed + "）");
+                LocalTerrainProvider.init(seed);
+                double npb = mpb2 <= 15 ? 1.0 / Math.max(1, TerrainConfig.scale()) : mpb2 / 30.0;
+                int x1 = -size / 2, z1 = -size / 2;
+                int ci0 = (int) Math.floor(z1 * npb / 256.0) - 1;
+                int cj0 = (int) Math.floor(x1 * npb / 256.0) - 1;
+                int ci1 = (int) Math.ceil((z1 + size) * npb / 256.0) + 2;
+                int cj1 = (int) Math.ceil((x1 + size) * npb / 256.0) + 2;
+                var t = LocalTerrainProvider.getPipelineCoarse(ci0, cj0, ci1, cj1);
+                int CH = ci1 - ci0, CW = cj1 - cj0;
+                float[][] elev = new float[CH][CW];
+                for (int r = 0; r < CH; r++) {
+                    for (int c = 0; c < CW; c++) {
+                        float w = t.data[6 * CH * CW + r * CW + c];
+                        float v = w > 1e-6f ? t.data[r * CW + c] / w : 0f;
+                        elev[r][c] = Math.signum(v) * v * v;
+                    }
+                }
+                int band = Math.max(24, Math.min(96, size / 8));
+                float[] out = new float[sb * sb];
+                for (int cz = 0; cz < sb; cz++) {
+                    for (int cx = 0; cx < sb; cx++) {
+                        double wx = x1 + (cx + 0.5) * size / (double) sb;
+                        double wz = z1 + (cz + 0.5) * size / (double) sb;
+                        double gi = wz * npb / 256.0 - ci0 - 0.5;
+                        double gj = wx * npb / 256.0 - cj0 - 0.5;
+                        float m = bilinear(elev, CH, CW, gi, gj);
+                        if (open) {
+                            if (m > 0) m *= 1 + 0.35f * Math.min(1f, m / 900f);
+                        } else {
+                            int d = (int) Math.min(Math.min(wx - x1, wz - z1),
+                                    Math.min(x1 + size - 1 - wx, z1 + size - 1 - wz));
+                            m = edgeFalloff(m, d, band);
+                        }
+                        out[cz * sb + cx] = m;
+                    }
+                }
+                progress.done("抽卡就绪（seed=" + seed + "）——沙盘已铺；满意 confirm，不满意继续 roll，"
+                        + "也可手动堆/铲雪修形（1 层雪 ≈ 45 米）。");
+                onDone.accept(out);
+            } catch (CancelledException c) {
+                progress.fail("抽卡已取消。");
+            } catch (Throwable t) {
+                fail("抽卡失败: " + rootMsg(t), t);
             } finally {
                 job = null;
             }
@@ -369,6 +474,7 @@ public final class TerraService {
                         removeStagingPlatform();
                     }
                     worlds.addPatch(world, new EcoWorlds.Patch(cx1, cz1, cx2, cz2));
+                    notifyPatch();
                 }
             }
             long mins = (System.currentTimeMillis() - t0) / 60_000L;
@@ -422,6 +528,7 @@ public final class TerraService {
                 checkCancel();
 
                 worlds.addPatch(world, new EcoWorlds.Patch(fx1, fz1, fx2, fz2));
+                notifyPatch();
                 maybeSetSpawn(fx1, fz1, W, H, plan);
                 if (mapMode) removeStagingPlatform();
                 progress.chat("地形完成：Y ∈ [" + plan.minY + ", " + plan.maxY + "]，海洋 "
@@ -473,6 +580,14 @@ public final class TerraService {
                     int d = Math.min(Math.min(gx - mapX1, gz - mapZ1),
                             Math.min(mapX1 + mapSize - 1 - gx, mapZ1 + mapSize - 1 - gz));
                     float m = boost(data.heightmap[ez][ex]);
+                    short b = data.biomeIds[ez][ex];
+                    if (sketch != null) {
+                        // hub 雪面草图：低频修正（米），细节仍来自扩散推理；
+                        // 极性翻转的列做群系保底（抬出海的地当平原、压下去的当海）
+                        m += sketchAt(sketch, sketchN, mapX1, mapZ1, mapSize, gx, gz);
+                        if (m >= 0 && EcoBiomes.isOcean(b)) b = 1;
+                        else if (m < 0 && !EcoBiomes.isOcean(b)) b = 44;
+                    }
                     if (!openEdge) m = edgeFalloff(m, d, band);
                     int y = mapper.yOf(m);
                     int i = ez * EW + ex;
@@ -480,18 +595,19 @@ public final class TerraService {
                     eOcean[i] = m < 0;
                     eWater[i] = m < 0 && y < sea;
                     // 平原节奏：大平原按大尺度噪声翻出小林班/疏林/草甸（纯世界坐标函数）
-                    eBio[i] = PlanOps.rhythm(data.biomeIds[ez][ex], gx, gz, entry.seed ^ 0x4174L);
+                    eBio[i] = PlanOps.rhythm(b, gx, gz, entry.seed ^ 0x4174L);
                 }
             }
             // ---- 全图水系栅格化：湖/扇/洲/泉/河道一次写入，改写 ey、标水位/浅滩/地貌 ----
             boolean[] eRiver = new boolean[EW * EH];
             boolean[] eShoal = new boolean[EW * EH];
             byte[] eLand = new byte[EW * EH];
+            byte[] eFlow = new byte[EW * EH];
             int[] eWl = new int[EW * EH];
             java.util.Arrays.fill(eWl, sea);
             if (!rivers.isEmpty()) {
                 RiverPlanner.rasterize(rivers, ey, eWater, eRiver, eWl, eShoal, eLand,
-                        EW, EH, x1 - apron, z1 - apron);
+                        eFlow, EW, EH, x1 - apron, z1 - apron);
                 for (int i = 0; i < EW * EH; i++) {
                     if (eRiver[i]) {
                         eBio[i] = EcoBiomes.snowySurface(eBio[i]) || eBio[i] == 16 || eBio[i] == 116
@@ -531,6 +647,7 @@ public final class TerraService {
                     p.wlvl[i] = eRiver[e] ? eWl[e] : sea;
                     p.shoal[i] = eShoal[e];
                     p.land[i] = eLand[e];
+                    p.flow[i] = eFlow[e];
                     p.rawOcean[i] = eOcean[e];
                     p.biome[i] = eBio[e];
                     p.slope[i] = eSlope[e];
@@ -579,6 +696,7 @@ public final class TerraService {
                 double gi = wz * npb / 256.0 - ci0 - 0.5;
                 double gj = wx * npb / 256.0 - cj0 - 0.5;
                 float m = boost(bilinear(elev, CH, CW, gi, gj));
+                if (sketch != null) m += sketchAt(sketch, sketchN, mapX1, mapZ1, s, wx, wz);
                 if (!openEdge) {
                     int d = (int) Math.min(Math.min(wx - mapX1, wz - mapZ1),
                             Math.min(mapX1 + s - 1 - wx, mapZ1 + s - 1 - wz));
@@ -923,27 +1041,40 @@ public final class TerraService {
                             edits.add(new BlockEdit(wx, yy, wz,
                                     top && frozen ? BlockSpec.of(Material.ICE) : BlockSpec.of(Material.WATER)));
                         }
-                        // 河道轻植被：缓宽段浅水海草 + 零星睡莲（确定性哈希，湍窄段自然稀）
+                        // 河内生态按流速分带（0.24.0）：缓流水草丰茂+睡莲，湍流河床裸净
                         if (p.river[i] && !frozen && wl - y >= 1) {
+                            int fl = p.flow[i] & 0xFF;
                             double fh = hash01(entry.seed ^ 0xF10AL, wx, wz);
-                            if (fh < 0.07 && wl - y >= 2) {
+                            double sg = fl <= 40 ? 0.16 : fl >= 60 ? 0.03 : 0.08;
+                            if (fh < sg && wl - y >= 2) {
                                 edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.of(Material.SEAGRASS)));
-                            } else if (fh > 0.975 && wl - y >= 2) {
+                            } else if (fh > (fl <= 40 ? 0.968 : 0.988) && wl - y >= 2) {
                                 edits.add(new BlockEdit(wx, wl + 1, wz, BlockSpec.of(Material.LILY_PAD)));
                             }
                         }
                     } else if (EcoBiomes.snowySurface(b) && skin[0] != Material.SNOW_BLOCK) {
                         edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.snow(1)));
-                    } else if (p.shoal[i] && y == mapper.sea() && !EcoBiomes.snowySurface(b)
-                            && hash01(entry.seed ^ 0x2EEDL, wx, wz) < 0.05) {
-                        // 齐平海岸零星芦苇（支撑面与邻水同高，甘蔗合法）
-                        int ch = 1 + (int) (hash01(entry.seed ^ 0x2EEEL, wx, wz) * 3);
-                        for (int k = 1; k <= ch; k++) {
-                            edits.add(new BlockEdit(wx, y + k, wz, BlockSpec.of(Material.SUGAR_CANE)));
+                    } else if (p.shoal[i] && !EcoBiomes.snowySurface(b)
+                            && (y == mapper.sea() || riverBankWl(p, W, H, x, z) == y)) {
+                        // 齐平水岸芦苇（支撑面与邻水同高才合法）：缓流河岸茂、湍流稀
+                        boolean river = y != mapper.sea() || (p.flow[i] & 0xFF) > 0;
+                        double caneP = river ? ((p.flow[i] & 0xFF) <= 40 ? 0.11 : 0.04) : 0.05;
+                        if (hash01(entry.seed ^ 0x2EEDL, wx, wz) < caneP) {
+                            int ch = 1 + (int) (hash01(entry.seed ^ 0x2EEEL, wx, wz) * 3);
+                            for (int k = 1; k <= ch; k++) {
+                                edits.add(new BlockEdit(wx, y + k, wz, BlockSpec.of(Material.SUGAR_CANE)));
+                            }
                         }
-                    } else if (p.land[i] == RiverPlanner.L_SPRING
-                            && hash01(entry.seed ^ 0x59A6L, wx, wz) < 0.3) {
-                        edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.of(Material.MOSS_CARPET)));
+                    } else if (p.land[i] == RiverPlanner.L_SPRING) {
+                        double h2 = hash01(entry.seed ^ 0x59A6L, wx, wz);
+                        if (h2 < 0.3) {
+                            edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.of(Material.MOSS_CARPET)));
+                        } else if (h2 > 0.92) {
+                            // 泉眼圈零星杜鹃（垫苔藓块保支撑合法）：高山涌泉的湿生灌丛
+                            edits.add(new BlockEdit(wx, y, wz, BlockSpec.of(Material.MOSS_BLOCK)));
+                            edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.of(
+                                    h2 > 0.965 ? Material.FLOWERING_AZALEA : Material.AZALEA)));
+                        }
                     } else if (p.land[i] == RiverPlanner.L_FAN
                             && hash01(entry.seed ^ 0x59A7L, wx, wz) < 0.012
                             && hash01(entry.seed, wx, wz) >= 0.45) {
@@ -1088,6 +1219,20 @@ public final class TerraService {
                 if (p.land[i] == RiverPlanner.L_DELTA || b == 92) {
                     return new Material[]{Material.MUD, Material.MUD, Material.CLAY};
                 }
+                // 河床按流速分材（0.24.0）：湍流卵石/苔石冲刷床，缓流泥沙淤积床
+                if (p.river[i]) {
+                    int fl = p.flow[i] & 0xFF;
+                    if (fl >= 60) {
+                        return hash < 0.42 ? new Material[]{Material.GRAVEL, Material.STONE, Material.STONE}
+                                : hash < 0.74 ? new Material[]{Material.COBBLESTONE, Material.GRAVEL, Material.STONE}
+                                : new Material[]{Material.MOSSY_COBBLESTONE, Material.GRAVEL, Material.STONE};
+                    }
+                    if (fl <= 40) {
+                        return hash < 0.42 ? new Material[]{Material.SAND, Material.CLAY, Material.GRAVEL}
+                                : hash < 0.72 ? new Material[]{Material.MUD, Material.CLAY, Material.GRAVEL}
+                                : new Material[]{Material.SAND, Material.SAND, Material.GRAVEL};
+                    }
+                }
                 if (depth <= 4) return new Material[]{Material.SAND, Material.SAND, Material.GRAVEL};
                 return hash < 0.5
                         ? new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE}
@@ -1103,11 +1248,23 @@ public final class TerraService {
             if (p.land[i] == RiverPlanner.L_DELTA) {
                 return new Material[]{Material.MUD, Material.MUD, Material.CLAY};
             }
-            // 齐平浅滩岸：贴水第一圈用沙/砾（冷区砾石），平滑不碎
+            // 齐平浅滩岸：贴水第一圈用沙/砾（冷区砾石），平滑不碎；
+            // 河岸按流速分材——缓流泥沙滩涂岸、湍流卵石滚石岸
             if (p.shoal[i]) {
                 boolean cold = EcoBiomes.snowySurface(b) || b == 93;
-                return cold ? new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE}
-                        : new Material[]{Material.SAND, Material.SAND, Material.GRAVEL};
+                if (cold) return new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
+                int fl = p.flow[i] & 0xFF;
+                if (fl >= 60) {
+                    return hash < 0.5 ? new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE}
+                            : hash < 0.8 ? new Material[]{Material.COBBLESTONE, Material.GRAVEL, Material.STONE}
+                            : new Material[]{Material.STONE, Material.GRAVEL, Material.STONE};
+                }
+                if (fl > 0 && fl <= 40) {
+                    return hash < 0.55 ? new Material[]{Material.SAND, Material.SAND, Material.GRAVEL}
+                            : hash < 0.82 ? new Material[]{Material.MUD, Material.CLAY, Material.GRAVEL}
+                            : new Material[]{Material.GRAVEL, Material.SAND, Material.STONE};
+                }
+                return new Material[]{Material.SAND, Material.SAND, Material.GRAVEL};
             }
             // 冲积扇：砾沙混杂的辫状堆积面
             if (p.land[i] == RiverPlanner.L_FAN) {
@@ -1320,9 +1477,10 @@ public final class TerraService {
                 for (Map.Entry<String, Double> fe : ecoDef.features().entrySet()) {
                     f.atmosphere().density(fe.getKey(), fe.getValue());
                 }
-                // 地图世界：河流由全局规划器统一定线（0.22.0），
-                // 关掉每区各刻一条的氛围河——那是"平行同向短直河"的根源
-                if (mapMode) f.atmosphere().density("river", 0);
+                // 氛围小河流 0.24.0 全面废弃：河流一律由全局水文规划统一定线
+                // （0.22.0 起地图模式已关；画布模式的"每区一条短直河"观感差，一并停用。
+                //  手动 forest atmo feature river=… 不受影响）
+                f.atmosphere().density("river", 0);
                 // 有树种就种（开阔地的孤树/疏林也走同一条链）
                 boolean trees = species.length > 0;
                 if (trees) {
@@ -1443,6 +1601,18 @@ public final class TerraService {
             progress.stage(name);
         }
 
+        /** 一片/一块地形落成 → 通知外部（大厅沙盘刷新）。 */
+        private void notifyPatch() {
+            java.util.function.Consumer<String> l = patchListener;
+            if (l != null && world != null) {
+                try {
+                    l.accept(world);
+                } catch (Throwable t) {
+                    plugin.getLogger().log(Level.FINE, "patch listener", t);
+                }
+            }
+        }
+
         private void checkCancel() {
             if (cancelled.get()) throw new CancelledException();
         }
@@ -1467,6 +1637,7 @@ public final class TerraService {
         final boolean[] river;   // 河道/湖泊水列
         final boolean[] shoal;   // 齐平浅滩岸（皮肤沙/砾）
         final byte[] land;       // 河流地貌标记（RiverPlanner.L_*：扇/三角洲/泉/湿地）
+        final byte[] flow;       // 河道/岸带流速 0..100（0=缓，河床与植被分布用）
         final short[] mix;       // 交界混合的邻群系（0=不混）
         final byte[] mixP;       // 混合概率 %
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
@@ -1484,6 +1655,7 @@ public final class TerraService {
             river = new boolean[w * h];
             shoal = new boolean[w * h];
             land = new byte[w * h];
+            flow = new byte[w * h];
             mix = new short[w * h];
             mixP = new byte[w * h];
         }
@@ -1492,6 +1664,16 @@ public final class TerraService {
     /** 与 PlainChunkGenerator 解耦的常量镜像（避免离线工具带入 Bukkit 类）。 */
     private static final class PlainBase {
         static final int SURFACE = 64;
+    }
+
+    /** 4 邻里有水位=本列顶面的河列 → 返回该水位（芦苇支撑合法性判定），否则 MIN。 */
+    private static int riverBankWl(Plan p, int W, int H, int x, int z) {
+        int y = p.y[z * W + x];
+        if (x > 0 && p.river[z * W + x - 1] && p.wlvl[z * W + x - 1] == y) return y;
+        if (x < W - 1 && p.river[z * W + x + 1] && p.wlvl[z * W + x + 1] == y) return y;
+        if (z > 0 && p.river[(z - 1) * W + x] && p.wlvl[(z - 1) * W + x] == y) return y;
+        if (z < H - 1 && p.river[(z + 1) * W + x] && p.wlvl[(z + 1) * W + x] == y) return y;
+        return Integer.MIN_VALUE;
     }
 
     // ============================ 静态工具 ============================
@@ -1520,6 +1702,23 @@ public final class TerraService {
         double s = Math.max(0, d) / (double) band;
         s = s * s * (3 - 2 * s);
         return (float) (-45 + (meters + 45) * s);
+    }
+
+    /**
+     * hub 雪面草图在世界坐标处的双线性插值（米）：n×n 网格铺满 size×size 地图，
+     * 网格值取单元中心、越界钳边。纯函数（buildPlanMap 与 planRivers 共用同一链）。
+     */
+    public static float sketchAt(float[] sk, int n, int mapX1, int mapZ1, int size,
+                                 double wx, double wz) {
+        double u = (wx - mapX1) / size * n - 0.5;
+        double v = (wz - mapZ1) / size * n - 0.5;
+        double x = Math.max(0, Math.min(n - 1.0, u));
+        double y = Math.max(0, Math.min(n - 1.0, v));
+        int x0 = (int) x, x1 = Math.min(n - 1, x0 + 1);
+        int y0 = (int) y, y1 = Math.min(n - 1, y0 + 1);
+        double tx = x - x0, ty = y - y0;
+        return (float) ((1 - ty) * ((1 - tx) * sk[y0 * n + x0] + tx * sk[y0 * n + x1])
+                + ty * ((1 - tx) * sk[y1 * n + x0] + tx * sk[y1 * n + x1]));
     }
 
     /** 2D 双线性采样（越界钳边），河流规划的 coarse 高度场用。 */

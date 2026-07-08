@@ -93,7 +93,8 @@ public final class RiverMapTool {
         byte[] eLand = new byte[N];
         int[] eWl = new int[N];
         java.util.Arrays.fill(eWl, sea);
-        RiverPlanner.rasterize(plan, ey, eWater, eRiver, eWl, eShoal, eLand, size, size, x1, z1);
+        byte[] eFlow = new byte[N];
+        RiverPlanner.rasterize(plan, ey, eWater, eRiver, eWl, eShoal, eLand, eFlow, size, size, x1, z1);
         PlanOps.flushShore(ey, eWater, eRiver, eShoal, size, size, sea);
 
         // ---- 渲染：高程分层设色 × 山体阴影 + 水体 ----

@@ -57,9 +57,22 @@
 <tr><td><code>/miaeco terra scout | prefetch | status | cancel</code></td><td>陆地探测 / 预下载模型 / 任务状态 / 取消</td></tr>
 <tr><td><code>/miaeco geo gen &lt;类型&gt; [强度] [风格]</code></td><td>在选区散布地貌奇观：stone_forest 石林 / karst_towers 峰林 / hoodoos 蘑菇岩 / arch 岩拱 / monoliths 孤石 / hot_spring 温泉；风格 stone/karst/sand/red/ice</td></tr>
 <tr><td><code>/miaeco geo types | undo</code></td><td>列出类型 / 撤销最近一次地貌</td></tr>
+<tr><td><code>/miaeco hub</code></td><td>进入 MiaEco 大厅：每个世界一块 20×20 <b>积雪沙盘</b>（雪高=地形，1 层雪=1/8 格精度；蓝玻璃=水面；最高/最低点悬浮标注；生成中的世界随分片实时"长出来"）</td></tr>
+<tr><td><code>/miaeco hub new &lt;名&gt; [size=…] [scale=…] [sea=…] [edge=…] [yscale=…]</code></td><td>开一块新世界草稿沙盘（参数同 world create）</td></tr>
+<tr><td><code>/miaeco hub roll &lt;名&gt; [seed]</code></td><td>抽卡：抽一个种子做 coarse 粗扫铺到沙盘（秒级，无限抽到满意为止）</td></tr>
+<tr><td><code>/miaeco hub water &lt;名&gt;</code></td><td>水系预览：按当前雪面规划河流湖泊，滴水粒子贴雪面画河 90 秒 + 沙盘旁画框挂 128² 俯视地图画</td></tr>
+<tr><td><code>/miaeco hub confirm &lt;名&gt;</code></td><td>送入生产：读回雪面修形差量（1 层雪 ≈ 45 米）作为草图混入扩散地形，创建世界并开始生成</td></tr>
+<tr><td><code>/miaeco hub tp &lt;名&gt; | cancel &lt;名&gt;</code></td><td>传送到沙盘 / 丢弃草稿</td></tr>
 <tr><td><code>/miaeco clear &lt;森林&gt;</code></td><td>清除该森林所有树方块</td></tr>
 <tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（147 棵建筑师设计树）</td></tr>
 </table>
+
+<h2>0.24.0 大厅沙盘 · 抽卡造图 · 水力几何 · 全服进度</h2>
+<p><b>MiaEco 大厅（/miaeco hub）：</b>一个无限大的专用虚空大厅，每个受管世界一块 <b>20×20 积雪沙盘</b>——高度用雪块+雪层表现（1 层 = 1/8 格精度），水面铺浅蓝玻璃，最高峰/最低谷悬浮字标注；<b>正在生成的世界会随分片完成实时"长出来"</b>，状态牌同步显示阶段与百分比。</p>
+<p><b>抽卡与手修造新图：</b><code>hub new</code> 开草稿沙盘 → <code>hub roll</code> 抽种子（coarse 粗扫秒级铺盘，无限抽）→ 直接<b>堆/铲雪修形</b>（1 层雪 ≈ 45 米，海平面=3 格雪）→ <code>hub water</code> 预览水系（滴水粒子沿雪面画出河流湖泊 + 沙盘旁画框挂俯视地图画）→ <code>hub confirm</code> 把雪面差量作为<b>草图</b>低频混入扩散地形送入生产——细节仍由模型生成，宏观形态跟随你的雪面（草图持久化，regen/续跑同样生效）。</p>
+<p><b>河流水力几何：</b>起流面积调低（95²→58² 格）——<b>源头密度约 2.7 倍</b>，涓流多而细、逐级树状汇流，水系终于像真实水域图。并按节点坡度做流速建模：<b>陡段窄而深</b>（山涧深切、卵石/苔石河床、岸边滚石），<b>平缓段宽而浅</b>（平原大河可达 ~20 格宽仅 2~3 格深，泥沙河床、泥沙滩涂岸）；河内生态按流速分带——缓流海草丰茂、睡莲点缀、岸边芦苇丛生，湍流河床冲刷裸净；泉眼圈新增湿生杜鹃。</p>
+<p><b>氛围小河流废弃：</b>0.10 时代"每个生态区各刻一条"的小河观感粗糙，terra 自动生态现已全面停用（含画布模式）——河流一律出自全局水文规划。手动 <code>forest atmo feature river=…</code> 不受影响。</p>
+<p><b>进度全服广播：</b>地形任务的聊天进度与 BossBar 现在面向<b>全服所有在线玩家</b>（并留控制台日志），发起者退出不再中断播报；中途进服的玩家自动补挂 BossBar 并收到当前阶段与百分比。</p>
 
 <h2>0.23.0 真实水文 · 流域建模与河流地貌</h2>
 <p><b>河流从"画线"升级成"流域"：</b>整张地图先做水文建模——洼地填充（Priority-Flood）→ 逐格最陡流向 → <b>汇水量累计</b>。降水往低处聚，汇水面积过阈值处自然成河：<b>泉眼</b>在高地涌出（陡坡源头一汪苔石小潭），涓流顺谷而下，<b>支流树状汇合</b>、越汇越宽（源头 ~2.4 格宽渐长至大河 ~11 格），终点只有三种归宿——<b>入海、入湖、流出图边</b>。封闭洼地自动成<b>湖泊</b>（水位=溢出口下沿，湖岸齐平），湖满则溢，<b>溢出口继续成出流河</b>——湖链、串珠水系都会自然出现。光滑坡面上的流向做了随机化扰动（不会出现平行直线水道），低地大幅蜿蜒、山地贴谷线。</p>

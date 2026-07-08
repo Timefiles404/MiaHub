@@ -67,6 +67,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             case "world" -> world(sender, args);
             case "terra" -> terra(sender, args);
             case "geo" -> geo(sender, args);
+            case "hub" -> hub(sender, args);
             case "save" -> {
                 eco.store().saveAll(eco.forests());
                 sender.sendMessage(P + ChatColor.GREEN + "已保存全部森林。");
@@ -206,6 +207,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                         ? ChatColor.GREEN + "世界 " + args[2] + " 已删除。"
                         : ChatColor.RED + "世界文件夹删除不完整（可能被占用），请重启后手动清理。")));
                 if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+                else eco.hub().onWorldRemoved(args[2]);
             }
             case "regen" -> {
                 if (args.length < 3) {
@@ -315,6 +317,106 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         msg(s, "/miaeco terra prefetch", "预下载模型权重并装载（首次 2.2GB）");
     }
 
+    // ---- hub（大厅：世界沙盘可视化 + 新世界草稿流） ----
+    private void hub(CommandSender sender, String[] args) {
+        var hub = eco.hub();
+        if (args.length < 2) {
+            if (!(sender instanceof Player p)) { sender.sendMessage(P + ChatColor.RED + "只有玩家能进大厅。"); return; }
+            String err = hub.enter(p);
+            if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            return;
+        }
+        switch (args[1].toLowerCase(Locale.ROOT)) {
+            case "tp" -> {
+                if (!(sender instanceof Player p)) { sender.sendMessage(P + ChatColor.RED + "只有玩家能传送。"); return; }
+                if (args.length < 3) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco hub tp <名>"); return; }
+                String err = hub.tp(p, args[2]);
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
+            case "new" -> {
+                if (!(sender instanceof Player p)) { sender.sendMessage(P + ChatColor.RED + "只有玩家能开草稿。"); return; }
+                if (args.length < 3) {
+                    sender.sendMessage(P + ChatColor.RED
+                            + "用法: /miaeco hub new <名> [size=N] [scale=15|30|60|120] [sea=Y] [edge=sea|open] [yscale=X]");
+                    return;
+                }
+                int size = 1024, scaleM = 30, sea = 63;
+                boolean openEdge = false;
+                double yscale = 1.0;
+                for (int i = 3; i < args.length; i++) {
+                    String a = args[i];
+                    int eq = a.indexOf('=');
+                    if (eq < 0) { sender.sendMessage(P + ChatColor.RED + "参数要写成 k=v: " + a); return; }
+                    String k = a.substring(0, eq).toLowerCase(Locale.ROOT);
+                    String v = a.substring(eq + 1);
+                    try {
+                        switch (k) {
+                            case "size" -> size = Integer.parseInt(v);
+                            case "scale" -> scaleM = Integer.parseInt(v);
+                            case "sea" -> sea = Integer.parseInt(v);
+                            case "edge" -> openEdge = v.equalsIgnoreCase("open");
+                            case "yscale" -> yscale = Double.parseDouble(v);
+                            default -> { sender.sendMessage(P + ChatColor.RED + "未知参数 " + k); return; }
+                        }
+                    } catch (NumberFormatException e) {
+                        sender.sendMessage(P + ChatColor.RED + k + " 必须是数字。");
+                        return;
+                    }
+                }
+                int maxSize = eco.terra().settings().mapMaxSize();
+                if (size < 320 || size > maxSize) {
+                    sender.sendMessage(P + ChatColor.RED + "size 需在 320~" + maxSize + "（草稿即地图世界）。");
+                    return;
+                }
+                if (scaleM != 15 && scaleM != 30 && scaleM != 60 && scaleM != 120) {
+                    sender.sendMessage(P + ChatColor.RED + "scale 只支持 15/30/60/120。");
+                    return;
+                }
+                if (sea < 0 || sea > 200) { sender.sendMessage(P + ChatColor.RED + "sea 需在 0~200。"); return; }
+                if (yscale < 0.5 || yscale > 2.5) { sender.sendMessage(P + ChatColor.RED + "yscale 需在 0.5~2.5。"); return; }
+                String err = hub.newDraft(p, args[2], size, scaleM, sea, openEdge, yscale);
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
+            case "roll" -> {
+                if (args.length < 3) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco hub roll <草稿名> [seed]"); return; }
+                Long seed = null;
+                if (args.length >= 4) {
+                    try { seed = Long.parseLong(args[3]); }
+                    catch (NumberFormatException e) { seed = (long) args[3].hashCode(); }
+                }
+                String err = hub.roll(sender, args[2], seed);
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
+            case "water" -> {
+                if (args.length < 3) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco hub water <草稿名>"); return; }
+                String err = hub.water(sender, args[2]);
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
+            case "confirm" -> {
+                if (args.length < 3) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco hub confirm <草稿名>"); return; }
+                String err = hub.confirm(sender, args[2]);
+                if (err != null) sender.sendMessage(P + ChatColor.RED + err);
+            }
+            case "cancel" -> {
+                if (args.length < 3) { sender.sendMessage(P + ChatColor.RED + "用法: /miaeco hub cancel <草稿名>"); return; }
+                String err = hub.cancelDraft(args[2]);
+                sender.sendMessage(P + (err != null ? ChatColor.RED + err
+                        : ChatColor.GREEN + "草稿 " + args[2] + " 已丢弃，沙盘位已释放。"));
+            }
+            default -> helpHub(sender);
+        }
+    }
+
+    private void helpHub(CommandSender s) {
+        msg(s, "/miaeco hub", "进入大厅：每个世界一块积雪沙盘（雪高=地形、蓝玻璃=水面，生成中的世界实时长出）");
+        msg(s, "/miaeco hub tp <名>", "传送到某块沙盘");
+        msg(s, "/miaeco hub new <名> [size=…] [scale=…] [sea=…] [edge=…] [yscale=…]", "开一块新世界草稿沙盘");
+        msg(s, "/miaeco hub roll <名> [seed]", "抽一张地形铺到草稿沙盘（无限抽，抽到满意为止）");
+        msg(s, "/miaeco hub water <名>", "按当前雪面预览水系：滴水粒子画河 + 沙盘旁地图画俯视图");
+        msg(s, "/miaeco hub confirm <名>", "读回雪面修形（1 层≈45 米）作为草图，创建世界并开始生成");
+        msg(s, "/miaeco hub cancel <名>", "丢弃草稿");
+    }
+
     // ---- geo（地貌奇观：独立于树木与氛围的第三类生成） ----
     private void geo(CommandSender sender, String[] args) {
         if (args.length < 2) { helpGeo(sender); return; }
@@ -367,6 +469,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         msg(s, "/miaeco world …", "多世界管理（create/list/tp/regen/remove）");
         msg(s, "/miaeco terra …", "扩散地形生成（gen/scout/status/cancel/prefetch）");
         msg(s, "/miaeco geo …", "地貌奇观（石林/峰林/岩拱…，独立于树木与氛围）");
+        msg(s, "/miaeco hub …", "大厅：世界积雪沙盘可视化 + 抽卡/手修雪面造新世界（new/roll/water/confirm）");
         msg(s, "/miaeco test <树种> plant [giant]", "在脚下种一棵测试树（giant=巨木变异）");
         msg(s, "/miaeco test <树种> advance <月>", "推进这棵测试树的形态");
         msg(s, "/miaeco test <树种> clear", "移除测试树");
@@ -905,7 +1008,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
             addMatches(out, args[0], "help", "test", "pos1", "pos2", "forest", "species", "atmo",
-                    "plant", "grow", "advance", "clear", "save", "world", "terra", "geo");
+                    "plant", "grow", "advance", "clear", "save", "world", "terra", "geo", "hub");
         } else if (args.length == 2) {
             switch (args[0].toLowerCase(Locale.ROOT)) {
                 case "test" -> addMatches(out, args[1],
@@ -916,6 +1019,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 case "world" -> addMatches(out, args[1], "create", "list", "tp", "regen", "remove");
                 case "terra" -> addMatches(out, args[1], "gen", "scout", "status", "cancel", "prefetch", "resume");
                 case "geo" -> addMatches(out, args[1], "gen", "types", "undo");
+                case "hub" -> addMatches(out, args[1], "tp", "new", "roll", "water", "confirm", "cancel");
                 case "plant", "grow", "advance", "clear" -> addForests(out, args[1]);
                 default -> { }
             }
@@ -925,6 +1029,14 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
             if (w0.equals("world") && (w1.equals("tp") || w1.equals("remove") || w1.equals("regen"))) {
                 for (String n : eco.worlds().all().keySet()) {
                     if (n.toLowerCase(Locale.ROOT).startsWith(args[2].toLowerCase(Locale.ROOT))) out.add(n);
+                }
+                return out;
+            }
+            if (w0.equals("hub")) {
+                if (w1.equals("tp")) {
+                    addMatches(out, args[2], eco.hub().sandboxNames().toArray(new String[0]));
+                } else if (w1.equals("roll") || w1.equals("water") || w1.equals("confirm") || w1.equals("cancel")) {
+                    addMatches(out, args[2], eco.hub().draftNames().toArray(new String[0]));
                 }
                 return out;
             }
@@ -961,6 +1073,10 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         } else if (args.length >= 4 && args[0].equalsIgnoreCase("world")
                 && args[1].equalsIgnoreCase("regen")) {
             addMatches(out, args[args.length - 1], "confirm", "seed=");
+        } else if (args.length >= 4 && args[0].equalsIgnoreCase("hub")
+                && args[1].equalsIgnoreCase("new")) {
+            addMatches(out, args[args.length - 1], "size=1024", "scale=30", "scale=60", "sea=63",
+                    "edge=open", "yscale=1.4");
         } else if (args.length == 4) {
             String a0 = args[0].toLowerCase(Locale.ROOT);
             String a1 = args[1].toLowerCase(Locale.ROOT);

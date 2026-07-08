@@ -15,7 +15,9 @@ import java.util.List;
  *   <li><b>D8 流向 + 汇水量</b>：每格水往最陡邻格流，按填后高度降序累计汇水——
  *       汇水量过阈值处即成河道；</li>
  *   <li><b>树状河网</b>：河道头部=<b>泉眼</b>（陡坡头部涌泉成潭），支流走到已成河道处即
- *       <b>天然汇流</b>，宽深随汇水量渐增（涓流 → 大河）；</li>
+ *       <b>天然汇流</b>，宽深随汇水量渐增（涓流 → 大河）；0.24.0 起流面积调低（源头
+ *       更密，接近真实水域图），且按<b>节点坡度→流速</b>做水力几何：陡段窄而深
+ *       （山涧深切）、平缓段宽而浅（平原大河）；流速随栅格化输出供河床/植被分布；</li>
  *   <li><b>湖泊</b>：填洼揭示的封闭洼地成湖（水位=溢出口下沿），溢出口继续成<b>出流河</b>——
  *       河的终点只有三种：入海、入湖、出图边；</li>
  *   <li><b>河流地貌</b>：坡折处<b>冲积扇</b>（锥面沉积+辫状干沟）、河口<b>三角洲</b>
@@ -33,6 +35,7 @@ public final class RiverPlanner {
     }
 
     public static final int BANK_W = 3;          // 齐平岸带宽
+    static final double WIDTH_AREA = 95.0 * 95.0;   // 半宽=1.0 对应的汇水面积（格²）
 
     // 节点类型
     public static final int K_NORMAL = 0, K_SPRING = 1, K_PLUNGE = 2, K_ISLAND = 3;
@@ -41,8 +44,8 @@ public final class RiverPlanner {
     // 地貌标记（eLand，大者优先）
     public static final byte L_NONE = 0, L_WET = 1, L_FAN = 2, L_DELTA = 3, L_SPRING = 4;
 
-    /** 一个河道节点：中心、水面 Y、半宽、中线深、类型。 */
-    public record Node(float x, float z, int wl, float halfW, float depth, int kind) { }
+    /** 一个河道节点：中心、水面 Y、半宽、中线深、流速（0=缓 1=湍）、类型。 */
+    public record Node(float x, float z, int wl, float halfW, float depth, float flow, int kind) { }
 
     /** 一条河：有序节点（源头→终点）+ 类型（干支流/汊流/牛轭湖/扇面干沟）。 */
     public record River(List<Node> nodes, int kind) { }
@@ -253,8 +256,9 @@ public final class RiverPlanner {
         }
 
         // ---- 河网提取：阈值汇水 → 头部 → 顺流走，汇流即止 ----
-        // 河道起始汇水面积 ~95²格（跨 cell 尺寸物理一致）；density 越大河网越密
-        double T = Math.max(6, 95.0 * 95.0 / (cell * cell) / Math.max(0.15, density));
+        // 河道起始汇水面积 ~58²格（0.24.0 自 95² 调低：源头更多，水系呈真实
+        // 树状水域图——涓流多而细，逐级汇成大河）；density 越大河网越密
+        double T = Math.max(5, 58.0 * 58.0 / (cell * cell) / Math.max(0.15, density));
         boolean[] isCh = new boolean[N];
         for (int i = 0; i < N; i++) isCh[i] = !ocean[i] && accum[i] >= T;
         boolean[] isHead = new boolean[N];
@@ -289,11 +293,19 @@ public final class RiverPlanner {
                 claimed[c] = rivers.size();
                 c = dir[c];
             }
-            if (path.size() < 5) continue;
+            // 路径被丢弃时必须回滚 claim（0.24.0 修复）：否则后续支流会"汇入"一条
+            // 不存在的河，在内陆凭空断头——起流阈值降低后短路径更多，此病更显
+            if (path.size() < 5) {
+                unclaim(claimed, path, rivers.size());
+                continue;
+            }
             // 图边汇与入海口都外延收尾：前者流出图框，后者穿过 coarse/精细海岸线的错位带
             River r = buildRiver(path, G, cell, x1, z1, fill, accum, lakeId,
                     lakeRemap, lakes, T, seed, rivers.size(), !ended || toSea);
-            if (r == null) continue;
+            if (r == null) {
+                unclaim(claimed, path, rivers.size());
+                continue;
+            }
             rivers.add(r);
             // ---- 地貌：冲积扇 / 三角洲 / 牛轭湖 ----
             detectFans(r, hf, fans, seed);
@@ -308,6 +320,13 @@ public final class RiverPlanner {
         return new RiverPlan(rivers, lakes, fans, deltas);
     }
 
+    /** 回滚一条被丢弃路径的 claim（只清本路径打的标，终点格属他河不动）。 */
+    private static void unclaim(int[] claimed, List<Integer> path, int idx) {
+        for (int c : path) {
+            if (claimed[c] == idx) claimed[c] = -1;
+        }
+    }
+
     /** 单元路径 → 平滑蜿蜒的节点折线（宽深=汇水量，水位=填面单调，泉/潭/洲打标）。 */
     private static River buildRiver(List<Integer> path, int G, int cell, int x1, int z1,
                                     double[] fill, float[] accum,
@@ -320,7 +339,8 @@ public final class RiverPlanner {
             int c = path.get(i);
             xs[i] = x1 + (c % G + 0.5f) * cell;
             zs[i] = z1 + (c / G + 0.5f) * cell;
-            hws[i] = (float) Math.min(5.5, 0.6 + 0.6 * Math.sqrt(accum[c] / T));
+            // 基础半宽锚定物理汇水面积（与起流阈值解耦）：涓流 ~0.8，大河 ~6.5
+            hws[i] = (float) Math.min(6.5, 0.45 + 0.55 * Math.sqrt(accum[c] * (double) cell * cell / WIDTH_AREA));
             wls[i] = (float) fill[c];
         }
         // 入湖收口：终点水位钳到湖面；出湖源头（头部贴湖）钳到湖面
@@ -367,15 +387,23 @@ public final class RiverPlanner {
             xs[i] = ox[i] + (-dz / len) * (float) (t * amp);
             zs[i] = oz2[i] + (dx / len) * (float) (t * amp);
         }
-        // 水位取整 + 单调
+        // 水位取整 + 单调 + 流速物理（0.24.0）：局部坡度 → 流速 s01；
+        // 陡段收窄加深（山涧深切下蚀），缓段展宽变浅（平原大河又宽又浅、堆积为主）
         List<Node> nodes = new ArrayList<>(m);
         int prevWl = Integer.MAX_VALUE;
         for (int i = 0; i < m; i++) {
+            int lo = Math.max(0, i - 6), hi = Math.min(m - 1, i + 6);
+            double run = 0;
+            for (int k = lo; k < hi; k++) run += Math.hypot(xs[k + 1] - xs[k], zs[k + 1] - zs[k]);
+            double slope = Math.max(0, wls[lo] - wls[hi]) / Math.max(6.0, run);
+            double s01 = slope / (slope + 0.011);              // 半饱和 ~1 格/90 格
             int wl = Math.min(prevWl, (int) Math.floor(wls[i]));
             prevWl = wl;
-            float hw = hws[i];
-            float depth = (float) Math.min(4.5, 1 + 0.62 * hw);
-            nodes.add(new Node(xs[i], zs[i], wl, hw, depth, K_NORMAL));
+            float hw0 = hws[i];
+            float hw = (float) Math.max(0.5, Math.min(10, hw0 * (1.55 - 1.05 * s01)));
+            float depth = (float) Math.max(0.9, Math.min(5.2,
+                    (0.7 + 0.5 * hw0) * (0.45 + 1.6 * s01)));
+            nodes.add(new Node(xs[i], zs[i], wl, hw, depth, (float) s01, K_NORMAL));
         }
         if (nodes.size() < 6) return null;
         // 打标：泉眼（陡坡头部）/ 跌水潭 / 河心洲
@@ -394,7 +422,7 @@ public final class RiverPlanner {
                 kind = K_ISLAND;
             }
             tagged.add(kind == K_NORMAL ? d
-                    : new Node(d.x(), d.z(), d.wl(), d.halfW(), d.depth(), kind));
+                    : new Node(d.x(), d.z(), d.wl(), d.halfW(), d.depth(), d.flow(), kind));
         }
         // 图边收尾：终点是图界汇（非海/湖/汇流）→ 沿末向外延 3 节点，河真正流出图框
         if (extendEnd && tagged.size() >= 2) {
@@ -404,7 +432,7 @@ public final class RiverPlanner {
             dx /= len; dz /= len;
             for (int k = 1; k <= 3; k++) {
                 tagged.add(new Node(b.x() + dx * 7 * k, b.z() + dz * 7 * k,
-                        b.wl(), b.halfW(), b.depth(), K_NORMAL));
+                        b.wl(), b.halfW(), b.depth(), b.flow(), K_NORMAL));
             }
         }
         return new River(tagged, R_MAIN);
@@ -463,7 +491,7 @@ public final class RiverPlanner {
                 double c2 = Math.cos(bend), s2 = Math.sin(bend);
                 float vx = (float) (bx * c2 - bz * s2), vz = (float) (bx * s2 + bz * c2);
                 branch.add(new Node(apex.x() + vx * t, apex.z() + vz * t, sea,
-                        Math.max(1.1f, apex.halfW() * (0.5f - 0.02f * k)), 1.6f, K_NORMAL));
+                        Math.max(1.1f, apex.halfW() * (0.5f - 0.02f * k)), 1.6f, 0.12f, K_NORMAL));
             }
             rivers.add(new River(branch, R_DISTRIB));
         }
@@ -492,7 +520,7 @@ public final class RiverPlanner {
             for (int k = 0; k <= steps; k++) {
                 double a = a0 + (a1 - a0) * k / steps;
                 arc.add(new Node(cx + (float) (Math.cos(a) * rad), cz + (float) (Math.sin(a) * rad),
-                        d.wl(), Math.max(1.2f, d.halfW() * 0.55f), 1.4f, K_NORMAL));
+                        d.wl(), Math.max(1.2f, d.halfW() * 0.55f), 1.4f, 0.03f, K_NORMAL));
             }
             rivers.add(new River(arc, R_OXBOW));
         }
@@ -505,10 +533,11 @@ public final class RiverPlanner {
      * 顺序：冲积扇沉积 → 三角洲泥滩 → 湖泊 → 河道/齐平岸（含洲/潭/峡谷）→ 干沟 → 泉眼。
      *
      * @param eLand 出参：地貌标记（{@link #L_FAN} 等，皮肤/群系用）
+     * @param eFlow 出参：河道/岸带流速 0..100（缓流水草丰茂、湍流卵石河床；可 null）
      */
     public static void rasterize(RiverPlan plan, int[] ey, boolean[] eWater,
                                  boolean[] eRiver, int[] eWl, boolean[] eShoal, byte[] eLand,
-                                 int EW, int EH, int ox, int oz) {
+                                 byte[] eFlow, int EW, int EH, int ox, int oz) {
         if (plan == null || plan.isEmpty()) return;
 
         // ---- 冲积扇：锥面沉积（填谷不削峰，抬升 ≤5）----
@@ -609,6 +638,7 @@ public final class RiverPlanner {
         int[] bestWl = new int[EW * EH];
         float[] bestHw = new float[EW * EH];
         float[] bestDep = new float[EW * EH];
+        float[] bestFlow = new float[EW * EH];
         int[] bankWl = new int[EW * EH];
         java.util.Arrays.fill(bankWl, Integer.MIN_VALUE);
         byte[] plunge = new byte[EW * EH];
@@ -652,6 +682,7 @@ public final class RiverPlanner {
                             bestWl[idx] = wlHere;
                             bestHw[idx] = hw;
                             bestDep[idx] = a.depth() + (b.depth() - a.depth()) * t;
+                            bestFlow[idx] = a.flow() + (b.flow() - a.flow()) * t;
                         }
                         if (b.kind() == K_PLUNGE && d <= hw * 1.15) {
                             plunge[idx] = 2;
@@ -692,6 +723,7 @@ public final class RiverPlanner {
                 ey[i] = Math.min(ey[i], floor);
                 eRiver[i] = true;
                 eWl[i] = wl;
+                if (eFlow != null) eFlow[i] = flowByte(bestFlow[i]);
             } else if (d <= hw + BANK_W) {
                 int wlB = Math.max(Math.max(wl, bankWl[i]), lakeGuard[i]);
                 boolean canyon = ey[i] - wlB > 10;
@@ -701,6 +733,7 @@ public final class RiverPlanner {
                 ey[i] = ey[i] < wlB ? wlB : Math.min(ey[i], Math.max(wlB, target));
                 if (ey[i] <= wlB + 1 && !canyon) {
                     eShoal[i] = true;
+                    if (eFlow != null) eFlow[i] = flowByte(bestFlow[i]);
                     if (hw >= 3.2f) eLand[i] = maxL(eLand[i], L_WET);   // 宽河两岸=湿地候选
                 }
             }
@@ -725,6 +758,7 @@ public final class RiverPlanner {
                         ey[i] = h.wl() - 1;
                         eRiver[i] = true;
                         eWl[i] = h.wl();
+                        if (eFlow != null) eFlow[i] = 70;         // 涌泉=湍
                     } else if (d <= 2.6 && Math.abs(ey[i] - h.wl()) <= 5) {
                         ey[i] = h.wl();                           // 齐平沿口（低则成堤）
                         eLand[i] = maxL(eLand[i], L_SPRING);
@@ -785,5 +819,9 @@ public final class RiverPlanner {
 
     private static byte maxL(byte a, byte b) {
         return a >= b ? a : b;
+    }
+
+    private static byte flowByte(float f) {
+        return (byte) Math.round(Math.max(0, Math.min(1, f)) * 100);
     }
 }

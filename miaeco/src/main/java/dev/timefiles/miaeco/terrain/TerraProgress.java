@@ -2,7 +2,6 @@ package dev.timefiles.miaeco.terrain;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
-import org.bukkit.World;
 import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
@@ -17,6 +16,10 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * 地形生成的双通道进度：聊天栏文本进度条（阶段切换 + 每 ≥10% 一行，节流）
  * 与 BossBar 连续百分比。所有方法线程安全，内部切回主线程。
+ *
+ * <p>0.24.0 起<b>全服广播</b>：聊天与 BossBar 面向所有在线玩家（含控制台日志），
+ * 发起者退出不影响播报；中途进服的玩家由 BossBar 刷新自动补挂，并可经
+ * {@link #welcome} 补发当前进度（TerraService 的 join 监听调用）。
  */
 public final class TerraProgress {
 
@@ -31,6 +34,7 @@ public final class TerraProgress {
     private final AtomicLong lastChatNanos = new AtomicLong();
     private final AtomicLong lastBarNanos = new AtomicLong();
     private volatile int lastChatPercent = -100;
+    private volatile double lastFrac;
 
     public TerraProgress(Plugin plugin, CommandSender sender, String worldName) {
         this.plugin = plugin;
@@ -47,9 +51,26 @@ public final class TerraProgress {
         update(0, null);
     }
 
+    /** 当前进度一行文本（大厅沙盘状态牌/join 欢迎用）。 */
+    public String line() {
+        return stage + " " + (int) Math.round(lastFrac * 100) + "%";
+    }
+
+    /** 玩家中途进服：补发当前阶段与进度，并立即挂上 BossBar。 */
+    public void welcome(Player p) {
+        runSync(() -> {
+            p.sendMessage(P + ChatColor.AQUA + "地形任务进行中"
+                    + (worldName.isEmpty() ? "" : " @ " + worldName) + ChatColor.GRAY + " — "
+                    + line() + ChatColor.DARK_GRAY + "（全服播报，/miaeco terra status 可随时查看）");
+            BossBar b = bar;
+            if (b != null) b.addPlayer(p);
+        });
+    }
+
     /** 更新进度（任意线程）。frac 0..1；detail 附在进度条后（可空）。 */
     public void update(double frac, String detail) {
         double f = Math.max(0, Math.min(1, frac));
+        lastFrac = f;
         int percent = (int) Math.round(f * 100);
         long now = System.nanoTime();
 
@@ -124,12 +145,12 @@ public final class TerraProgress {
         });
     }
 
-    /** 接收者：命令发起人 + 目标世界内玩家（去重）。 */
+    /** 接收者：全服在线玩家 + 控制台（发起者退出不中断播报）。 */
     private Set<CommandSender> targets() {
         Set<CommandSender> out = new LinkedHashSet<>();
-        if (!(sender instanceof Player p) || p.isOnline()) out.add(sender);
-        World w = Bukkit.getWorld(worldName);
-        if (w != null) out.addAll(w.getPlayers());
+        if (!(sender instanceof Player)) out.add(sender);          // 控制台/RCON 发起：留日志
+        else out.add(Bukkit.getConsoleSender());                   // 玩家发起也进后台日志
+        out.addAll(Bukkit.getOnlinePlayers());
         return out;
     }
 
@@ -139,10 +160,8 @@ public final class TerraProgress {
             b = Bukkit.createBossBar("MiaEco", BarColor.GREEN, BarStyle.SEGMENTED_10);
             bar = b;
         }
-        // 玩家可能中途进入世界：每次刷新时补挂
-        if (sender instanceof Player p && p.isOnline()) b.addPlayer(p);
-        World w = Bukkit.getWorld(worldName);
-        if (w != null) for (Player p : w.getPlayers()) b.addPlayer(p);
+        // 全服可见；玩家中途进服由每次刷新（≤250ms）自动补挂
+        for (Player p : Bukkit.getOnlinePlayers()) b.addPlayer(p);
         return b;
     }
 

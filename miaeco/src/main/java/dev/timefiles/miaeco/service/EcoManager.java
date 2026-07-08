@@ -38,6 +38,7 @@ public final class EcoManager {
     private dev.timefiles.miaeco.world.EcoWorlds ecoWorlds;
     private dev.timefiles.miaeco.terrain.TerraService terraService;
     private dev.timefiles.miaeco.terrain.GeoService geoService;
+    private dev.timefiles.miaeco.hub.HubService hubService;
 
     private final Map<String, Forest> forests = new LinkedHashMap<>();
 
@@ -119,12 +120,18 @@ public final class EcoManager {
                 cfg.getDouble(tb + "rivers", 1.0)));
         this.geoService = new dev.timefiles.miaeco.terrain.GeoService(plugin, workerPool);
 
+        // ---- 大厅：世界沙盘可视化 + 新世界草稿流（/miaeco hub）----
+        this.hubService = new dev.timefiles.miaeco.hub.HubService(plugin, this);
+        hubService.init();
+        terraService.setPatchListener(hubService::onPatchAdded);
+
         plugin.getLogger().info("MiaEco 引擎就绪：" + workerThreads + " 工作线程，已加载 "
                 + forests.size() + " 片森林、" + ecoWorlds.all().size() + " 个生态世界。");
     }
 
     public void shutdown() {
         if (terraService != null) terraService.shutdown();
+        if (hubService != null) hubService.save();
         if (ecoWorlds != null) ecoWorlds.save();
         if (store != null) store.saveAll(forests);
         if (workerPool != null) {
@@ -194,4 +201,5 @@ public final class EcoManager {
     public dev.timefiles.miaeco.world.EcoWorlds worlds() { return ecoWorlds; }
     public dev.timefiles.miaeco.terrain.TerraService terra() { return terraService; }
     public dev.timefiles.miaeco.terrain.GeoService geo() { return geoService; }
+    public dev.timefiles.miaeco.hub.HubService hub() { return hubService; }
 }
