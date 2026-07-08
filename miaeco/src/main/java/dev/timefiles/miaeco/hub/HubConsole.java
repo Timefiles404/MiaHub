@@ -130,7 +130,10 @@ public final class HubConsole implements Listener {
                     ChatColor.GREEN + "▶ 点击打开草稿操作台"));
         }
         m.inv.setItem(45, item(Material.COMPARATOR, ChatColor.GOLD + "生成配置",
-                ChatColor.GRAY + "河流密度 / 洞穴 / 崖蚀 / 地貌开关（热生效）"));
+                ChatColor.GRAY + "河流/洞穴/崖蚀/地貌/模板树/生态/速率…（热生效）"));
+        m.inv.setItem(46, item(Material.SNOWBALL, ChatColor.GREEN + "＋ 新建草稿",
+                ChatColor.GRAY + "自动起名开一块草稿沙盘（默认 1024² @30m/格",
+                ChatColor.GRAY + "sea=0 yscale=2 variety=2），参数在操作台里随时改"));
         m.inv.setItem(49, item(Material.BOOK, ChatColor.AQUA + "说明",
                 ChatColor.GRAY + "点世界条目进入管理菜单；沙盘旁的",
                 ChatColor.GRAY + "操作台可直接调草稿参数与抽卡送产。"));
@@ -184,6 +187,18 @@ public final class HubConsole implements Listener {
             openConfig(p);
             return;
         }
+        if (slot == 46) {
+            String name = nextDraftName();
+            String err = hub.newDraft(p, name, 1024, 1024, 30, 0, false, 2.0, 2.0, false, 20);
+            if (err != null) {
+                p.sendMessage(P + ChatColor.RED + err);
+                return;
+            }
+            p.sendMessage(P + ChatColor.GREEN + "草稿 " + name + " 已开盘"
+                    + ChatColor.GRAY + "（参数可在沙盘旁操作台调，抽卡开始造图）。");
+            openDraft(p, name);
+            return;
+        }
         ItemStack it = m.inv.getItem(slot);
         if (it == null || !it.hasItemMeta() || !it.getItemMeta().hasDisplayName()) return;
         String name = ChatColor.stripColor(it.getItemMeta().getDisplayName())
@@ -229,7 +244,8 @@ public final class HubConsole implements Listener {
                 ChatColor.GRAY + "水系预览的俯视图拼接大小"));
         if (map) {
             m.inv.setItem(15, confirmable(m, 15, Material.TNT, ChatColor.GOLD + "重生成 regen",
-                    ChatColor.GRAY + "删档并用新种子按同参数重跑"));
+                    ChatColor.GRAY + "左键=换新种子 / 右键=保留原种子",
+                    ChatColor.GRAY + "删档按同参数重跑"));
         }
         m.inv.setItem(16, confirmable(m, 16, Material.BARRIER, ChatColor.RED + "删除世界",
                 ChatColor.GRAY + "连世界文件夹一起删除",
@@ -280,7 +296,7 @@ public final class HubConsole implements Listener {
                     return;
                 }
                 p.closeInventory();
-                regenWorld(p, name, e);
+                regenWorld(p, name, e, right);
             }
             case 16 -> {
                 if (!armed(m, 16)) {
@@ -295,20 +311,22 @@ public final class HubConsole implements Listener {
         }
     }
 
-    private void regenWorld(Player p, String name, EcoWorlds.Entry e) {
+    private void regenWorld(Player p, String name, EcoWorlds.Entry e, boolean keepSeed) {
         if (eco.terra().busy()) {
             p.sendMessage(P + ChatColor.RED + "有地形任务在跑，稍后再试。");
             return;
         }
         final var map = e.map;
+        final Long seed = keepSeed ? e.seed : null;
         purgeForestsOf(name);
-        p.sendMessage(P + ChatColor.GRAY + "重生成 " + name + "：删除旧世界…");
+        p.sendMessage(P + ChatColor.GRAY + "重生成 " + name + "："
+                + (keepSeed ? "保留种子 " + e.seed : "换新种子") + "，删除旧世界…");
         String err = eco.worlds().remove(name, ok -> {
             if (!ok) {
                 p.sendMessage(P + ChatColor.RED + "旧世界文件删除不完整（可能被占用），请重启后手动清理再建。");
                 return;
             }
-            String e2 = eco.worlds().create(name, null, map);
+            String e2 = eco.worlds().create(name, seed, map);
             if (e2 != null) {
                 p.sendMessage(P + ChatColor.RED + e2);
                 return;
@@ -341,6 +359,16 @@ public final class HubConsole implements Listener {
         boolean removed = eco.forests().values()
                 .removeIf(f -> f.region().world().equals(worldName));
         if (removed) eco.store().saveAll(eco.forests());
+    }
+
+    /** 自动草稿名：draft1、draft2…（避开现有草稿与世界）。 */
+    private String nextDraftName() {
+        for (int i = 1; ; i++) {
+            String n = "draft" + i;
+            if (hub.draft(n) == null && !eco.worlds().isManaged(n) && Bukkit.getWorld(n) == null) {
+                return n;
+            }
+        }
     }
 
     // ============================ 草稿菜单 ============================
@@ -502,6 +530,8 @@ public final class HubConsole implements Listener {
     private void drawConfig(Menu m) {
         var cfg = plugin.getConfig();
         m.inv.clear();
+        m.inv.setItem(9, toggleItem(Material.WHEAT, "自动生态（种树+氛围）",
+                cfg.getBoolean("terrain.auto-eco", true)));
         double rivers = cfg.getDouble("terrain.rivers", 1.0);
         m.inv.setItem(10, item(Material.HEART_OF_THE_SEA, ChatColor.AQUA + "河流密度 ×" + HubService.fmt1(rivers),
                 ChatColor.GRAY + "点击循环 0 → 0.5 → 1.0 → 1.5 → 2.0",
@@ -514,18 +544,39 @@ public final class HubConsole implements Listener {
                 cfg.getBoolean("terrain.geo-features", true)));
         m.inv.setItem(14, toggleItem(Material.OAK_SAPLING, "模板树（画布默认）",
                 cfg.getBoolean("terrain.template-trees", false)));
-        m.inv.setItem(15, item(Material.BOOK, ChatColor.AQUA + "只读参数",
+        m.inv.setItem(16, item(Material.HOPPER, ChatColor.AQUA + "铺设速率 "
+                        + cfg.getInt("terrain.blocks-per-tick", 20000) + " 块/tick",
+                ChatColor.GRAY + "点击循环 10k → 20k → 40k → 80k",
+                ChatColor.GRAY + "立即生效（含进行中的任务）；太高可能掉 TPS"));
+        m.inv.setItem(17, item(Material.WHITE_CARPET, ChatColor.AQUA + "选区羽化 "
+                        + cfg.getInt("terrain.feather", 12) + " 格",
+                ChatColor.GRAY + "点击循环 8 → 12 → 16 → 24",
+                ChatColor.GRAY + "画布世界选区边缘向平原收拢的宽度"));
+        m.inv.setItem(18, item(Material.LADDER, ChatColor.AQUA + "垂直比例 "
+                        + cfg.getInt("terrain.vertical-meters-per-block", 40) + " m/格",
+                ChatColor.GRAY + "点击循环 40 → 30 → 25 → 20（越小山越高）",
+                ChatColor.RED + "全局基准：会影响所有后续任务——",
+                ChatColor.RED + "已有世界要续跑/regen 请保持创建时的值！"));
+        m.inv.setItem(19, item(Material.CARTOGRAPHY_TABLE, ChatColor.AQUA + "地图尺寸上限 "
+                        + cfg.getInt("terrain.map-max-size", 10240) + "²",
+                ChatColor.GRAY + "点击循环 5120 → 10240 → 20480",
+                ChatColor.GRAY + "world create / hub new 的 size 上限"));
+        m.inv.setItem(15, item(Material.BOOK, ChatColor.AQUA + "只读参数（启动期定死）",
                 ChatColor.GRAY + "推理设备 device=" + cfg.getString("terrain.device", "cpu"),
-                ChatColor.GRAY + "垂直比例 " + cfg.getInt("terrain.vertical-meters-per-block", 40) + "m/格",
-                ChatColor.GRAY + "地图上限 " + cfg.getInt("terrain.map-max-size", 10240) + "²",
-                ChatColor.GRAY + "铺设速率 " + cfg.getInt("terrain.blocks-per-tick", 20000) + " 块/tick",
-                ChatColor.DARK_GRAY + "改这些请编辑 config.yml"));
+                ChatColor.GRAY + "原生比例 scale=" + cfg.getInt("terrain.scale", 2),
+                ChatColor.GRAY + "推理线程 " + cfg.getInt("terrain.inference-threads", 0),
+                ChatColor.DARK_GRAY + "改这些请编辑 config.yml 并重启"));
         m.inv.setItem(22, item(Material.OAK_DOOR, ChatColor.GRAY + "返回总览"));
     }
 
     private void clickConfig(Player p, Menu m, int slot) {
         var cfg = plugin.getConfig();
         switch (slot) {
+            case 9 -> {
+                cfg.set("terrain.auto-eco", !cfg.getBoolean("terrain.auto-eco", true));
+                eco.reloadTerraSettings();
+                drawConfig(m);
+            }
             case 10 -> {
                 double cur = cfg.getDouble("terrain.rivers", 1.0);
                 double next = cur >= 2.0 ? 0 : cur >= 1.5 ? 2.0 : cur >= 1.0 ? 1.5 : cur >= 0.5 ? 1.0 : 0.5;
@@ -550,6 +601,32 @@ public final class HubConsole implements Listener {
             }
             case 14 -> {
                 cfg.set("terrain.template-trees", !cfg.getBoolean("terrain.template-trees", false));
+                eco.reloadTerraSettings();
+                drawConfig(m);
+            }
+            case 16 -> {
+                int cur = cfg.getInt("terrain.blocks-per-tick", 20000);
+                cfg.set("terrain.blocks-per-tick",
+                        cur >= 80000 ? 10000 : cur >= 40000 ? 80000 : cur >= 20000 ? 40000 : 20000);
+                eco.reloadTerraSettings();
+                drawConfig(m);
+            }
+            case 17 -> {
+                int cur = cfg.getInt("terrain.feather", 12);
+                cfg.set("terrain.feather", cur >= 24 ? 8 : cur >= 16 ? 24 : cur >= 12 ? 16 : 12);
+                eco.reloadTerraSettings();
+                drawConfig(m);
+            }
+            case 18 -> {
+                int cur = cfg.getInt("terrain.vertical-meters-per-block", 40);
+                cfg.set("terrain.vertical-meters-per-block",
+                        cur <= 20 ? 40 : cur <= 25 ? 20 : cur <= 30 ? 25 : 30);
+                eco.reloadTerraSettings();
+                drawConfig(m);
+            }
+            case 19 -> {
+                int cur = cfg.getInt("terrain.map-max-size", 10240);
+                cfg.set("terrain.map-max-size", cur >= 20480 ? 5120 : cur >= 10240 ? 20480 : 10240);
                 eco.reloadTerraSettings();
                 drawConfig(m);
             }

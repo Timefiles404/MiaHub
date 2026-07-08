@@ -60,11 +60,12 @@ public final class RiverMapTool {
             double gj = wx * npb / 256.0 - fcj0 - 0.5;
             return mapper.yOfF(boost(TerraService.bilinear(coarse, CH, CW, gi, gj)));
         };
-        // 贴地精修场（与 TerraService.planRivers 同构）：latent lowfreq 沿河廊道懒采样
+        // 贴地精修场（与 TerraService.planRivers 同构）：latent lowfreq——
+        // 0.29.0 起同时也是定线场（Priority-Flood/D8/湖泊看见真实丘谷）
         var lf = new LocalTerrainProvider.LowfreqSampler(npb);
         RiverPlanner.HeightField mid = (wx, wz) -> mapper.yOfF(boost(lf.metersAt(wx, wz)));
         RiverPlanner.RiverPlan plan = RiverPlanner.plan(
-                hf, mid, sea, x1, z1, size, size, seed ^ 0x51E77AL, 1.0);
+                mid, mid, sea, x1, z1, size, size, seed ^ 0x51E77AL, 1.0);
         int mains = 0, oxbows = 0, springs = 0;
         for (RiverPlanner.River r : plan.rivers()) {
             if (r.kind() == RiverPlanner.R_MAIN) {

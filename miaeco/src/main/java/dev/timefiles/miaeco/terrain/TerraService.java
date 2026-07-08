@@ -55,8 +55,11 @@ public final class TerraService implements Listener {
 
     public Settings settings() { return st; }
 
-    /** 热更新配置快照（hub 控制台的开关写回 config 后调用；对下一个任务生效）。 */
-    public void updateSettings(Settings s) { this.st = s; }
+    /** 热更新配置快照（hub 控制台的开关写回 config 后调用；铺设速率立即生效，其余下个任务生效）。 */
+    public void updateSettings(Settings s) {
+        this.st = s;
+        terraEditor.blocksPerTick(s.blocksPerTick());
+    }
 
     private final Plugin plugin;
     private final EcoManager eco;
@@ -723,12 +726,25 @@ public final class TerraService implements Listener {
                 return mapper.yOfF(m);
             };
             // 贴地精修场（0.27.0）：latent lowfreq = 精细地形的低频骨架（~8 原生px/样本），
-            // 走同一映射链；沿河廊道懒采样，算过的窗口随后 decoder 阶段直接复用。
-            // 采样不可用时退回粗规划水位（河仍生成，只是不贴地）。
+            // 走同一映射链；算过的窗口随后 decoder 阶段直接复用。
+            // 0.29.0 起它也是<b>定线场</b>：Priority-Flood/D8/湖泊直接看见 50~100 格
+            // 波长的丘谷——大河天生绕丘走谷，湖位贴真实洼地，不再靠凿峡/壅湖兜底。
+            // 采样不可用时退回 coarse 定线 + 粗规划水位（河仍生成）。
             RiverPlanner.HeightField mid = null;
             try {
                 var lf = new LocalTerrainProvider.LowfreqSampler(npb);
                 lf.metersAt(mapX1 + sX / 2.0, mapZ1 + sZ / 2.0);   // 预检
+                // 预热：低频场分块整图取回（大图=base 阶段整图推理，给出可见进度）
+                int stride = 128;
+                int rows = sZ / stride + 1;
+                int r = 0;
+                for (int wz = mapZ1; wz <= mapZ1 + sZ; wz += stride, r++) {
+                    for (int wx = mapX1; wx <= mapX1 + sX; wx += stride) {
+                        lf.metersAt(wx + 0.5, wz + 0.5);
+                    }
+                    progress.update(Math.min(0.95, r / (double) rows), "低频场 " + r + "/" + rows + " 行");
+                    checkCancel();
+                }
                 mid = (wx, wz) -> {
                     float m = boost(lf.metersAt(wx, wz));
                     if (sketch != null) {
@@ -743,10 +759,10 @@ public final class TerraService implements Listener {
                 };
             } catch (Exception e) {
                 plugin.getLogger().log(Level.WARNING, "lowfreq mid field", e);
-                progress.chat("贴地采样不可用，本图退回粗规划水位: " + rootMsg(e));
+                progress.chat("贴地采样不可用，本图退回 coarse 定线: " + rootMsg(e));
             }
-            return RiverPlanner.plan(hf, mid, mapper.sea(), mapX1, mapZ1, sX, sZ,
-                    entry.seed ^ 0x51E77AL, st.riverDensity());
+            return RiverPlanner.plan(mid != null ? mid : hf, mid, mapper.sea(), mapX1, mapZ1,
+                    sX, sZ, entry.seed ^ 0x51E77AL, st.riverDensity());
         }
 
         /** 取地形数据：画布走 provider 标准路径（scale=2 上采样+噪声）；地图按比例尺取原生/池化。 */

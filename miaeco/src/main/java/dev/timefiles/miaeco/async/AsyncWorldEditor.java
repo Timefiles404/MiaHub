@@ -31,11 +31,16 @@ import java.util.function.Consumer;
 public final class AsyncWorldEditor {
 
     private final Plugin plugin;
-    private final int blocksPerTick;
+    private volatile int blocksPerTick;
 
     public AsyncWorldEditor(Plugin plugin, int blocksPerTick) {
         this.plugin = plugin;
         this.blocksPerTick = Math.max(1, blocksPerTick);
+    }
+
+    /** 热更铺设速率（hub 控制台；进行中的批次下个 tick 即生效）。 */
+    public void blocksPerTick(int v) {
+        this.blocksPerTick = Math.max(1, v);
     }
 
     /** 一条可回滚记录：位置 + 原方块的 BlockData 序列化串。 */

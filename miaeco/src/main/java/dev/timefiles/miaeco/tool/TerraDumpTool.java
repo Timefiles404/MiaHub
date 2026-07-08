@@ -52,6 +52,7 @@ public final class TerraDumpTool {
         fail |= mapModeRun(outDir);
         fail |= tileSeamRun();
         fail |= varietyRun();
+        fail |= stampRun();
         fail |= geoCaveRun();
         fail |= splitterRun();
         fail |= simpleEcoRun();
@@ -62,6 +63,33 @@ public final class TerraDumpTool {
         fail |= canopyRun();
         System.out.println(fail ? "TERRA CHECK: FAIL" : "TERRA CHECK: PASS");
         if (fail) System.exit(1);
+    }
+
+    /** 树库全量入库（0.29.0）：969 棵解析成功、随机盖印（含镜像）产出与体素数一致。 */
+    private static boolean stampRun() {
+        var ids = dev.timefiles.miaeco.growth.StampLibrary.ids();
+        boolean fail = false;
+        if (ids.size() < 900) {
+            System.out.println("STAMP COUNT FAIL: " + ids.size() + "（应 ≥900，全量库）");
+            fail = true;
+        }
+        var rng = new java.util.Random(7);
+        long cells = 0;
+        for (int k = 0; k < 24 && !ids.isEmpty(); k++) {
+            var pf = dev.timefiles.miaeco.growth.StampLibrary.get(
+                    ids.get(rng.nextInt(ids.size())));
+            var edits = dev.timefiles.miaeco.growth.StampLibrary.place(
+                    pf, 0, 64, 0, rng.nextInt(4), rng.nextBoolean());
+            if (edits.size() != pf.cells().size()) {
+                System.out.println("STAMP PLACE FAIL " + pf.id() + ": " + edits.size()
+                        + " != " + pf.cells().size());
+                fail = true;
+            }
+            cells += edits.size();
+        }
+        System.out.println("stamps: " + ids.size() + " 棵, 抽检 24 棵盖印(旋转×镜像) "
+                + cells + " 体素 OK");
+        return fail;
     }
 
     /**
@@ -106,12 +134,13 @@ public final class TerraDumpTool {
             return mapper.yOfF((float) (base + hills + bowl));
         };
         // 生产失配模拟拆两级：低频 ±5@74（latent lowfreq 看得见 → 贴地精修应吸收）
-        // + 高频 ±4@23（decoder 细节残差，贴地场看不见 → 两态岸羽化兜底）
+        // + 高频 ±4@23（decoder 细节残差，贴地场看不见 → 两态岸羽化兜底）。
+        // 0.29.0 起 mid 同时也是定线场（与生产同构：plan(mid, mid, …)）
         dev.timefiles.miaeco.terrain.RiverPlanner.HeightField mid = (wx, wz) ->
                 hf.yAt(wx, wz) + (float) ((dev.timefiles.miaeco.terrain.PlanOps.patch(
                         0xD1F7L, (int) Math.floor(wx), (int) Math.floor(wz), 74.0) - 0.5) * 10);
         var plan = dev.timefiles.miaeco.terrain.RiverPlanner.plan(
-                hf, mid, sea, -SZ / 2, -SZ / 2, SZ, SZ, SEED, 1.3);
+                mid, mid, sea, -SZ / 2, -SZ / 2, SZ, SZ, SEED, 1.3);
         boolean fail = false;
         if (plan.rivers().isEmpty()) {
             System.out.println("RIVER EMPTY");

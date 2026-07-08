@@ -915,6 +915,7 @@ public final class RiverPlanner {
                 eWl[i] = wl;
                 if (eFlow != null) eFlow[i] = flowByte(bestFlow[i]);
             } else {
+                if (eRiver[i]) continue;   // 已是水体（湖/他河）：岸带羽化不许改水下地形
                 int wlB = Math.max(Math.max(wl, bankWl[i]), lakeGuard[i]);
                 int orig = ey[i];
                 if (orig >= wlB) {

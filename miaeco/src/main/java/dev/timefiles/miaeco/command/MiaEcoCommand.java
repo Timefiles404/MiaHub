@@ -521,7 +521,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         msg(s, "/miaeco test <树种> plant [giant]", "在脚下种一棵测试树（giant=巨木变异）");
         msg(s, "/miaeco test <树种> advance <月>", "推进这棵测试树的形态");
         msg(s, "/miaeco test <树种> clear", "移除测试树");
-        msg(s, "/miaeco test stamp <id|random|族名>", "盖印一棵树库预制树（147 棵建筑师树）");
+        msg(s, "/miaeco test stamp <id|random|族名>", "盖印一棵树库预制树（969 棵建筑师树）");
         msg(s, "/miaeco pos1 | pos2", "把脚下方块设为选区角点");
         msg(s, "/miaeco forest create <名称>", "用当前选区新建森林（只取 XZ，自动找地表）");
         msg(s, "/miaeco forest list | info <名称> | remove <名称>", "森林管理");

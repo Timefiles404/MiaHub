@@ -24,9 +24,10 @@ import java.util.Set;
 import java.util.zip.GZIPInputStream;
 
 /**
- * 树库预制树：从 treepark.schematic 采集的 147 棵建筑师设计树
- * （jar 内资源 {@code treepark/stamps.json.gz}），可整棵盖印到世界——
- * 作为"地标树"提供程序化生成达不到的手工级形态。
+ * 树库预制树：从 treepark.schematic 采集的 969 棵建筑师设计树（0.29.0 全量入库，
+ * 此前为 147 棵精选；jar 内资源 {@code treepark/stamps.json.gz}），可整棵盖印到世界——
+ * 作为"地标树"与模板树模式的形态库，提供程序化生成达不到的手工级形态。
+ * 惰性加载：首次访问解析一次（~69 万体素，数十 MB 堆，仅在用到时占用）。
  *
  * <p>token 语法与离线转换管线一致（wood:/log:/leaves:/planks:/fence:/slab:/
  * block:/pane:/plant:/dplant:/snow:/vine:/bone:/hay:/stair:/button:/axis:），
