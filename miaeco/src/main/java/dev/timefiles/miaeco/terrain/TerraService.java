@@ -235,6 +235,7 @@ public final class TerraService implements Listener {
         final int sketchNZ;
         volatile String stageName = "准备";
         volatile RiverPlanner.RiverPlan rivers = RiverPlanner.RiverPlan.EMPTY;  // 全图水系（规划一次）
+        final int[] riverFit = new int[3];   // 贴地质量累计（深切>8 / 壅水>4 / 河道列；含裙边重复，仅诊断）
 
         Job(CommandSender sender, String world, EcoWorlds.Entry entry, Region sel, boolean withEco) {
             this.sender = sender;
@@ -414,7 +415,7 @@ public final class TerraService implements Listener {
             // 全图水文规划：coarse 粗扫（秒级）→ 填洼/流向/汇水 → 树状河网+湖泊+地貌，
             // 定线一次、逐片栅格化（断点续跑重算一致，确定性）
             if (st.riverDensity() > 0 && Math.min(sX, sZ) >= 320) {
-                stage("水文规划（填洼/汇水/河网）");
+                stage("水文规划（填洼/汇水/河网/贴地精修）");
                 try {
                     rivers = planRivers(mapX1, mapZ1, sX, sZ);
                     int main = 0, oxbow = 0;
@@ -484,9 +485,13 @@ public final class TerraService implements Listener {
                 }
             }
             long mins = (System.currentTimeMillis() - t0) / 60_000L;
+            String fit = riverFit[2] > 0
+                    ? String.format("，河道贴地：残余深切 %.1f‰/壅水 %.1f‰",
+                    1000.0 * riverFit[0] / riverFit[2], 1000.0 * riverFit[1] / riverFit[2])
+                    : "";
             progress.done("地图世界生成完成 @ " + world + "（" + sX + "×" + sZ
                     + (total > 1 ? "，" + total + " 片" + (skipped > 0 ? "（续跑跳过 " + skipped + "）" : "")
-                    + "，" + mins + " 分钟" : "") + "）");
+                    + "，" + mins + " 分钟" : "") + fit + "）");
         }
 
         /** 画布世界：单块选区生成（0.18 语义不变）。 */
@@ -614,7 +619,7 @@ public final class TerraService implements Listener {
             java.util.Arrays.fill(eWl, sea);
             if (!rivers.isEmpty()) {
                 RiverPlanner.rasterize(rivers, ey, eWater, eRiver, eWl, eShoal, eLand,
-                        eFlow, EW, EH, x1 - apron, z1 - apron);
+                        eFlow, EW, EH, x1 - apron, z1 - apron, riverFit);
                 for (int i = 0; i < EW * EH; i++) {
                     if (eRiver[i]) {
                         eBio[i] = EcoBiomes.snowySurface(eBio[i]) || eBio[i] == 16 || eBio[i] == 116
@@ -713,7 +718,30 @@ public final class TerraService implements Listener {
                 }
                 return mapper.yOfF(m);
             };
-            return RiverPlanner.plan(hf, mapper.sea(), mapX1, mapZ1, sX, sZ,
+            // 贴地精修场（0.27.0）：latent lowfreq = 精细地形的低频骨架（~8 原生px/样本），
+            // 走同一映射链；沿河廊道懒采样，算过的窗口随后 decoder 阶段直接复用。
+            // 采样不可用时退回粗规划水位（河仍生成，只是不贴地）。
+            RiverPlanner.HeightField mid = null;
+            try {
+                var lf = new LocalTerrainProvider.LowfreqSampler(npb);
+                lf.metersAt(mapX1 + sX / 2.0, mapZ1 + sZ / 2.0);   // 预检
+                mid = (wx, wz) -> {
+                    float m = boost(lf.metersAt(wx, wz));
+                    if (sketch != null) {
+                        m += sketchAt(sketch, sketchN, sketchNZ, mapX1, mapZ1, sX, sZ, wx, wz);
+                    }
+                    if (!openEdge) {
+                        int d = (int) Math.min(Math.min(wx - mapX1, wz - mapZ1),
+                                Math.min(mapX1 + sX - 1 - wx, mapZ1 + sZ - 1 - wz));
+                        m = edgeFalloff(m, d, band);
+                    }
+                    return mapper.yOfF(m);
+                };
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.WARNING, "lowfreq mid field", e);
+                progress.chat("贴地采样不可用，本图退回粗规划水位: " + rootMsg(e));
+            }
+            return RiverPlanner.plan(hf, mid, mapper.sea(), mapX1, mapZ1, sX, sZ,
                     entry.seed ^ 0x51E77AL, st.riverDensity());
         }
 

@@ -58,7 +58,11 @@ public final class RiverMapTool {
             double gj = wx * npb / 256.0 - fcj0 - 0.5;
             return mapper.yOfF(boost(TerraService.bilinear(coarse, CH, CW, gi, gj)));
         };
-        RiverPlanner.RiverPlan plan = RiverPlanner.plan(hf, sea, x1, z1, size, seed ^ 0x51E77AL, 1.0);
+        // 贴地精修场（与 TerraService.planRivers 同构）：latent lowfreq 沿河廊道懒采样
+        var lf = new LocalTerrainProvider.LowfreqSampler(npb);
+        RiverPlanner.HeightField mid = (wx, wz) -> mapper.yOfF(boost(lf.metersAt(wx, wz)));
+        RiverPlanner.RiverPlan plan = RiverPlanner.plan(
+                hf, mid, sea, x1, z1, size, size, seed ^ 0x51E77AL, 1.0);
         int mains = 0, oxbows = 0, springs = 0;
         for (RiverPlanner.River r : plan.rivers()) {
             if (r.kind() == RiverPlanner.R_MAIN) {
@@ -68,7 +72,7 @@ public final class RiverMapTool {
                 oxbows++;
             }
         }
-        System.out.printf("coarse %.1fs, 水系：干支流 %d（泉眼 %d）湖 %d 三角洲 %d 冲积扇 %d 牛轭湖 %d，共 %d 节点%n",
+        System.out.printf("规划+贴地采样 %.1fs, 水系：干支流 %d（泉眼 %d）湖 %d 三角洲 %d 冲积扇 %d 牛轭湖 %d，共 %d 节点%n",
                 (System.currentTimeMillis() - t0) / 1000.0, mains, springs, plan.lakes().size(),
                 plan.deltas().size(), plan.fans().size(), oxbows, plan.nodeCount());
 
@@ -94,8 +98,14 @@ public final class RiverMapTool {
         int[] eWl = new int[N];
         java.util.Arrays.fill(eWl, sea);
         byte[] eFlow = new byte[N];
-        RiverPlanner.rasterize(plan, ey, eWater, eRiver, eWl, eShoal, eLand, eFlow, size, size, x1, z1);
+        int[] eyB = ey.clone();
+        int[] fit = new int[3];
+        RiverPlanner.rasterize(plan, ey, eWater, eRiver, eWl, eShoal, eLand, eFlow,
+                size, size, x1, z1, fit);
         PlanOps.flushShore(ey, eWater, eRiver, eShoal, size, size, sea);
+        System.out.printf("贴地：残余深切>8 %d/%d(%.2f%%)，壅水>4 %d(%.2f%%)%n",
+                fit[0], fit[2], fit[2] > 0 ? 100.0 * fit[0] / fit[2] : 0,
+                fit[1], fit[2] > 0 ? 100.0 * fit[1] / fit[2] : 0);
 
         // ---- 渲染：高程分层设色 × 山体阴影 + 水体 ----
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
@@ -116,6 +126,9 @@ public final class RiverMapTool {
                 if (eRiver[i]) {
                     int depth = Math.max(1, eWl[i] - y);
                     rgb = lerp(0x59D6F2, 0x1E7ECB, Math.min(1, (depth - 1) / 4.0));
+                    int mis = eyB[i] - eWl[i];
+                    if (mis > 8) rgb = 0xC03038;                 // 贴地残余：深切劈山热点
+                    else if (mis < -4) rgb = 0xC838C8;           // 贴地残余：壅水/漫滩热点
                 } else if (eWater[i]) {
                     int depth = sea - y;
                     rgb = lerp(0x4F86C8, 0x11274E, Math.min(1, depth / 60.0));

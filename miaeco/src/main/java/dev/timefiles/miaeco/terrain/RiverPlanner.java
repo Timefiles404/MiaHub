@@ -22,7 +22,11 @@ import java.util.List;
  *       河的终点只有三种：入海、入湖、出图边；</li>
  *   <li><b>河流地貌</b>：坡折处<b>冲积扇</b>（锥面沉积+辫状干沟）、河口<b>三角洲</b>
  *       （汊流+泥滩岛）、低地蜿蜒段<b>牛轭湖</b>、跌差处<b>跌水潭</b>、宽缓段<b>河心洲</b>、
- *       深切段<b>峡谷</b>加深、宽河两岸<b>河畔湿地</b>候选（群系重标记成沼泽）。</li>
+ *       深切段<b>峡谷</b>加深、宽河两岸<b>河畔湿地</b>候选（群系重标记成沼泽）；</li>
+ *   <li><b>贴地精修</b>（0.27.0）：粗场只负责定线，节点随后在精细地形的<b>中频场</b>
+ *       （latent lowfreq，即最终地表的低频骨架）上二次拟合——横向向谷底微移、
+ *       纵剖面按"沿线地面−嵌深"做填洼+限深切的单调化（小脊凿峡口、大脊壅回水潭），
+ *       水位对实际地形的偏离两侧有界，铺设时不再出现劈山深槽或高架水道。</li>
  * </ol>
  *
  * 纯函数（seed + 高度场 → 确定输出），断点续跑重算一致；栅格化按世界坐标逐列，跨片无缝。
@@ -77,15 +81,24 @@ public final class RiverPlanner {
 
     // ============================ 规划 ============================
 
-    /** 方形便捷入口（旧调用兼容）。 */
+    /** 方形便捷入口（旧调用兼容，无贴地精修）。 */
     public static RiverPlan plan(HeightField hf, int sea, int x1, int z1, int size,
                                  long seed, double density) {
-        return plan(hf, sea, x1, z1, size, size, seed, density);
+        return plan(hf, null, sea, x1, z1, size, size, seed, density);
     }
 
     /** 0.26.0 起支持非正方形地图：规划网格 G(X 向)×GZ(Z 向)。 */
     public static RiverPlan plan(HeightField hf, int sea, int x1, int z1, int sizeX, int sizeZ,
                                  long seed, double density) {
+        return plan(hf, null, sea, x1, z1, sizeX, sizeZ, seed, density);
+    }
+
+    /**
+     * 贴地精修入口（0.27.0）：{@code mid} 为精细地形的中频场（latent lowfreq 同一映射链；
+     * null 则跳过精修，水位退回粗规划填面——hub 预览等轻量调用用旧入口即可）。
+     */
+    public static RiverPlan plan(HeightField hf, HeightField mid, int sea, int x1, int z1,
+                                 int sizeX, int sizeZ, long seed, double density) {
         if (density <= 0.01 || Math.min(sizeX, sizeZ) < 320) return RiverPlan.EMPTY;
         final int cell = Math.max(8, Math.min(32, Math.max(sizeX, sizeZ) / 128));
         final int G = Math.max(16, sizeX / cell);
@@ -315,8 +328,29 @@ public final class RiverPlanner {
                 continue;
             }
             // 图边汇与入海口都外延收尾：前者流出图框，后者穿过 coarse/精细海岸线的错位带
-            River r = buildRiver(path, G, cell, x1, z1, fill, accum, lakeId,
-                    lakeRemap, lakes, T, seed, rivers.size(), !ended || toSea);
+            int lastCell = path.get(path.size() - 1);
+            int endLake = Integer.MIN_VALUE;
+            if (lakeId[lastCell] >= 0 && lakeRemap[lakeId[lastCell]] >= 0) {
+                endLake = lakes.get(lakeRemap[lakeId[lastCell]]).level();
+            }
+            // 汇流口锚定父河水位（claim 序保证父河先建成）：支流末端不低于父河该处
+            // 水位——低于则按回水壅高，交汇处不再出现水面错台
+            float parentWl = -1e18f;
+            if (claimed[lastCell] >= 0 && claimed[lastCell] < rivers.size()) {
+                River parent = rivers.get(claimed[lastCell]);
+                double jx = x1 + (lastCell % G + 0.5) * cell;
+                double jz = z1 + (lastCell / G + 0.5) * cell;
+                double bestD = 2.5 * cell;
+                for (Node nd : parent.nodes()) {
+                    double dd = Math.hypot(nd.x() - jx, nd.z() - jz);
+                    if (dd < bestD) {
+                        bestD = dd;
+                        parentWl = nd.wl();
+                    }
+                }
+            }
+            River r = buildRiver(path, G, cell, x1, z1, fill, accum, endLake, seed,
+                    rivers.size(), !ended || toSea, mid, parentWl, sea);
             if (r == null) {
                 unclaim(claimed, path, rivers.size());
                 continue;
@@ -353,12 +387,10 @@ public final class RiverPlanner {
         }
     }
 
-    /** 单元路径 → 平滑蜿蜒的节点折线（宽深=汇水量，水位=填面单调，泉/潭/洲打标）。 */
+    /** 单元路径 → 平滑蜿蜒的节点折线（宽深=汇水量，水位=填面单调→贴地精修，泉/潭/洲打标）。 */
     private static River buildRiver(List<Integer> path, int G, int cell, int x1, int z1,
-                                    double[] fill, float[] accum,
-                                    int[] lakeId, int[] lakeRemap,
-                                    List<Lake> lakes, double T, long seed, int idx,
-                                    boolean extendEnd) {
+                                    double[] fill, float[] accum, int endLake, long seed, int idx,
+                                    boolean extendEnd, HeightField mid, float parentWl, int sea) {
         int n = path.size();
         float[] xs = new float[n], zs = new float[n], hws = new float[n], wls = new float[n];
         for (int i = 0; i < n; i++) {
@@ -369,11 +401,8 @@ public final class RiverPlanner {
             hws[i] = (float) Math.min(6.5, 0.45 + 0.55 * Math.sqrt(accum[c] * (double) cell * cell / WIDTH_AREA));
             wls[i] = (float) fill[c];
         }
-        // 入湖收口：终点水位钳到湖面；出湖源头（头部贴湖）钳到湖面
-        int lastCell = path.get(n - 1);
-        if (lakeId[lastCell] >= 0 && lakeRemap[lakeId[lastCell]] >= 0) {
-            wls[n - 1] = Math.min(wls[n - 1], lakes.get(lakeRemap[lakeId[lastCell]]).level());
-        }
+        // 入湖收口：终点水位钳到湖面
+        if (endLake != Integer.MIN_VALUE) wls[n - 1] = Math.min(wls[n - 1], endLake);
         // Chaikin ×2 平滑（端点保持），属性线性插值
         for (int it = 0; it < 2; it++) {
             int m = xs.length;
@@ -413,6 +442,15 @@ public final class RiverPlanner {
             xs[i] = ox[i] + (-dz / len) * (float) (t * amp);
             zs[i] = oz2[i] + (dx / len) * (float) (t * amp);
         }
+        // ---- 贴地精修（0.27.0）：定线完成后在中频场上二次拟合 ----
+        // 横向：节点向局部谷底微移（绕开粗场看不见的小丘，而不是劈开它）；
+        // 纵向：水位=沿线实测地面−嵌深，自河口向上游填洼+限深切单调化
+        float[] w = wls, g = null;
+        if (mid != null) {
+            lateralSnap(xs, zs, hws, mid);
+            g = channelFloor(xs, zs, hws, mid);
+            w = gradeProfile(g, hws, sea, endLake, parentWl);
+        }
         // 水位取整 + 单调 + 流速物理（0.24.0）：局部坡度 → 流速 s01；
         // 陡段收窄加深（山涧深切下蚀），缓段展宽变浅（平原大河又宽又浅、堆积为主）
         List<Node> nodes = new ArrayList<>(m);
@@ -421,21 +459,26 @@ public final class RiverPlanner {
             int lo = Math.max(0, i - 6), hi = Math.min(m - 1, i + 6);
             double run = 0;
             for (int k = lo; k < hi; k++) run += Math.hypot(xs[k + 1] - xs[k], zs[k + 1] - zs[k]);
-            double slope = Math.max(0, wls[lo] - wls[hi]) / Math.max(6.0, run);
+            double slope = Math.max(0, w[lo] - w[hi]) / Math.max(6.0, run);
             double s01 = slope / (slope + 0.011);              // 半饱和 ~1 格/90 格
-            int wl = Math.min(prevWl, (int) Math.floor(wls[i]));
+            // 壅水潭（贴地后水位高于沿线地面）：静水——流速趋零、展宽、略加深
+            float pond = g == null ? 0 : Math.max(0, w[i] - g[i]);
+            if (pond > 0.6f) s01 = s01 / (1 + 0.9 * pond);
+            int wl = Math.min(prevWl, (int) Math.floor(w[i]));
             prevWl = wl;
             float hw0 = hws[i];
             float hw = (float) Math.max(0.5, Math.min(10, hw0 * (1.55 - 1.05 * s01)));
+            if (pond > 0.6f) hw = (float) Math.min(12, hw * (1 + Math.min(1.5, pond * 0.35)));
             float depth = (float) Math.max(0.9, Math.min(5.2,
                     (0.7 + 0.5 * hw0) * (0.45 + 1.6 * s01)));
+            if (pond > 0.6f) depth = Math.max(depth, Math.min(3.5f, 1 + pond * 0.5f));
             nodes.add(new Node(xs[i], zs[i], wl, hw, depth, (float) s01, K_NORMAL));
         }
         if (nodes.size() < 6) return null;
         // 打标：泉眼（陡坡头部）/ 跌水潭 / 河心洲
         List<Node> tagged = new ArrayList<>(nodes.size());
         int span = Math.min(8, m - 1);
-        double headSlope = (wls[0] - wls[span])
+        double headSlope = (w[0] - w[span])
                 / Math.max(1.0, Math.hypot(xs[span] - xs[0], zs[span] - zs[0]));
         for (int i = 0; i < nodes.size(); i++) {
             Node d = nodes.get(i);
@@ -462,6 +505,93 @@ public final class RiverPlanner {
             }
         }
         return new River(tagged, R_MAIN);
+    }
+
+    /**
+     * 横向贴谷：节点沿垂直方向在中频场上找局部谷底（|偏移| 罚 0.22 格高/格，防无谓漂移），
+     * 沿线窗口平滑防抖，端点固定（源头与汇流口不脱位）。只做 ≤~15 格微调，定线仍归流域分析。
+     */
+    private static void lateralSnap(float[] xs, float[] zs, float[] hws, HeightField mid) {
+        int m = xs.length;
+        if (m < 6) return;
+        float[] ox = xs.clone(), oz = zs.clone();
+        float[] off = new float[m];
+        for (int i = 1; i < m - 1; i++) {
+            float dx = ox[Math.min(m - 1, i + 2)] - ox[Math.max(0, i - 2)];
+            float dz = oz[Math.min(m - 1, i + 2)] - oz[Math.max(0, i - 2)];
+            float len = (float) Math.max(1e-3, Math.hypot(dx, dz));
+            float px = -dz / len, pz = dx / len;
+            double span = Math.min(15, 4 + 1.5 * hws[i]);
+            double best = 0, bestScore = Double.MAX_VALUE;
+            for (double o = -span; o <= span + 1e-6; o += 1.5) {
+                double y = mid.yAt(ox[i] + px * o, oz[i] + pz * o) + Math.abs(o) * 0.22;
+                if (y < bestScore) {
+                    bestScore = y;
+                    best = o;
+                }
+            }
+            off[i] = (float) best;
+        }
+        for (int i = 1; i < m - 1; i++) {
+            float s = 0;
+            int c = 0;
+            for (int k = Math.max(1, i - 2); k <= Math.min(m - 2, i + 2); k++) {
+                s += off[k];
+                c++;
+            }
+            float dx = ox[Math.min(m - 1, i + 2)] - ox[Math.max(0, i - 2)];
+            float dz = oz[Math.min(m - 1, i + 2)] - oz[Math.max(0, i - 2)];
+            float len = (float) Math.max(1e-3, Math.hypot(dx, dz));
+            xs[i] = ox[i] + (-dz / len) * (s / c);
+            zs[i] = oz[i] + (dx / len) * (s / c);
+        }
+    }
+
+    /** 沿线河道足印内的地面（中心 + 两侧 0.7hw 三探针取低，中频场）。 */
+    private static float[] channelFloor(float[] xs, float[] zs, float[] hws, HeightField mid) {
+        int m = xs.length;
+        float[] g = new float[m];
+        for (int i = 0; i < m; i++) {
+            float dx = xs[Math.min(m - 1, i + 1)] - xs[Math.max(0, i - 1)];
+            float dz = zs[Math.min(m - 1, i + 1)] - zs[Math.max(0, i - 1)];
+            float len = (float) Math.max(1e-3, Math.hypot(dx, dz));
+            float px = -dz / len, pz = dx / len;
+            float o = hws[i] * 0.7f;
+            g[i] = Math.min(mid.yAt(xs[i], zs[i]),
+                    Math.min(mid.yAt(xs[i] + px * o, zs[i] + pz * o),
+                            mid.yAt(xs[i] - px * o, zs[i] - pz * o)));
+        }
+        return g;
+    }
+
+    /** 壅水硬上限（格）：回水潭最多高出沿线地面这么多，超出转为对脊的深切。 */
+    static final float POND_MAX = 2.5f;
+
+    /**
+     * 纵剖面贴地（参照 DEM 水文学的 breach/fill 混合与 Procedural Riverscapes 的
+     * profile grading）：目标水位 = 沿线地面 − 嵌深（溪 ~1 格、大河 ~2.5 格），
+     * 自河口向上游做填洼包络（水不倒流），再按"宁挖不垫"分配挡路脊的高差——
+     * 凿穿允许 B（缓地 2.5 → 山地 8，峡口天然出现在高处），壅水硬上限
+     * {@link #POND_MAX}（回水潭贴着地面漫，绝不再垫出高架水道）。
+     */
+    private static float[] gradeProfile(float[] g, float[] hws, int sea, int endLake, float parentWl) {
+        int m = g.length;
+        float[] t = new float[m];
+        for (int i = 0; i < m; i++) t[i] = g[i] - (1.0f + Math.min(1.5f, hws[i] * 0.22f));
+        if (endLake != Integer.MIN_VALUE) t[m - 1] = Math.min(t[m - 1], endLake);
+        if (parentWl > -1e17f) t[m - 1] = Math.max(t[m - 1], parentWl);
+        float[] f = new float[m];
+        f[m - 1] = t[m - 1];
+        for (int i = m - 2; i >= 0; i--) f[i] = Math.max(t[i], f[i + 1]);
+        float[] w = new float[m];
+        float run = Float.MAX_VALUE;
+        for (int i = 0; i < m; i++) {
+            float b = (float) Math.max(2.5, Math.min(8, 2.5 + (g[i] - sea) * 0.035));
+            float cand = Math.max(t[i], Math.min(f[i] - b, t[i] + POND_MAX));
+            run = Math.min(run, cand);
+            w[i] = run;
+        }
+        return w;
     }
 
     private static double dist(Node a, Node b) {
@@ -565,6 +695,16 @@ public final class RiverPlanner {
     public static void rasterize(RiverPlan plan, int[] ey, boolean[] eWater,
                                  boolean[] eRiver, int[] eWl, boolean[] eShoal, byte[] eLand,
                                  byte[] eFlow, int EW, int EH, int ox, int oz) {
+        rasterize(plan, ey, eWater, eRiver, eWl, eShoal, eLand, eFlow, EW, EH, ox, oz, null);
+    }
+
+    /**
+     * @param fitStats 贴地质量出参（可 null，逐片累加）：[0]+=深切>8 的河道列、
+     *                 [1]+=壅水>4 的河道列、[2]+=河道列总数（均按开槽前的地形量）
+     */
+    public static void rasterize(RiverPlan plan, int[] ey, boolean[] eWater,
+                                 boolean[] eRiver, int[] eWl, boolean[] eShoal, byte[] eLand,
+                                 byte[] eFlow, int EW, int EH, int ox, int oz, int[] fitStats) {
         if (plan == null || plan.isEmpty()) return;
 
         // ---- 冲积扇：锥面沉积（填谷不削峰，抬升 ≤5）----
@@ -756,6 +896,11 @@ public final class RiverPlanner {
                     ey[i] = wl;                                   // 河心洲：齐平沙洲
                     eShoal[i] = true;
                     continue;
+                }
+                if (fitStats != null) {
+                    fitStats[2]++;
+                    if (ey[i] - wl > 8) fitStats[0]++;
+                    else if (wl - ey[i] > 4) fitStats[1]++;
                 }
                 boolean canyon = ey[i] - wl > 10;
                 float q = d / hw;

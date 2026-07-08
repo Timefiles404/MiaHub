@@ -154,6 +154,55 @@ public final class LocalTerrainProvider {
     }
 
     /**
+     * Fetch a low-frequency elevation slice (latent ch4, elev_sqrt space) on the inference
+     * thread. Coordinates are latent pixel units (1 unit = latentCompression native pixels).
+     */
+    public static float[] getLatentLowfreq(int li0, int lj0, int li1, int lj1) throws Exception {
+        return submitToInferenceThread(() -> getInstance().pipeline.getLowfreqSlice(li0, lj0, li1, lj1));
+    }
+
+    /**
+     * latent 低频高程的点采样器：64² latent 分块懒取 + 双线性，返回<b>米</b>（elev_sqrt 已平方还原）。
+     * 精细地形 = 本场 + decoder 带通残差，故可作河流"贴地"用的中频地面真值；
+     * 计算过的 latent 窗口进 tileStore 缓存，随后铺设的 decoder 阶段直接复用。
+     * 非线程安全（规划单线程内用）；npb = 原生像素/方块（与调用方的映射链一致）。
+     */
+    public static final class LowfreqSampler {
+        private static final int CS = 64;
+        private final Map<Long, float[]> chunks = new java.util.HashMap<>();
+        private final double lpb;                       // latent px / 方块
+
+        public LowfreqSampler(double npb) {
+            this.lpb = npb / WorldPipelineModelConfig.latentCompression();
+        }
+
+        /** 世界方块坐标 → 高程（米）。首访分块会触发 base 阶段推理（阻塞至就绪）。 */
+        public float metersAt(double wx, double wz) {
+            double li = wz * lpb - 0.5, lj = wx * lpb - 0.5;
+            int i0 = (int) Math.floor(li), j0 = (int) Math.floor(lj);
+            double ti = li - i0, tj = lj - j0;
+            double es = (1 - ti) * ((1 - tj) * at(i0, j0) + tj * at(i0, j0 + 1))
+                    + ti * ((1 - tj) * at(i0 + 1, j0) + tj * at(i0 + 1, j0 + 1));
+            return (float) (Math.signum(es) * es * es);
+        }
+
+        private float at(int li, int lj) {
+            int ci = Math.floorDiv(li, CS), cj = Math.floorDiv(lj, CS);
+            long key = ((long) ci << 32) ^ (cj & 0xFFFFFFFFL);
+            float[] c = chunks.get(key);
+            if (c == null) {
+                try {
+                    c = getLatentLowfreq(ci * CS, cj * CS, ci * CS + CS, cj * CS + CS);
+                } catch (Exception e) {
+                    throw new IllegalStateException("lowfreq slice (" + ci + "," + cj + ")", e);
+                }
+                chunks.put(key, c);
+            }
+            return c[(li - ci * CS) * CS + (lj - cj * CS)];
+        }
+    }
+
+    /**
      * Change the world seed used by the pipeline and clear all caches.
      * Note: this also affects terrain generation for new Minecraft chunks.
      */

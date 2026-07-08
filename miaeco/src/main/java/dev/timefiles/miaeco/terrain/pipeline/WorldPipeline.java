@@ -448,6 +448,26 @@ public final class WorldPipeline implements AutoCloseable {
     }
 
     /**
+     * Low-frequency elevation slice (latent channel 4, denormalized, <b>elev_sqrt</b> space).
+     * Coordinates are latent pixel units (1 unit = {@link #LATENT_COMPRESSION} native pixels).
+     * This is the low-frequency backbone of the final decoded surface: {@code computeElev}
+     * adds only the band-passed decoder residual on top, so it tracks the built terrain to
+     * within the residual's local amplitude — cheap (base model only) mid-res ground truth
+     * for river profile grading. Windows computed here are cached and reused by the decoder.
+     */
+    public float[] getLowfreqSlice(int li0, int lj0, int li1, int lj1) {
+        int H = li1 - li0, W = lj1 - lj0;
+        FloatTensor s = latents.getSlice(new int[]{0, li0, lj0}, new int[]{6, li1, lj1});
+        float[] out = new float[H * W];
+        for (int px = 0; px < H * W; px++) {
+            float w = s.data[5 * H * W + px];
+            float v = (w > 1e-6f) ? s.data[4 * H * W + px] / w : 0f;
+            out[px] = v * LOWFREQ_STD + LOWFREQ_MEAN;
+        }
+        return out;
+    }
+
+    /**
      * Get elevation and climate for a bounding box.
      *
      * @return float[2]: [0] = elev (H*W flat), [1] = climate (5*H*W flat, or null)
