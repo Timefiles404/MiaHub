@@ -478,6 +478,7 @@ public final class TerraService implements Listener {
                     stage(tag + "地形铺设（约 " + human(plan.totalOps) + " 处）");
                     applyStrips(plan, cx1, cz1, W, H);
                     checkCancel();
+                    runBoulders(plan, cx1, cz1, W, H);
                     if (st.geoFeatures()) {
                         runGeo(plan, cx1, cz1, W, H);
                         checkCancel();
@@ -544,6 +545,7 @@ public final class TerraService implements Listener {
                 stage("地形铺设（约 " + human(plan.totalOps) + " 处）");
                 applyStrips(plan, fx1, fz1, W, H);
                 checkCancel();
+                runBoulders(plan, fx1, fz1, W, H);
 
                 worlds.addPatch(world, new EcoWorlds.Patch(fx1, fz1, fx2, fz2));
                 notifyPatch();
@@ -592,6 +594,7 @@ public final class TerraService implements Listener {
             boolean[] eWater = new boolean[EW * EH];
             boolean[] eOcean = new boolean[EW * EH];
             short[] eBio = new short[EW * EH];
+            byte[] eFrac = new byte[EW * EH];
             for (int ez = 0; ez < EH; ez++) {
                 for (int ex = 0; ex < EW; ex++) {
                     int gx = x1 - apron + ex, gz = z1 - apron + ez;
@@ -611,6 +614,8 @@ public final class TerraService implements Listener {
                     int y = mapper.yOf(m);
                     int i = ez * EW + ex;
                     ey[i] = y;
+                    float yf = mapper.yOfF(m);
+                    eFrac[i] = (byte) Math.max(0, Math.min(7, (int) ((yf - Math.floor(yf)) * 8)));
                     eOcean[i] = m < 0;
                     eWater[i] = m < 0 && y < sea;
                     // 平原节奏：大平原按大尺度噪声翻出小林班/疏林/草甸（纯世界坐标函数）
@@ -652,6 +657,10 @@ public final class TerraService implements Listener {
             int[] coast = PlanOps.coastDistance(eWater, eOcean, EW, EH, PlanOps.COAST_BAND);
             PlanOps.coastal(eBio, coast, ey, eSlope, EW, EH, sea,
                     x1 - apron, z1 - apron, entry.seed ^ 0xC057L);
+            // ---- 湿度场（0.31，SimpleHydrology discharge 思路）：河湖按流量播种，
+            // 8 邻 max-衰减两遍传播 → 连续河畔湿带（裙边上算，跨片一致）----
+            byte[] eWet = new byte[EW * EH];
+            wetField(eWet, eWater, eRiver, eFlow, EW, EH);
             // ---- 核心区拷贝 ----
             Plan p = new Plan(W, H);
             java.util.Arrays.fill(p.wlvl, sea);
@@ -670,6 +679,8 @@ public final class TerraService implements Listener {
                     p.rawOcean[i] = eOcean[e];
                     p.biome[i] = eBio[e];
                     p.slope[i] = eSlope[e];
+                    p.wet[i] = eWet[e];
+                    p.frac[i] = eFrac[e];
                     short b = eBio[e];
                     p.beach[i] = b == EcoBiomes.BEACH || b == EcoBiomes.SNOWY_BEACH
                             || b == 92 || b == 93 || b == 94;
@@ -967,6 +978,8 @@ public final class TerraService implements Listener {
                         y = mapper.feather(mapper.yOf(m), dist, F);
                     }
                     p.y[i] = y;
+                    float yf = mapper.yOfF(m);
+                    p.frac[i] = (byte) Math.max(0, Math.min(7, (int) ((yf - Math.floor(yf)) * 8)));
                     p.rawOcean[i] = m < 0;
                     if (y < p.minY) p.minY = y;
                     if (y > p.maxY) p.maxY = y;
@@ -979,6 +992,7 @@ public final class TerraService implements Listener {
                 if (p.water[i]) ocean++;
             }
             p.oceanPct = Math.round(1000.0 * ocean / (W * H)) / 10.0;
+            wetField(p.wet, p.water, p.river, p.flow, W, H);   // 画布：海岸播种的窄湿带
             // 沙滩：陆地低海拔且 3 格内有水 → 重标记为合成滩涂群系（写原版 beach + SimpleEco）
             for (int z = 0; z < H; z++) {
                 for (int x = 0; x < W; x++) {
@@ -1057,12 +1071,15 @@ public final class TerraService implements Listener {
                     boolean canCave = carver != null && st.caves() && !water && !p.beach[i];
                     int caveLo = mapMode ? y - 19 : 12;
                     int caveHi = y - 6;
+                    // 地质层理（0.31）：板块错位每列一次，深部填充按带选石
+                    int strOff = (int) (PlanOps.patch(entry.seed ^ 0x57A7L, wx, wz, 90.0) * 6) * 5;
 
                     if (mapMode) {
                         // 虚空画布：悬浮板块，柱厚 24 格
                         for (int yy = y - 23; yy <= y - skin.length; yy++) {
                             BlockSpec c = caveAt(canCave, wx, yy, wz, caveLo, caveHi);
-                            edits.add(new BlockEdit(wx, yy, wz, c != null ? c : BlockSpec.of(Material.STONE)));
+                            edits.add(new BlockEdit(wx, yy, wz,
+                                    c != null ? c : BlockSpec.of(strataFill(yy + strOff, b))));
                         }
                     } else if (y >= PlainBase.SURFACE) {
                         if (canCave) {
@@ -1074,7 +1091,8 @@ public final class TerraService implements Listener {
                         }
                         for (int yy = PlainBase.SURFACE - 4; yy <= y - skin.length; yy++) {
                             BlockSpec c = caveAt(canCave, wx, yy, wz, caveLo, caveHi);
-                            edits.add(new BlockEdit(wx, yy, wz, c != null ? c : BlockSpec.of(Material.STONE)));
+                            edits.add(new BlockEdit(wx, yy, wz,
+                                    c != null ? c : BlockSpec.of(strataFill(yy + strOff, b))));
                         }
                     } else {
                         if (canCave) {
@@ -1109,8 +1127,11 @@ public final class TerraService implements Listener {
                                 edits.add(new BlockEdit(wx, wl + 1, wz, BlockSpec.of(Material.LILY_PAD)));
                             }
                         }
-                    } else if (EcoBiomes.snowySurface(b) && skin[0] != Material.SNOW_BLOCK) {
-                        edits.add(new BlockEdit(wx, y + 1, wz, BlockSpec.snow(1)));
+                    } else if (EcoBiomes.snowySurface(b) || skin[0] == Material.SNOW_BLOCK) {
+                        // 亚格雪面（0.31，WorldPainter Frost SMOOTH 思路）：浮点高度的
+                        // 小数部分 → 1..7 层雪片盖顶——雪原/雪坡的方块台阶被雪毯抹平
+                        edits.add(new BlockEdit(wx, y + 1, wz,
+                                BlockSpec.snow(Math.max(1, p.frac[i]))));
                     } else if (!EcoBiomes.snowySurface(b)
                             && ((p.shoal[i] && y == mapper.sea()) || riverBankWl(p, W, H, x, z) == y)) {
                         // 齐平水岸植被（0.25.0 不再依赖滩皮）：芦苇贴水合法即可长；
@@ -1355,7 +1376,15 @@ public final class TerraService implements Listener {
                         : Material.TUFF;
                 return new Material[]{top, Material.STONE, Material.STONE};
             }
-            if (b == 5) return new Material[]{Material.SAND, Material.SAND, Material.SAND, Material.SANDSTONE};
+            if (b == 5) {
+                // 沙漠河畔绿洲带（0.31）：高湿窄带还草——河流穿沙漠两岸一线绿
+                if ((p.wet[i] & 0xFF) >= 48 && slope <= 2) {
+                    return PlanOps.patch(entry.seed ^ 0x0A515L, wx, wz, 14.0) < 0.72
+                            ? new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.SAND, Material.SANDSTONE}
+                            : new Material[]{Material.SAND, Material.SAND, Material.SANDSTONE};
+                }
+                return new Material[]{Material.SAND, Material.SAND, Material.SAND, Material.SANDSTONE};
+            }
             if (b == 26) return new Material[]{Material.RED_SAND, Material.TERRACOTTA,
                     Material.ORANGE_TERRACOTTA, Material.TERRACOTTA};
             if (b == 92) {
@@ -1383,6 +1412,13 @@ public final class TerraService implements Listener {
             if (b == 6 && PlanOps.patch(entry.seed ^ 0x6C1L, wx, wz, 20.0) < 0.30) {
                 return new Material[]{Material.MUD, Material.MUD, Material.DIRT};
             }
+            // 河畔洪泛湿带（0.31，湿度场驱动）：近水低平地成片泥斑——湿带宽度
+            // 随河流量自然变化（Terra 缓岸泥沙带的连续版），寒带不出泥
+            if ((p.wet[i] & 0xFF) >= 58 && slope <= 1 && !p.beach[i]
+                    && !EcoBiomes.snowySurface(b)
+                    && PlanOps.patch(entry.seed ^ 0x3E77L, wx, wz, 18.0) < 0.34) {
+                return new Material[]{Material.MUD, Material.MUD, Material.DIRT};
+            }
             return new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.DIRT, Material.DIRT};
         }
 
@@ -1396,11 +1432,14 @@ public final class TerraService implements Listener {
                                         int slope, int rel, boolean rockBiome) {
             // 凹凸探针（4 邻均值−本列）：正=凹（汇水冲沟），负=凸（脊线）
             int W = p.w, H = p.h, x = i % W, z = i / W;
-            int y4 = p.y[z * W + Math.max(0, x - 1)] + p.y[z * W + Math.min(W - 1, x + 1)]
-                    + p.y[Math.max(0, z - 1) * W + x] + p.y[Math.min(H - 1, z + 1) * W + x];
-            int curv = y4 - 4 * p.y[i];
+            int yl = p.y[z * W + Math.max(0, x - 1)], yr = p.y[z * W + Math.min(W - 1, x + 1)];
+            int yu = p.y[Math.max(0, z - 1) * W + x], yd = p.y[Math.min(H - 1, z + 1) * W + x];
+            int curv = yl + yr + yu + yd - 4 * p.y[i];
             boolean gully = curv >= 3 && slope >= 2;
             boolean ridge = curv <= -3 && slope >= 3;
+            // 坡脚塌积裙（0.31，安息角思路）：紧邻高壁的缓地=重力碎石堆积
+            int upDiff = Math.max(Math.max(yl, yr), Math.max(yu, yd)) - p.y[i];
+            boolean apron = upDiff >= 5 && slope <= 2;
             if (rockBiome) {
                 double zone = PlanOps.patch(entry.seed ^ 0x5A0CL, wx, wz, 30.0);
                 Material top = gully ? Material.GRAVEL
@@ -1415,7 +1454,12 @@ public final class TerraService implements Listener {
                     + (PlanOps.patch(entry.seed ^ 0x7A15L, wx, wz, 22.0) - 0.5) * 22;
             if (rel > snowLine) {
                 if (slope >= 5) {
-                    // 雪线上的陡壁挂不住雪：冷色岩相（石/安山/方解石白岩带）
+                    // 雪线上的陡壁：按列 ~4 格竖纹雪/岩相间（Terra snowy_slant 挂雪条），
+                    // 岩纹走冷色岩相（石/安山/方解石白岩带）
+                    if (PlanOps.patch(entry.seed ^ 0x51CEL, wx, wz, 4.0) < 0.42) {
+                        return new Material[]{Material.SNOW_BLOCK, Material.SNOW_BLOCK,
+                                Material.SNOW_BLOCK, Material.STONE};
+                    }
                     double zone = PlanOps.patch(entry.seed ^ 0x5A0CL, wx, wz, 30.0);
                     Material top = zone < 0.45 ? Material.STONE
                             : zone < 0.78 ? Material.ANDESITE : Material.CALCITE;
@@ -1438,6 +1482,12 @@ public final class TerraService implements Listener {
                 }
                 if (gully) {
                     return new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
+                }
+                if (apron) {
+                    // 崖脚塌积裙：圆石/砾石堆积（0.31）
+                    return PlanOps.patch(entry.seed ^ 0x7A17L, wx, wz, 12.0) < 0.5
+                            ? new Material[]{Material.COBBLESTONE, Material.GRAVEL, Material.STONE}
+                            : new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
                 }
                 if (slope >= 3) {
                     // 塌积带：圆石/砾/石 20 格大斑（山肩碎石裙）
@@ -1463,6 +1513,12 @@ public final class TerraService implements Listener {
             if (gully && slope >= 3) {
                 return new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
             }
+            if (apron && upDiff >= 7) {
+                // 山麓崖脚塌积裙（要求更高的壁差，避免丘陵地随处出碎石）
+                return PlanOps.patch(entry.seed ^ 0x7A17L, wx, wz, 12.0) < 0.5
+                        ? new Material[]{Material.COBBLESTONE, Material.GRAVEL, Material.STONE}
+                        : new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
+            }
             if (slope >= 3) {
                 double zone = PlanOps.patch(entry.seed ^ 0x6EAD1L, wx, wz, 24.0);
                 if (zone < 0.20) return new Material[]{Material.STONE, Material.STONE, Material.STONE};
@@ -1473,6 +1529,38 @@ public final class TerraService implements Listener {
             // 雪峰群系在带下方的缓坡照旧全雪（老规则兜底）
             if (b == 33) return new Material[]{Material.SNOW_BLOCK, Material.SNOW_BLOCK, Material.STONE};
             return null;
+        }
+
+        /**
+         * 深部填充地质分带（0.31，Terra badlands_strata 思路）：层带 = (y+板块错位)/厚度，
+         * 错位来自 ~90 格低频噪声量化成 5 格阶跳 → 崖壁/峡谷/洞穴壁横纹地层带断层感。
+         * 常规 7 格带（石/安山/凝灰/花岗/闪长+3 格薄方解石白缝）；深板岩线（sea−14，
+         * 随错位起伏）以下走 deepslate/凝灰；恶地 3 格陶瓦细层；沙漠上部砂岩为主。
+         */
+        private Material strataFill(int yb, short b) {
+            if (b == 26) {
+                int tb = Math.floorDiv(yb, 3);
+                double t = hash01(entry.seed ^ 0x57AAL, tb, 26);
+                return t < 0.34 ? Material.TERRACOTTA
+                        : t < 0.58 ? Material.ORANGE_TERRACOTTA
+                        : t < 0.80 ? Material.RED_TERRACOTTA
+                        : t < 0.87 ? Material.YELLOW_TERRACOTTA
+                        : t < 0.93 ? Material.WHITE_TERRACOTTA
+                        : t < 0.97 ? Material.LIGHT_GRAY_TERRACOTTA : Material.BROWN_TERRACOTTA;
+            }
+            int band = Math.floorDiv(yb, 7);
+            double h = hash01(entry.seed ^ 0x57A9L, band, 7);
+            if (band * 7 < mapper.sea() - 14) {
+                return h < 0.82 ? Material.DEEPSLATE : Material.TUFF;
+            }
+            if (b == 5) {
+                return h < 0.5 ? Material.SANDSTONE : h < 0.9 ? Material.STONE : Material.GRANITE;
+            }
+            if (h >= 0.96) {   // 方解石白缝：只占带内 3 格薄层
+                return Math.floorMod(yb, 7) < 3 ? Material.CALCITE : Material.STONE;
+            }
+            return h < 0.52 ? Material.STONE : h < 0.68 ? Material.ANDESITE
+                    : h < 0.80 ? Material.TUFF : h < 0.88 ? Material.GRANITE : Material.DIORITE;
         }
 
         /** Chebyshev r≤3 内有河/湖水列（低地陡岸的"贴水"判定）。 */
@@ -1544,6 +1632,88 @@ public final class TerraService implements Listener {
             StringBuilder sb = new StringBuilder();
             counts.forEach((k, v) -> sb.append(k).append("×").append(v).append(" "));
             progress.chat("地貌奇观 ✔ " + sb.toString().trim());
+        }
+
+        /**
+         * 巨石与河心石散布（0.31，Terra boulder locator + Iris decorator 思路）：
+         * 山坡巨石只落"缓坡窗口"（slope 1..3，不平不崖）且低频簇噪声圈内——成簇出现；
+         * 椭球体 y 向压扁、逐块扰动，落座取足印最低地面（埋座防悬空）。
+         * 湍流宽河段零星河心石，露头即急流白石。
+         */
+        private void runBoulders(Plan p, int x1, int z1, int W, int H) {
+            List<BlockEdit> edits = new ArrayList<>();
+            long bs = entry.seed ^ 0xB01DE85L;
+            int hill = 0, rapid = 0;
+            for (int gz = 0; gz < H; gz += 24) {
+                for (int gx = 0; gx < W; gx += 24) {
+                    if (hash01(bs, x1 + gx, z1 + gz) > 0.34) continue;
+                    int lx = gx + (int) (hash01(bs ^ 0x11L, x1 + gx, z1 + gz) * 23);
+                    int lz = gz + (int) (hash01(bs ^ 0x12L, x1 + gx, z1 + gz) * 23);
+                    if (lx < 4 || lz < 4 || lx >= W - 4 || lz >= H - 4) continue;
+                    int i = lz * W + lx;
+                    int wx = x1 + lx, wz = z1 + lz;
+                    if (p.water[i] || p.shoal[i] || p.beach[i]) continue;
+                    if (p.slope[i] < 1 || p.slope[i] > 3) continue;
+                    if (PlanOps.patch(bs ^ 0x13L, wx, wz, 34.0) < 0.62) continue;
+                    short b = p.biome[i];
+                    if (b == 5 || b == 26 || b == 92) continue;
+                    double r = 1.5 + hash01(bs ^ 0x14L, wx, wz) * 2.3;
+                    boulder(p, edits, W, H, x1, z1, lx, lz, r, bs, false);
+                    hill++;
+                }
+            }
+            for (int lz = 3; lz < H - 3; lz++) {
+                for (int lx = 3; lx < W - 3; lx++) {
+                    int i = lz * W + lx;
+                    if (!p.river[i] || (p.flow[i] & 0xFF) < 60) continue;
+                    int depth = p.wlvl[i] - p.y[i];
+                    if (depth < 1 || depth > 3) continue;
+                    if (hash01(bs ^ 0x15L, x1 + lx, z1 + lz) >= 0.005) continue;
+                    double r = 1.0 + hash01(bs ^ 0x16L, x1 + lx, z1 + lz) * 1.2;
+                    boulder(p, edits, W, H, x1, z1, lx, lz, r, bs, true);
+                    rapid++;
+                }
+            }
+            if (edits.isEmpty()) return;
+            World w = Bukkit.getWorld(world);
+            if (w == null) return;
+            applyEditsSync(w, edits);
+            progress.chat("巨石点缀 ✔ 山坡×" + hill + " 河心×" + rapid);
+        }
+
+        /** 单颗椭球巨石：足印最低地面为座（埋底防悬空），y 压扁 0.75，逐块扰动混材。 */
+        private void boulder(Plan p, List<BlockEdit> edits, int W, int H,
+                             int x1, int z1, int cx, int cz, double r, long bs, boolean inWater) {
+            int ri = (int) Math.ceil(r);
+            int base = Integer.MAX_VALUE;
+            for (int dz = -ri; dz <= ri; dz++) {
+                for (int dx = -ri; dx <= ri; dx++) {
+                    int i = (cz + dz) * W + cx + dx;
+                    if (dx * dx + dz * dz <= r * r) base = Math.min(base, p.y[i]);
+                }
+            }
+            if (base == Integer.MAX_VALUE) return;
+            int wx0 = x1 + cx, wz0 = z1 + cz;
+            double m0 = hash01(bs ^ 0x17L, wx0, wz0);
+            Material prim = inWater ? Material.STONE
+                    : m0 < 0.4 ? Material.COBBLESTONE : m0 < 0.8 ? Material.STONE : Material.ANDESITE;
+            Material sec = inWater ? Material.ANDESITE
+                    : m0 < 0.4 ? Material.MOSSY_COBBLESTONE : Material.COBBLESTONE;
+            double ry = Math.max(1.0, r * 0.75);
+            int hi = (int) Math.ceil(ry * 2);
+            for (int dy = 0; dy <= hi; dy++) {
+                for (int dz = -ri; dz <= ri; dz++) {
+                    for (int dx = -ri; dx <= ri; dx++) {
+                        double n = (dx * dx + dz * dz) / (r * r)
+                                + Math.pow((dy - ry) / ry, 2)
+                                + (hash01(bs ^ (dy * 0x9E5L), wx0 + dx, wz0 + dz) - 0.5) * 0.3;
+                        if (n > 1) continue;
+                        Material m = hash01(bs ^ 0x18L, wx0 + dx * 31 + dy, wz0 + dz * 17) < 0.72
+                                ? prim : sec;
+                        edits.add(new BlockEdit(wx0 + dx, base - 1 + dy, wz0 + dz, BlockSpec.of(m)));
+                    }
+                }
+            }
         }
 
         /** 区域 bbox 上的 SimpleEco 视图（读 Plan 数组，掩码感知）。 */
@@ -1854,6 +2024,8 @@ public final class TerraService implements Listener {
         final byte[] flow;       // 河道/岸带流速 0..100（0=缓，河床与植被分布用）
         final short[] mix;       // 交界混合的邻群系（0=不混）
         final byte[] mixP;       // 混合概率 %
+        final byte[] wet;        // 河湖湿度场 0..96（0.31，流量播种+衰减传播；皮肤/绿洲用）
+        final byte[] frac;       // 亚格高度 0..7（浮点高程小数×8；雪层平滑用）
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
         double oceanPct;
         long totalOps;
@@ -1874,12 +2046,55 @@ public final class TerraService implements Listener {
             flow = new byte[w * h];
             mix = new short[w * h];
             mixP = new byte[w * h];
+            wet = new byte[w * h];
+            frac = new byte[w * h];
         }
     }
 
     /** 与 PlainChunkGenerator 解耦的常量镜像（避免离线工具带入 Bukkit 类）。 */
     private static final class PlainBase {
         static final int SURFACE = 64;
+    }
+
+    /**
+     * 湿度场（0.31，SimpleHydrology 的 discharge→地表湿度思路）：河湖列按流速播种
+     * （河 52..85、静水 46），8 邻 max-衰减（直 8/斜 11 每格）两遍扫描传播——
+     * chamfer 距离变换的"带值"版。大河湿带 ~10 格、小溪 ~6 格，皮肤/绿洲/植被用。
+     */
+    private static void wetField(byte[] out, boolean[] water, boolean[] river, byte[] flow,
+                                 int W, int H) {
+        int[] wv = new int[W * H];
+        for (int i = 0; i < W * H; i++) {
+            if (river[i]) wv[i] = 52 + (flow[i] & 0xFF) / 3;
+            else if (water[i]) wv[i] = 46;
+        }
+        for (int z = 0; z < H; z++) {
+            for (int x = 0; x < W; x++) {
+                int i = z * W + x, v = wv[i];
+                if (x > 0) v = Math.max(v, wv[i - 1] - 8);
+                if (z > 0) {
+                    v = Math.max(v, wv[i - W] - 8);
+                    if (x > 0) v = Math.max(v, wv[i - W - 1] - 11);
+                    if (x < W - 1) v = Math.max(v, wv[i - W + 1] - 11);
+                }
+                wv[i] = v;
+            }
+        }
+        for (int z = H - 1; z >= 0; z--) {
+            for (int x = W - 1; x >= 0; x--) {
+                int i = z * W + x, v = wv[i];
+                if (x < W - 1) v = Math.max(v, wv[i + 1] - 8);
+                if (z < H - 1) {
+                    v = Math.max(v, wv[i + W] - 8);
+                    if (x < W - 1) v = Math.max(v, wv[i + W + 1] - 11);
+                    if (x > 0) v = Math.max(v, wv[i + W - 1] - 11);
+                }
+                wv[i] = v;
+            }
+        }
+        for (int i = 0; i < W * H; i++) {
+            out[i] = (byte) Math.max(0, Math.min(96, wv[i]));
+        }
     }
 
     /** 4 邻里有水位=本列顶面的河列 → 返回该水位（芦苇支撑合法性判定），否则 MIN。 */
