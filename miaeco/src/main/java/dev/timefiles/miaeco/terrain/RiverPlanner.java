@@ -34,7 +34,8 @@ public final class RiverPlanner {
         float yAt(double wx, double wz);
     }
 
-    public static final int BANK_W = 3;          // 齐平岸带宽
+    public static final int BANK_W = 3;          // 齐平岸带宽（湿地候选标记范围）
+    static final int FEATHER_MAX = 14;           // 漫滩/谷壁羽化最大宽度（须 ≤ 规划裙边）
     static final double WIDTH_AREA = 95.0 * 95.0;   // 半宽=1.0 对应的汇水面积（格²）
 
     // 节点类型
@@ -83,8 +84,10 @@ public final class RiverPlanner {
         final int G = Math.max(16, size / cell);
         final int N = G * G;
 
-        // ---- 高度场：coarse 双线性 - 双尺度侵蚀谷噪声（|noise| 只削不抬：
-        //      不造幻影脊 → 水位永不高出真实地形太多，河道偏爱被"侵蚀"出的谷线）----
+        // ---- 高度场：coarse 双线性 - 双尺度侵蚀谷噪声 - 下切偏置（|noise| 只削不抬：
+        //      不造幻影脊 → 水位永不高出真实地形太多，河道偏爱被"侵蚀"出的谷线；
+        //      恒定 -1.5 偏置让水位系统性低于精细地表——河默认往下挖，而不是垫堤抬水
+        //      （coarse 与精细推理的局部高差是"高架桥河"的根源之一，0.24.1）----
         FastNoiseLite fnl = new FastNoiseLite((int) (seed ^ 0x7A11E7L));
         fnl.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
         fnl.SetFrequency(1f / 150f);
@@ -105,7 +108,8 @@ public final class RiverPlanner {
                 raw[gz * G + gx] = y0;
                 gh[gz * G + gx] = y0
                         - Math.abs(fnl.GetNoise((float) wx, (float) wz)) * amp
-                        - Math.abs(fnl2.GetNoise((float) wx, (float) wz)) * (amp * 0.7f);
+                        - Math.abs(fnl2.GetNoise((float) wx, (float) wz)) * (amp * 0.7f)
+                        - 1.5f;
             }
         }
 
@@ -230,12 +234,13 @@ public final class RiverPlanner {
             lakeMeta.add(new int[]{minGx, minGz, maxGx, maxGz, area});
             lakeLevels.add(level);
         }
-        // 面积截断（防汪洋）：按面积降序保留前 12 个
+        // 面积截断（防汪洋）：按面积降序保留前 40 个——被丢弃的洼地会让过路河以
+        // 溢出口水位"高架"跨越（0.24.1：真湖远比垫堤渡槽自然，宁多留湖）
         List<Integer> keep = new ArrayList<>();
         for (int i = 0; i < lakeMeta.size(); i++) if (lakeMeta.get(i) != null) keep.add(i);
         keep.sort((a, b) -> Integer.compare(lakeMeta.get(b)[4], lakeMeta.get(a)[4]));
         boolean[] kept = new boolean[lakeMeta.size()];
-        for (int k = 0; k < Math.min(12, keep.size()); k++) kept[keep.get(k)] = true;
+        for (int k = 0; k < Math.min(40, keep.size()); k++) kept[keep.get(k)] = true;
         int[] lakeRemap = new int[lakeMeta.size()];
         java.util.Arrays.fill(lakeRemap, -1);
         for (int i = 0; i < lakeMeta.size(); i++) {
@@ -530,7 +535,8 @@ public final class RiverPlanner {
 
     /**
      * 把整图水系栅格化进一块扩展规划网格（含裙边，跨片一致）。
-     * 顺序：冲积扇沉积 → 三角洲泥滩 → 湖泊 → 河道/齐平岸（含洲/潭/峡谷）→ 干沟 → 泉眼。
+     * 顺序：冲积扇沉积 → 三角洲泥滩 → 湖泊（含湖滨羽化）→ 河道/两态岸
+     * （地形高于水位=谷壁削坡、低于水位=宽羽化河漫滩；含洲/潭/峡谷）→ 干沟 → 泉眼。
      *
      * @param eLand 出参：地貌标记（{@link #L_FAN} 等，皮肤/群系用）
      * @param eFlow 出参：河道/岸带流速 0..100（缓流水草丰茂、湍流卵石河床；可 null）
@@ -616,7 +622,16 @@ public final class RiverPlanner {
                             + (PlanOps.patch(0x1AC3L, ox + lx, oz + lz, 11.0) - 0.5) * 0.28;
                     int i = lz * EW + lx;
                     if (ind >= 0.32) lakeGuard[i] = Math.max(lakeGuard[i], lk.level());
-                    if (ind < 0.5) continue;
+                    if (ind < 0.5) {
+                        // 湖滨外沿羽化（0.24.1）：掩码外的低地平滑抬向湖面——
+                        // 湖缘不再靠 containSweep 的一格窄墙兜水
+                        if (ind >= 0.15 && !eWater[i] && !eRiver[i] && ey[i] < lk.level()) {
+                            double t = Math.min(1, (0.5 - ind) / 0.35);
+                            double ss = t * t * (3 - 2 * t);
+                            ey[i] = lk.level() - (int) Math.round(ss * (lk.level() - ey[i]));
+                        }
+                        continue;
+                    }
                     if (eWater[i]) continue;
                     if (ey[i] > lk.level() + 2) continue;         // 湖中高地=岛
                     if (ey[i] >= lk.level()) {
@@ -650,7 +665,7 @@ public final class RiverPlanner {
             boolean dry = r.kind() == R_WASH;
             for (int i = 0; i + 1 < ns.size(); i++) {
                 Node a = ns.get(i), b = ns.get(i + 1);
-                float reach = Math.max(a.halfW(), b.halfW()) + BANK_W + 1;
+                float reach = Math.max(a.halfW(), b.halfW()) + FEATHER_MAX + 1;
                 if (Math.max(a.x(), b.x()) < ox - reach || Math.min(a.x(), b.x()) > ox + EW + reach
                         || Math.max(a.z(), b.z()) < oz - reach || Math.min(a.z(), b.z()) > oz + EH + reach) {
                     continue;
@@ -674,7 +689,7 @@ public final class RiverPlanner {
                             continue;
                         }
                         int wlHere = Math.min(a.wl(), Math.round(a.wl() + (b.wl() - a.wl()) * t));
-                        if (d <= hw + BANK_W && wlHere > bankWl[idx]) bankWl[idx] = wlHere;
+                        if (d <= hw + FEATHER_MAX && wlHere > bankWl[idx]) bankWl[idx] = wlHere;
                         float q = d / Math.max(0.8f, hw);
                         if (q < bestQ[idx]) {
                             bestQ[idx] = q;
@@ -704,7 +719,12 @@ public final class RiverPlanner {
             }
         }
 
-        // ---- 应用：洲 → 河槽（峡谷/潭加深）→ 齐平岸（湿地候选；护住湖面）----
+        // ---- 应用：洲 → 河槽（峡谷/潭加深）→ 两态岸（0.24.1 重做）----
+        // 旧版在"水位高于实际地形"时把 3 格窄岸抬到水位 + 沙砾皮肤——低地河像
+        // 高架渡槽/长城。现在按地形与水位的关系分两态，皆宽羽化融入周边：
+        //   地形 ≥ 水位 → 谷壁削坡（宽度随岸高放宽，河沉进河谷里）；
+        //   地形 <  水位 → 河漫滩（宽度随抬升量放宽，草地皮肤的平缓漫滩）。
+        // 沙/砾滩皮只保留贴水线 ~1.6 格一圈。
         for (int i = 0; i < EW * EH; i++) {
             if (bestQ[i] == Float.MAX_VALUE || eWater[i]) continue;
             float d = bestD[i], hw = bestHw[i];
@@ -724,17 +744,42 @@ public final class RiverPlanner {
                 eRiver[i] = true;
                 eWl[i] = wl;
                 if (eFlow != null) eFlow[i] = flowByte(bestFlow[i]);
-            } else if (d <= hw + BANK_W) {
+            } else {
                 int wlB = Math.max(Math.max(wl, bankWl[i]), lakeGuard[i]);
-                boolean canyon = ey[i] - wlB > 10;
-                double t = (d - hw) / BANK_W;
-                double s = t * t * (3 - 2 * t);
-                int target = wlB + (int) Math.round(s * Math.max(0, ey[i] - wlB));
-                ey[i] = ey[i] < wlB ? wlB : Math.min(ey[i], Math.max(wlB, target));
-                if (ey[i] <= wlB + 1 && !canyon) {
-                    eShoal[i] = true;
-                    if (eFlow != null) eFlow[i] = flowByte(bestFlow[i]);
-                    if (hw >= 3.2f) eLand[i] = maxL(eLand[i], L_WET);   // 宽河两岸=湿地候选
+                int orig = ey[i];
+                if (orig >= wlB) {
+                    // 谷壁削坡：高岸放宽到高差 ×1.6（至多 FEATHER_MAX），河谷有坡度感
+                    float fw = Math.max(BANK_W, Math.min(FEATHER_MAX, (orig - wlB) * 1.6f));
+                    if (d <= hw + fw) {
+                        double t = (d - hw) / fw;
+                        double s = t * t * (3 - 2 * t);
+                        ey[i] = Math.max(wlB, wlB + (int) Math.round(s * (orig - wlB)));
+                        boolean canyon = orig - wlB > 10;
+                        if (ey[i] <= wlB + 1 && !canyon) {
+                            if (d <= hw + 1.6f) {
+                                eShoal[i] = true;                 // 贴水线滩皮一圈
+                                if (eFlow != null) eFlow[i] = flowByte(bestFlow[i]);
+                            }
+                            if (hw >= 3.2f && d <= hw + BANK_W) {
+                                eLand[i] = maxL(eLand[i], L_WET); // 宽河两岸=湿地候选
+                            }
+                        }
+                    }
+                } else {
+                    // 河漫滩：规划水位高于实际地形——宽羽化平缓降回原地形，
+                    // 漫滩地表保持所在群系皮肤（长草），不再是沙砾窄堤
+                    float fw = Math.max(4, Math.min(FEATHER_MAX, (wlB - orig) * 2.5f));
+                    if (d <= hw + fw) {
+                        double t = (d - hw) / fw;
+                        double s = t * t * (3 - 2 * t);
+                        ey[i] = wlB + (int) Math.round(s * (orig - wlB));
+                        if (d <= hw + 1.6f) {
+                            eShoal[i] = true;
+                            if (eFlow != null) eFlow[i] = flowByte(bestFlow[i]);
+                        } else if (hw >= 3.2f && d <= hw + BANK_W) {
+                            eLand[i] = maxL(eLand[i], L_WET);
+                        }
+                    }
                 }
             }
         }

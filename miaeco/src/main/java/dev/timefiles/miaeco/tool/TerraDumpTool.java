@@ -160,13 +160,16 @@ public final class TerraDumpTool {
                 }
             }
         }
-        // 栅格化：齐平岸（河+湖）+ 跨片一致
+        // 栅格化：齐平岸（河+湖）+ 跨片一致。地形叠 ±6 格散度场，模拟生产环境
+        // coarse 规划 vs 精细推理的失配——漫滩/谷壁必须兜住（无漏水、无窄堤墙）
         int EW = 480, EH = 480, ox = -240, ozr = -60;            // 覆盖盆地湖区
         int[] ey = new int[EW * EH];
         boolean[] eWater = new boolean[EW * EH];
         for (int z = 0; z < EH; z++) {
             for (int x = 0; x < EW; x++) {
-                float y = hf.yAt(ox + x + 0.5, ozr + z + 0.5);
+                float y = hf.yAt(ox + x + 0.5, ozr + z + 0.5)
+                        + (float) ((dev.timefiles.miaeco.terrain.PlanOps.patch(
+                        0xD1F7L, ox + x, ozr + z, 37.0) - 0.5) * 12);
                 ey[z * EW + x] = (int) Math.floor(y);
                 eWater[z * EW + x] = y < sea - 0.5f;
             }
@@ -213,6 +216,36 @@ public final class TerraDumpTool {
             System.out.println("RIVER BANK FAIL leaks=" + leaks + " flush=" + flushBank);
             fail = true;
         }
+        // 高架桥检测（0.24.1）：被抬升的漫滩/岸列，朝外单步落差必须 ≤2——
+        // 水位高于地形处要靠宽羽化漫滩兜水，绝不允许再出现窄堤墙
+        int raisedCols = 0, walls = 0;
+        for (int z = 1; z < EH - 1; z++) {
+            for (int x = 1; x < EW - 1; x++) {
+                int i = z * EW + x;
+                if (eWater[i] || eRiver[i] || ey[i] <= eyB[i]) continue;
+                byte ld = eLand[i];
+                if (ld == dev.timefiles.miaeco.terrain.RiverPlanner.L_SPRING
+                        || ld == dev.timefiles.miaeco.terrain.RiverPlanner.L_FAN
+                        || ld == dev.timefiles.miaeco.terrain.RiverPlanner.L_DELTA) continue;
+                raisedCols++;
+                for (int[] dd : new int[][]{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
+                    int ni = (z + dd[1]) * EW + x + dd[0];
+                    if (eWater[ni] || eRiver[ni]) continue;
+                    if (ey[i] - ey[ni] > 2) {
+                        if (walls < 6) {
+                            System.out.printf("WALL @(%d,%d) ey=%d(原%d) 邻=%d land=%d shoal=%b%n",
+                                    ox + x, ozr + z, ey[i], eyB[i], ey[ni], eLand[i], eShoal[i]);
+                        }
+                        walls++;
+                        break;
+                    }
+                }
+            }
+        }
+        if (walls > raisedCols / 50 + 2) {
+            System.out.println("RIVER LEVEE WALL FAIL raised=" + raisedCols + " walls=" + walls);
+            fail = true;
+        }
         // 跨片一致：偏移窗口重算，重叠区必须逐位一致（含地貌层）
         int EW2 = 340, EH2 = 340, ox2 = ox + 100, oz2 = ozr + 100;
         int[] ey2 = new int[EW2 * EH2];
@@ -244,11 +277,12 @@ public final class TerraDumpTool {
         }
         System.out.printf("river: 干支流 %d(汇流 %d, 泉 %d) 湖 %d 三角洲 %d 冲积扇 %d, 共 %d 节点, "
                         + "蜿蜒最低 %.3f, 水列 %d(缓 %d/湍 %d), 齐平岸 %d, 漏水 %d, 湿地候选 %d, "
-                        + "深宽比 陡=%.2f 缓=%.2f%n",
+                        + "深宽比 陡=%.2f 缓=%.2f, 漫滩抬升列 %d(墙 %d)%n",
                 mains.size(), junctions, springs, plan.lakes().size(), plan.deltas().size(),
                 plan.fans().size(), plan.nodeCount(), worstChord, riverCols, slowCols, fastCols,
                 flushBank, leaks, wetCols,
-                steepN > 0 ? steepAsp / steepN : 0, flatN > 0 ? flatAsp / flatN : 0);
+                steepN > 0 ? steepAsp / steepN : 0, flatN > 0 ? flatAsp / flatN : 0,
+                raisedCols, walls);
         return fail;
     }
 

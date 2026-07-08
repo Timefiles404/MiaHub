@@ -239,7 +239,8 @@ public final class PlanOps {
 
     // ============================ 噪声 ============================
 
-    static double patch(long seed, int x, int z, double cell) {
+    /** 平滑随机斑块噪声 0..1（双线性插值哈希格点；离线工具与规划共用）。 */
+    public static double patch(long seed, int x, int z, double cell) {
         double fx = x / cell, fz = z / cell;
         int x0 = (int) Math.floor(fx), z0 = (int) Math.floor(fz);
         double tx = smooth(fx - x0), tz = smooth(fz - z0);
