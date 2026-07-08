@@ -125,7 +125,7 @@ public final class HubConsole implements Listener {
             HubService.Draft dr = hub.draft(d);
             m.inv.setItem(slot++, item(Material.SNOW_BLOCK,
                     ChatColor.LIGHT_PURPLE + d + ChatColor.GRAY + "（草稿）",
-                    ChatColor.GRAY + "世界 " + dr.size + "² @" + dr.mpb + "m/格 · 沙盘 " + dr.preview + "²",
+                    ChatColor.GRAY + "世界 " + dr.sizeStr() + " @" + dr.mpb + "m/格 · 沙盘 " + dr.preview + "²",
                     dr.seed == null ? ChatColor.YELLOW + "还没抽卡" : ChatColor.AQUA + "seed=" + dr.seed,
                     ChatColor.GREEN + "▶ 点击打开草稿操作台"));
         }
@@ -143,7 +143,7 @@ public final class HubConsole implements Listener {
         String busy = eco.terra().busyWorld();
         List<String> lore = new ArrayList<>();
         lore.add(ChatColor.GRAY + (map
-                ? "地图世界 " + e.map.size() + "² @" + e.map.metersPerBlock() + "m/格 海平面 " + e.map.seaLevel()
+                ? "地图世界 " + e.map.sizeStr() + " @" + e.map.metersPerBlock() + "m/格 海平面 " + e.map.seaLevel()
                 + (e.map.openEdge() ? " 断崖" : "") + (e.map.yScale() != 1.0 ? " y×" + HubService.fmt1(e.map.yScale()) : "")
                 : "画布世界（选区式 terra gen）"));
         lore.add(ChatColor.GRAY + "seed=" + e.seed + " · 地形块 " + e.patches.size());
@@ -162,7 +162,7 @@ public final class HubConsole implements Listener {
             for (EcoWorlds.Patch pt : e.patches) {
                 covered += (long) (pt.maxX() - pt.minX() + 1) * (pt.maxZ() - pt.minZ() + 1);
             }
-            boolean doneAll = covered >= (long) e.map.size() * e.map.size();
+            boolean doneAll = covered >= (long) e.map.size() * e.map.sizeZ();
             icon = doneAll ? Material.FILLED_MAP : Material.MAP;
             lore.add(doneAll ? ChatColor.GREEN + "✔ 已生成"
                     : covered > 0 ? ChatColor.GOLD + "◐ 部分生成（可续跑）" : ChatColor.DARK_GRAY + "▢ 未生成");
@@ -359,7 +359,7 @@ public final class HubConsole implements Listener {
         if (d == null) return;
         m.inv.clear();
         m.inv.setItem(4, item(Material.SNOW_BLOCK, ChatColor.LIGHT_PURPLE + d.name + ChatColor.GRAY + "（草稿）",
-                ChatColor.GRAY + "世界 " + d.size + "²（创建时固定）· 沙盘 " + d.preview + "²",
+                ChatColor.GRAY + "世界 " + d.sizeStr() + "（创建时固定）· 沙盘 " + d.preview + "²",
                 d.seed == null ? ChatColor.YELLOW + "还没抽卡" : ChatColor.AQUA + "seed=" + d.seed,
                 ChatColor.GRAY + "1 层雪 ≈ 45 米，海平面 = 3 格雪"));
         m.inv.setItem(9, item(Material.COMPASS, ChatColor.AQUA + "比例尺 " + d.mpb + "m/格",
@@ -379,9 +379,12 @@ public final class HubConsole implements Listener {
                         + "×" + hub.mapKOf(d.name),
                 ChatColor.GRAY + "左键 +1 / 右键 -1（1~6）"));
         m.inv.setItem(15, item(Material.DIAMOND, ChatColor.GREEN + "抽卡 roll",
-                ChatColor.GRAY + "coarse 粗扫铺盘（秒级），无限抽"));
+                ChatColor.GRAY + "coarse 粗扫铺盘（秒级），无限抽；画墙同步刷新"));
         m.inv.setItem(16, item(Material.LILY_PAD, ChatColor.GREEN + "水系预览 water",
                 ChatColor.GRAY + "滴水粒子画河 90 秒 + 画墙俯视图"));
+        m.inv.setItem(17, item(Material.SNOW_BLOCK, ChatColor.AQUA + "沙盘尺寸 " + d.preview + "²",
+                ChatColor.GRAY + "左键 +4 / 右键 -4（" + HubService.MIN_SB + "~" + HubService.MAX_SB + "）",
+                ChatColor.GRAY + "雪面按新尺寸重采样保留形态"));
         m.inv.setItem(21, confirmable(m, 21, Material.EMERALD_BLOCK, ChatColor.GREEN + "送入生产 confirm",
                 ChatColor.GRAY + "读回雪面修形作为草图，创建世界并生成"));
         m.inv.setItem(23, confirmable(m, 23, Material.LAVA_BUCKET, ChatColor.RED + "删除草稿",
@@ -436,6 +439,11 @@ public final class HubConsole implements Listener {
                 p.closeInventory();
                 String err = hub.water(p, m.name);
                 if (err != null) p.sendMessage(P + ChatColor.RED + err);
+            }
+            case 17 -> {
+                String err = hub.setDraftPreview(m.name, d.preview + (right ? -4 : 4));
+                if (err != null) p.sendMessage(P + ChatColor.RED + err);
+                drawDraft(m);
             }
             case 21 -> {
                 if (!armed(m, 21)) {

@@ -77,12 +77,20 @@ public final class RiverPlanner {
 
     // ============================ 规划 ============================
 
+    /** 方形便捷入口（旧调用兼容）。 */
     public static RiverPlan plan(HeightField hf, int sea, int x1, int z1, int size,
                                  long seed, double density) {
-        if (density <= 0.01 || size < 320) return RiverPlan.EMPTY;
-        final int cell = Math.max(8, Math.min(32, size / 128));
-        final int G = Math.max(16, size / cell);
-        final int N = G * G;
+        return plan(hf, sea, x1, z1, size, size, seed, density);
+    }
+
+    /** 0.26.0 起支持非正方形地图：规划网格 G(X 向)×GZ(Z 向)。 */
+    public static RiverPlan plan(HeightField hf, int sea, int x1, int z1, int sizeX, int sizeZ,
+                                 long seed, double density) {
+        if (density <= 0.01 || Math.min(sizeX, sizeZ) < 320) return RiverPlan.EMPTY;
+        final int cell = Math.max(8, Math.min(32, Math.max(sizeX, sizeZ) / 128));
+        final int G = Math.max(16, sizeX / cell);
+        final int GZ = Math.max(16, sizeZ / cell);
+        final int N = G * GZ;
 
         // ---- 高度场：coarse 双线性 - 双尺度侵蚀谷噪声 - 下切偏置（|noise| 只削不抬：
         //      不造幻影脊 → 水位永不高出真实地形太多，河道偏爱被"侵蚀"出的谷线；
@@ -100,7 +108,7 @@ public final class RiverPlanner {
         fnl2.SetFractalOctaves(2);
         float[] gh = new float[N];
         float[] raw = new float[N];
-        for (int gz = 0; gz < G; gz++) {
+        for (int gz = 0; gz < GZ; gz++) {
             for (int gx = 0; gx < G; gx++) {
                 double wx = x1 + (gx + 0.5) * cell, wz = z1 + (gz + 0.5) * cell;
                 float y0 = hf.yAt(wx, wz);
@@ -126,7 +134,7 @@ public final class RiverPlanner {
         for (int i = 0; i < N; i++) {
             int gx = i % G, gz = i / G;
             ocean[i] = raw[i] < sea - 0.5f;
-            if (ocean[i] || gx == 0 || gz == 0 || gx == G - 1 || gz == G - 1) {
+            if (ocean[i] || gx == 0 || gz == 0 || gx == G - 1 || gz == GZ - 1) {
                 fill[i] = gh[i];
                 pq.add(new long[]{Double.doubleToLongBits(fill[i]), i});
             }
@@ -141,7 +149,7 @@ public final class RiverPlanner {
             int cx = c % G, cz = c / G;
             for (int d = 0; d < 8; d++) {
                 int nx = cx + DX[d], nz = cz + DZ[d];
-                if (nx < 0 || nz < 0 || nx >= G || nz >= G) continue;
+                if (nx < 0 || nz < 0 || nx >= G || nz >= GZ) continue;
                 int n = nz * G + nx;
                 if (closed[n]) continue;
                 double f = Math.max(gh[n], fill[c] + EPS);
@@ -161,7 +169,7 @@ public final class RiverPlanner {
             double bestDrop = 0, secondDrop = 0;
             for (int d = 0; d < 8; d++) {
                 int nx = cx + DX[d], nz = cz + DZ[d];
-                if (nx < 0 || nz < 0 || nx >= G || nz >= G) continue;
+                if (nx < 0 || nz < 0 || nx >= G || nz >= GZ) continue;
                 int n = nz * G + nx;
                 double drop = (fill[i] - fill[n]) / (d < 4 ? 1.0 : 1.41421356);
                 if (drop > bestDrop) {
@@ -204,7 +212,7 @@ public final class RiverPlanner {
             if (!deep[s] || lakeId[s] >= 0) continue;
             int id = lakeMeta.size();
             double spill = Double.MAX_VALUE;
-            int minGx = G, minGz = G, maxGx = -1, maxGz = -1, area = 0;
+            int minGx = G, minGz = GZ, maxGx = -1, maxGz = -1, area = 0;
             List<Integer> cells = new ArrayList<>();
             bfs.add(s);
             lakeId[s] = id;
@@ -218,7 +226,7 @@ public final class RiverPlanner {
                 minGz = Math.min(minGz, cz); maxGz = Math.max(maxGz, cz);
                 for (int d = 0; d < 4; d++) {
                     int nx = cx + DX[d], nz = cz + DZ[d];
-                    if (nx < 0 || nz < 0 || nx >= G || nz >= G) continue;
+                    if (nx < 0 || nz < 0 || nx >= G || nz >= GZ) continue;
                     int n = nz * G + nx;
                     if (deep[n] && lakeId[n] < 0) {
                         lakeId[n] = id;
@@ -275,7 +283,7 @@ public final class RiverPlanner {
             int cx = i % G, cz = i / G;
             for (int d = 0; d < 8 && !fed; d++) {
                 int nx = cx + DX[d], nz = cz + DZ[d];
-                if (nx < 0 || nz < 0 || nx >= G || nz >= G) continue;
+                if (nx < 0 || nz < 0 || nx >= G || nz >= GZ) continue;
                 int n = nz * G + nx;
                 if (dir[n] == i && isCh[n] && lakeId[n] < 0) fed = true;
             }

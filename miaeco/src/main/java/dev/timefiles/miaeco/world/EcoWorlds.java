@@ -43,12 +43,28 @@ public final class EcoWorlds {
     }
 
     /**
-     * 地图世界规格：size>0 表示"虚空画布 + 中心 size×size 自动地形"。
+     * 地图世界规格：size>0 表示"虚空画布 + 中心 size×sizeZ 自动地形"（0.26.0 起支持
+     * 非正方形，size=X 跨度、sizeZ=Z 跨度；正方形两者相等）。
      * openEdge=true 四周不强制为海（断崖边缘、山体增幅）；yScale 竖向缩放（1=默认，越大山越高）。
      */
-    public record MapSpec(int size, int metersPerBlock, int seaLevel, boolean openEdge, double yScale) {
+    public record MapSpec(int size, int sizeZ, int metersPerBlock, int seaLevel,
+                          boolean openEdge, double yScale) {
         public MapSpec(int size, int metersPerBlock, int seaLevel) {
-            this(size, metersPerBlock, seaLevel, false, 1.0);
+            this(size, size, metersPerBlock, seaLevel, false, 1.0);
+        }
+
+        /** 正方形便捷构造（旧调用兼容）。 */
+        public MapSpec(int size, int metersPerBlock, int seaLevel, boolean openEdge, double yScale) {
+            this(size, size, metersPerBlock, seaLevel, openEdge, yScale);
+        }
+
+        public boolean square() {
+            return size == sizeZ;
+        }
+
+        /** 显示串："1024²" 或 "1000×500"。 */
+        public String sizeStr() {
+            return square() ? size + "²" : size + "×" + sizeZ;
         }
     }
 
@@ -58,9 +74,10 @@ public final class EcoWorlds {
         /** null=经典平原画布（选区式 terra gen）；非 null=有限地图世界。 */
         public final MapSpec map;
         public final List<Patch> patches = new ArrayList<>();
-        /** hub 雪面草图：米偏移，sketchN×sketchN 双线性铺满地图（null=无）。 */
+        /** hub 雪面草图：米偏移，sketchN(X)×sketchNZ 双线性铺满地图（null=无）。 */
         public float[] sketch;
         public int sketchN;
+        public int sketchNZ;
 
         Entry(String name, long seed, MapSpec map) {
             this.name = name;
@@ -89,21 +106,24 @@ public final class EcoWorlds {
                     long seed = sec.getLong(name + ".seed");
                     int size = sec.getInt(name + ".map.size", 0);
                     MapSpec map = size > 0 ? new MapSpec(size,
+                            sec.getInt(name + ".map.sizez", size),
                             sec.getInt(name + ".map.mpb", 30),
                             sec.getInt(name + ".map.sea", 63),
                             "open".equals(sec.getString(name + ".map.edge", "sea")),
                             sec.getDouble(name + ".map.yscale", 1.0)) : null;
                     Entry e = new Entry(name, seed, map);
                     int skn = sec.getInt(name + ".map.sketchn", 0);
+                    int sknz = sec.getInt(name + ".map.sketchnz", skn);
                     String skb = sec.getString(name + ".map.sketch");
-                    if (map != null && skn > 0 && skb != null) {
+                    if (map != null && skn > 0 && sknz > 0 && skb != null) {
                         try {
                             byte[] raw = java.util.Base64.getDecoder().decode(skb);
-                            if (raw.length == skn * skn * 4) {
-                                float[] sk = new float[skn * skn];
+                            if (raw.length == skn * sknz * 4) {
+                                float[] sk = new float[skn * sknz];
                                 java.nio.ByteBuffer.wrap(raw).asFloatBuffer().get(sk);
                                 e.sketch = sk;
                                 e.sketchN = skn;
+                                e.sketchNZ = sknz;
                             }
                         } catch (IllegalArgumentException ignored) { }
                     }
@@ -140,6 +160,7 @@ public final class EcoWorlds {
             yml.set(base + "seed", e.seed);
             if (e.map != null) {
                 yml.set(base + "map.size", e.map.size());
+                yml.set(base + "map.sizez", e.map.sizeZ());
                 yml.set(base + "map.mpb", e.map.metersPerBlock());
                 yml.set(base + "map.sea", e.map.seaLevel());
                 yml.set(base + "map.edge", e.map.openEdge() ? "open" : "sea");
@@ -148,6 +169,7 @@ public final class EcoWorlds {
                     java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(e.sketch.length * 4);
                     bb.asFloatBuffer().put(e.sketch);
                     yml.set(base + "map.sketchn", e.sketchN);
+                    yml.set(base + "map.sketchnz", e.sketchNZ > 0 ? e.sketchNZ : e.sketchN);
                     yml.set(base + "map.sketch", java.util.Base64.getEncoder().encodeToString(bb.array()));
                 }
             }

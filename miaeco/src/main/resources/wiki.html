@@ -50,7 +50,7 @@
 <tr><td><code>/miaeco atmo apply | clear | info &lt;森林&gt;</code></td><td>铺开氛围 / 精确恢复原地形 / 查看设置</td></tr>
 <tr><td><code>/miaeco atmo feature &lt;森林&gt; &lt;特征&gt; &lt;0~5&gt;</code></td><td>单项强度：river/town/groundcover/water/paths/soil/rocks/ruins（0=关，river 5 档水系尤其强烈，town=人烟）</td></tr>
 <tr><td><code>/miaeco world create &lt;名&gt; [seed=N] | list | tp &lt;名&gt; | remove &lt;名&gt; confirm</code></td><td>专用生态世界管理（平原画布；remove 连文件夹删除）</td></tr>
-<tr><td><code>/miaeco world create &lt;名&gt; size=N [scale=15|30|60|120] [sea=Y] [edge=sea|open] [yscale=X]</code></td><td>地图世界：虚空+中心 N×N 自动地形与生态；scale=每格米数（比例尺），sea=海平面；edge=open 四周不强制为海（断崖边缘+更强山体），yscale 竖向缩放 0.5~2.5（越大山越高）</td></tr>
+<tr><td><code>/miaeco world create &lt;名&gt; size=N|AxB [scale=15|30|60|120] [sea=Y] [edge=sea|open] [yscale=X]</code></td><td>地图世界：虚空+中心自动地形与生态；size 可写 <code>1000x500</code> 生成非正方形；scale=每格米数（比例尺），sea=海平面；edge=open 四周不强制为海（断崖边缘+更强山体），yscale 竖向缩放 0.5~2.5（越大山越高）</td></tr>
 <tr><td><code>/miaeco world regen &lt;名&gt; [seed=N] confirm</code></td><td>地图世界删档重生成（默认换新种子，同参数重跑）</td></tr>
 <tr><td><code>/miaeco terra gen [noeco]</code></td><td>在选区生成真实地形+自动群系+自动森林（noeco=只地形）</td></tr>
 <tr><td><code>/miaeco terra resume [地图世界]</code></td><td>地图分片断点续跑（取消/崩溃后从下一片接着生成）</td></tr>
@@ -58,7 +58,7 @@
 <tr><td><code>/miaeco geo gen &lt;类型&gt; [强度] [风格]</code></td><td>在选区散布地貌奇观：stone_forest 石林 / karst_towers 峰林 / hoodoos 蘑菇岩 / arch 岩拱 / monoliths 孤石 / hot_spring 温泉；风格 stone/karst/sand/red/ice</td></tr>
 <tr><td><code>/miaeco geo types | undo</code></td><td>列出类型 / 撤销最近一次地貌</td></tr>
 <tr><td><code>/miaeco hub</code></td><td>进入 MiaEco 大厅：每个世界一块 20×20 <b>积雪沙盘</b>（雪高=地形，1 层雪=1/8 格精度；蓝玻璃=水面；最高/最低点悬浮标注；生成中的世界随分片实时"长出来"）</td></tr>
-<tr><td><code>/miaeco hub new &lt;名&gt; [size=…] [preview=12~48] [scale=…] [sea=…] [edge=…] [yscale=…]</code></td><td>开一块新世界草稿沙盘（preview=沙盘边长，独立于世界大小——想看得大就调大）</td></tr>
+<tr><td><code>/miaeco hub new &lt;名&gt; [size=N|AxB] [preview=12~48] [scale=…] [sea=…] [edge=…] [yscale=…]</code></td><td>开草稿沙盘：size 可写 <code>1000x500</code>（非正方形按比例居中嵌入沙盘）；preview=沙盘边长（操作台可再调）</td></tr>
 <tr><td><code>/miaeco hub roll &lt;名&gt; [seed]</code></td><td>抽卡：抽一个种子做 coarse 粗扫铺到沙盘（秒级，无限抽到满意为止）</td></tr>
 <tr><td><code>/miaeco hub water &lt;名&gt;</code></td><td>水系预览：按当前雪面规划河流湖泊，滴水粒子贴雪面画河 90 秒 + 沙盘旁画框挂 128² 俯视地图画</td></tr>
 <tr><td><code>/miaeco hub confirm &lt;名&gt;</code></td><td>送入生产：读回雪面修形差量（1 层雪 ≈ 45 米）作为草图混入扩散地形，创建世界并开始生成</td></tr>
@@ -66,6 +66,11 @@
 <tr><td><code>/miaeco clear &lt;森林&gt;</code></td><td>清除该森林所有树方块</td></tr>
 <tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（147 棵建筑师设计树）</td></tr>
 </table>
+
+<h2>0.26.0 非正方形地图 · 草稿沙盘可调 · 抽卡即见图</h2>
+<p><b>非正方形世界：</b><code>size=</code> 现在可以写 <code>1000x500</code>（或单数字=正方形）——<code>world create</code> 与 <code>hub new</code> 都支持，水文规划/分片流水线/草图/边缘海环全链按双轴工作。<b>沙盘里非正方形世界按纵横比居中放置、不占满</b>（四周留空看得清楚），画墙俯视图同样按比例 letterbox 居中。</p>
+<p><b>草稿沙盘尺寸可调：</b>草稿操作台新增"沙盘尺寸"（12~48，±4 步进）——调整时当前雪面<b>双线性重采样</b>到新网格，手修的形态不丢。</p>
+<p><b>抽卡即见图：</b>roll 完成后画墙俯视图立刻按这张卡刷新（含水系走线），不必再等 water；water 仍负责滴水粒子与水系统计播报。</p>
 
 <h2>0.25.0 河岸融入自然 · 大厅控制台 · 草稿全生命周期</h2>
 <p><b>河流彻底融入环境：</b>草坪旁的河，两岸就是草坪——只有中间一条细水路。①低地下切调浅（平原溪流水面只低于草皮 ~2 格，山涧仍深切）；②河岸的沙/砾/卵石镶边<b>整体废除</b>：滩皮只保留宽缓大河贴水线的零星沙洲斑与河心洲，小河两岸一律是所在群系的原生地表；③湍流"滚石岸"删除（水下卵石河床保留）；④岸边植被照旧——芦苇贴水而生，草皮河岸添蕨与矮草，只有植物、没有换皮。</p>

@@ -92,6 +92,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 }
                 Long seed = null;
                 Integer size = null;
+                int sizeZ = 0;
                 int scaleM = 30, sea = 63;
                 boolean openEdge = false;
                 double yscale = 1.0;
@@ -111,7 +112,11 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                                 try { seed = Long.parseLong(v); }
                                 catch (NumberFormatException e) { seed = (long) v.hashCode(); }
                             }
-                            case "size" -> size = Integer.parseInt(v);
+                            case "size" -> {
+                                int[] xz = parseSize(v);
+                                size = xz[0];
+                                sizeZ = xz[1];
+                            }
                             case "scale" -> scaleM = Integer.parseInt(v);
                             case "sea" -> sea = Integer.parseInt(v);
                             case "edge" -> {
@@ -125,16 +130,16 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                             default -> { sender.sendMessage(P + ChatColor.RED + "未知参数 " + k); return; }
                         }
                     } catch (NumberFormatException e) {
-                        sender.sendMessage(P + ChatColor.RED + k + " 必须是数字。");
+                        sender.sendMessage(P + ChatColor.RED + k + " 必须是数字（size 可写 1000x500）。");
                         return;
                     }
                 }
                 dev.timefiles.miaeco.world.EcoWorlds.MapSpec map = null;
                 if (size != null) {
                     int maxSize = eco.terra().settings().mapMaxSize();
-                    if (size < 64 || size > maxSize) {
-                        sender.sendMessage(P + ChatColor.RED + "size 需在 64~" + maxSize
-                                + "（大图分片流水生成，可断点续跑）。");
+                    if (size < 64 || size > maxSize || sizeZ < 64 || sizeZ > maxSize) {
+                        sender.sendMessage(P + ChatColor.RED + "size 每一维需在 64~" + maxSize
+                                + "（可写 1000x500 生成非正方形；大图分片流水生成，可断点续跑）。");
                         return;
                     }
                     if (scaleM != 15 && scaleM != 30 && scaleM != 60 && scaleM != 120) {
@@ -147,15 +152,16 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                         return;
                     }
                     // CPU 推理耗时预估提示（512² 原生 ≈ 27s 标定）
-                    long nativeSpan = scaleM <= 15 ? Math.max(1, size / 2L) : (long) size * (scaleM / 30);
-                    double hours = nativeSpan * nativeSpan / (512.0 * 512.0) * 27 / 3600.0;
+                    long nx = scaleM <= 15 ? Math.max(1, size / 2L) : (long) size * (scaleM / 30);
+                    long nz = scaleM <= 15 ? Math.max(1, sizeZ / 2L) : (long) sizeZ * (scaleM / 30);
+                    double hours = nx * nz / (512.0 * 512.0) * 27 / 3600.0;
                     String infDev = dev.timefiles.miaeco.terrain.TerrainConfig.inferenceDevice();
                     if (hours > 0.5 && "cpu".equals(infDev)) {
                         sender.sendMessage(P + ChatColor.YELLOW + String.format(
                                 "提示：这张图 CPU 推理预计约 %.1f 小时（分片推进可随时 cancel，"
                                         + "terra resume 续跑）。config 里 terrain.device=gpu 可大幅加速。", hours));
                     }
-                    map = new dev.timefiles.miaeco.world.EcoWorlds.MapSpec(size, scaleM, sea, openEdge, yscale);
+                    map = new dev.timefiles.miaeco.world.EcoWorlds.MapSpec(size, sizeZ, scaleM, sea, openEdge, yscale);
                 }
                 sender.sendMessage(P + ChatColor.GRAY + "创建世界中…");
                 String err = worlds.create(args[2], seed, map);
@@ -163,9 +169,9 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 long s = worlds.entry(args[2]).seed;
                 if (map != null) {
                     sender.sendMessage(P + ChatColor.GREEN + "地图世界 " + args[2] + " 已建（seed=" + s
-                            + " size=" + size + " 比例尺=" + scaleM + "m/格 海平面=" + sea
+                            + " size=" + map.sizeStr() + " 比例尺=" + scaleM + "m/格 海平面=" + sea
                             + (openEdge ? " 边缘=断崖" : "") + (yscale != 1.0 ? " yscale=" + yscale : "")
-                            + "，覆盖真实地貌约 " + (size * scaleM / 1000) + "×" + (size * scaleM / 1000)
+                            + "，覆盖真实地貌约 " + (size * scaleM / 1000) + "×" + (sizeZ * scaleM / 1000)
                             + "km），开始自动生成…");
                     String e2 = eco.terra().startMap(sender, args[2]);
                     if (e2 != null) sender.sendMessage(P + ChatColor.RED + e2);
@@ -263,6 +269,18 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         msg(s, "/miaeco world remove <名> confirm", "卸载并删除世界文件");
     }
 
+    /** size 参数解析："1024" → {1024,1024}；"1000x500"/"1000×500" → {1000,500}。 */
+    private static int[] parseSize(String v) {
+        String s = v.toLowerCase(Locale.ROOT).replace('×', 'x');
+        int ix = s.indexOf('x');
+        if (ix < 0) {
+            int n = Integer.parseInt(s.trim());
+            return new int[]{n, n};
+        }
+        return new int[]{Integer.parseInt(s.substring(0, ix).trim()),
+                Integer.parseInt(s.substring(ix + 1).trim())};
+    }
+
     /** 删除/重生成世界前清掉挂在该世界上的森林记录。 */
     private void purgeForestsOf(String worldName) {
         boolean removed = eco.forests().values()
@@ -342,7 +360,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                             + "size=世界大小（创建后固定）；preview=沙盘边长 12~48（想看得大就调大）。");
                     return;
                 }
-                int size = 1024, scaleM = 30, sea = 63, preview = 20;
+                int size = 1024, sizeZ = 1024, scaleM = 30, sea = 63, preview = 20;
                 boolean openEdge = false;
                 double yscale = 1.0;
                 for (int i = 3; i < args.length; i++) {
@@ -353,7 +371,11 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                     String v = a.substring(eq + 1);
                     try {
                         switch (k) {
-                            case "size" -> size = Integer.parseInt(v);
+                            case "size" -> {
+                                int[] xz = parseSize(v);
+                                size = xz[0];
+                                sizeZ = xz[1];
+                            }
                             case "preview" -> preview = Integer.parseInt(v);
                             case "scale" -> scaleM = Integer.parseInt(v);
                             case "sea" -> sea = Integer.parseInt(v);
@@ -362,13 +384,14 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                             default -> { sender.sendMessage(P + ChatColor.RED + "未知参数 " + k); return; }
                         }
                     } catch (NumberFormatException e) {
-                        sender.sendMessage(P + ChatColor.RED + k + " 必须是数字。");
+                        sender.sendMessage(P + ChatColor.RED + k + " 必须是数字（size 可写 1000x500）。");
                         return;
                     }
                 }
                 int maxSize = eco.terra().settings().mapMaxSize();
-                if (size < 320 || size > maxSize) {
-                    sender.sendMessage(P + ChatColor.RED + "size 需在 320~" + maxSize + "（草稿即地图世界）。");
+                if (size < 320 || size > maxSize || sizeZ < 320 || sizeZ > maxSize) {
+                    sender.sendMessage(P + ChatColor.RED + "size 每一维需在 320~" + maxSize
+                            + "（可写 1000x500 生成非正方形，沙盘里按比例居中显示）。");
                     return;
                 }
                 if (scaleM != 15 && scaleM != 30 && scaleM != 60 && scaleM != 120) {
@@ -377,7 +400,7 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 }
                 if (sea < 0 || sea > 200) { sender.sendMessage(P + ChatColor.RED + "sea 需在 0~200。"); return; }
                 if (yscale < 0.5 || yscale > 2.5) { sender.sendMessage(P + ChatColor.RED + "yscale 需在 0.5~2.5。"); return; }
-                String err = hub.newDraft(p, args[2], size, scaleM, sea, openEdge, yscale, preview);
+                String err = hub.newDraft(p, args[2], size, sizeZ, scaleM, sea, openEdge, yscale, preview);
                 if (err != null) sender.sendMessage(P + ChatColor.RED + err);
             }
             case "roll" -> {

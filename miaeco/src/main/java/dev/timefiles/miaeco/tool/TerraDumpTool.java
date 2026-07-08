@@ -55,6 +55,7 @@ public final class TerraDumpTool {
         fail |= splitterRun();
         fail |= simpleEcoRun();
         fail |= riverRun();
+        fail |= nonSquareRun();
         fail |= sketchRun();
         fail |= coastRun();
         fail |= canopyRun();
@@ -286,6 +287,55 @@ public final class TerraDumpTool {
         return fail;
     }
 
+    /** 非正方形地图（0.26.0）：960×640 合成场上规划+栅格化跑通，节点不出图框。 */
+    private static boolean nonSquareRun() {
+        final int SX = 960, SZ = 640, sea = 63;
+        var mapper = new HeightMapper(40, 250, 300, sea);
+        dev.timefiles.miaeco.terrain.RiverPlanner.HeightField hf = (wx, wz) -> {
+            double base = 380 - (wx + SX / 2.0) * 0.4;
+            double hills = 50 * Math.sin(wx / 91.0) * Math.cos(wz / 77.0)
+                    + 30 * Math.sin((wx + wz) / 57.0);
+            return mapper.yOfF((float) (base + hills));
+        };
+        var plan = dev.timefiles.miaeco.terrain.RiverPlanner.plan(
+                hf, sea, -SX / 2, -SZ / 2, SX, SZ, SEED, 1.0);
+        boolean fail = false;
+        if (plan.rivers().isEmpty()) {
+            System.out.println("NONSQ EMPTY（960×640 应出河网）");
+            fail = true;
+        }
+        int oob = 0;
+        for (var r : plan.rivers()) {
+            for (var n : r.nodes()) {
+                if (n.x() < -SX / 2.0 - 60 || n.x() > SX / 2.0 + 60
+                        || n.z() < -SZ / 2.0 - 60 || n.z() > SZ / 2.0 + 60) {
+                    oob++;
+                }
+            }
+        }
+        if (oob > 0) {
+            System.out.println("NONSQ OOB 节点出图框 " + oob);
+            fail = true;
+        }
+        // 栅格化窗口跑通（覆盖长边中段），无异常即可，围护不变量由 containSweep 保证
+        int EW = 320, EH = 320, ox = -160, oz = -160;
+        int[] ey = new int[EW * EH];
+        boolean[] eWater = new boolean[EW * EH];
+        for (int z = 0; z < EH; z++) {
+            for (int x = 0; x < EW; x++) {
+                float y = hf.yAt(ox + x + 0.5, oz + z + 0.5);
+                ey[z * EW + x] = (int) Math.floor(y);
+                eWater[z * EW + x] = y < sea - 0.5f;
+            }
+        }
+        dev.timefiles.miaeco.terrain.RiverPlanner.rasterize(plan, ey, eWater,
+                new boolean[EW * EH], new int[EW * EH], new boolean[EW * EH],
+                new byte[EW * EH], new byte[EW * EH], EW, EH, ox, oz);
+        System.out.printf("nonsq: 960×640 干支流 %d 湖 %d 节点 %d, 出框 %d%n",
+                plan.rivers().size(), plan.lakes().size(), plan.nodeCount(), oob);
+        return fail;
+    }
+
     /** hub 雪面草图：双线性纯函数的往返/平滑/钳边校验（无需权重）。 */
     private static boolean sketchRun() {
         final int SBN = 20, SIZE = 1024, X1 = -SIZE / 2;
@@ -317,6 +367,22 @@ public final class TerraDumpTool {
                 break;
             }
             prev = v;
+        }
+        // 非方形草图网格：20×10 中心还原
+        float[] sk2 = new float[20 * 10];
+        for (int i = 0; i < sk2.length; i++) sk2[i] = (i % 20) * 50 - (i / 20) * 30;
+        for (int cz = 0; cz < 10; cz += 3) {
+            for (int cx = 0; cx < 20; cx += 5) {
+                double wx = -500 + (cx + 0.5) * 1000 / 20.0;
+                double wz = -250 + (cz + 0.5) * 500 / 10.0;
+                float v = dev.timefiles.miaeco.terrain.TerraService.sketchAt(
+                        sk2, 20, 10, -500, -250, 1000, 500, wx, wz);
+                if (Math.abs(v - sk2[cz * 20 + cx]) > 0.01) {
+                    System.out.printf("SKETCH NONSQ FAIL @%d,%d got %.2f want %.2f%n",
+                            cx, cz, v, sk2[cz * 20 + cx]);
+                    fail = true;
+                }
+            }
         }
         // hub 层级映射往返：米 → 层级 → 米，误差 ≤ 半层
         for (float m : new float[]{-3000, -500, -45, 0, 45, 400, 1500, 3200}) {

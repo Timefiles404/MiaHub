@@ -96,20 +96,46 @@ public final class HubService {
     static final class Draft {
         String name;
         int plot;
-        int size;
+        int size;                   // X 跨度
+        int sizeZ;                  // Z 跨度（0.26.0 非正方形；正方形 = size）
         int mpb;
         int sea;
         boolean openEdge;
         double yscale;
-        int preview = DEFAULT_SB;   // 沙盘边长（创建时定，独立于 size）
+        int preview = DEFAULT_SB;   // 沙盘边长（控制台可调）
         Long seed;                  // null = 还没抽过
-        byte[] baseLvl;             // 抽卡基线层级（confirm 时与雪面求差）
-        byte[] lastLvl;             // 最近一次已知雪面（confirm 存档/恢复重铺用）
+        byte[] baseLvl;             // 抽卡基线层级（confirm 时与雪面求差，gw×gh）
+        byte[] lastLvl;             // 最近一次已知雪面（confirm 存档/恢复重铺用，gw×gh）
+
+        String sizeStr() {
+            return size == sizeZ ? size + "²" : size + "×" + sizeZ;
+        }
     }
 
-    /** 一个世界的采样快照（floor/surf 为 sb² 的 short，MIN_VALUE=虚空）。 */
+    /**
+     * 世界矩形按纵横比嵌入 sb² 沙盘（非正方形世界不占满、居中放置）：
+     * 返回 {gw, gh, offX, offZ}——雪面网格 gw×gh、在沙盘内的偏移。
+     */
+    static int[] gridOf(int sb, int spanX, int spanZ) {
+        int gw, gh;
+        if (spanX >= spanZ) {
+            gw = sb;
+            gh = Math.max(4, (int) Math.round(sb * spanZ / (double) spanX));
+        } else {
+            gh = sb;
+            gw = Math.max(4, (int) Math.round(sb * spanX / (double) spanZ));
+        }
+        return new int[]{gw, gh, (sb - gw) / 2, (sb - gh) / 2};
+    }
+
+    private static int[] gridOf(Draft d) {
+        return gridOf(d.preview, d.size, d.sizeZ);
+    }
+
+    /** 一个世界的采样快照（floor/surf 为 gw×gh 的 short，MIN_VALUE=虚空）。 */
     static final class Snap {
         int patchCount;
+        int gw, gh;
         short[] floor;
         short[] surf;
     }
@@ -168,6 +194,8 @@ public final class HubService {
         for (var e : snaps.entrySet()) {
             String b = "snap." + e.getKey() + ".";
             yml.set(b + "patches", e.getValue().patchCount);
+            yml.set(b + "gw", e.getValue().gw);
+            yml.set(b + "gh", e.getValue().gh);
             yml.set(b + "floor", shortsB64(e.getValue().floor));
             yml.set(b + "surf", shortsB64(e.getValue().surf));
         }
@@ -185,6 +213,7 @@ public final class HubService {
             String b = root + "." + d.name + ".";
             yml.set(b + "plot", d.plot);
             yml.set(b + "size", d.size);
+            yml.set(b + "sizez", d.sizeZ);
             yml.set(b + "mpb", d.mpb);
             yml.set(b + "sea", d.sea);
             yml.set(b + "edge", d.openEdge ? "open" : "sea");
@@ -217,9 +246,14 @@ public final class HubService {
             for (String k : sn.getKeys(false)) {
                 Snap s = new Snap();
                 s.patchCount = sn.getInt(k + ".patches");
+                s.gw = sn.getInt(k + ".gw", 0);
+                s.gh = sn.getInt(k + ".gh", 0);
                 s.floor = b64Shorts(sn.getString(k + ".floor"));
                 s.surf = b64Shorts(sn.getString(k + ".surf"));
-                if (s.floor != null && s.surf != null && s.floor.length == s.surf.length) snaps.put(k, s);
+                if (s.floor != null && s.surf != null && s.floor.length == s.surf.length
+                        && s.gw > 0 && s.gh > 0 && s.floor.length == s.gw * s.gh) {
+                    snaps.put(k, s);
+                }
             }
         }
         loadDrafts(yml, "drafts", drafts);
@@ -243,14 +277,16 @@ public final class HubService {
             d.name = k;
             d.plot = ds.getInt(k + ".plot");
             d.size = ds.getInt(k + ".size", 1024);
+            d.sizeZ = ds.getInt(k + ".sizez", d.size);
             d.mpb = ds.getInt(k + ".mpb", 30);
             d.sea = ds.getInt(k + ".sea", 63);
             d.openEdge = "open".equals(ds.getString(k + ".edge", "sea"));
             d.yscale = ds.getDouble(k + ".yscale", 1.0);
             d.preview = Math.max(MIN_SB, Math.min(MAX_SB, ds.getInt(k + ".preview", DEFAULT_SB)));
             if (ds.contains(k + ".seed")) d.seed = ds.getLong(k + ".seed");
-            d.baseLvl = b64Bytes(ds.getString(k + ".base"), d.preview * d.preview);
-            d.lastLvl = b64Bytes(ds.getString(k + ".last"), d.preview * d.preview);
+            int[] g = gridOf(d);
+            d.baseLvl = b64Bytes(ds.getString(k + ".base"), g[0] * g[1]);
+            d.lastLvl = b64Bytes(ds.getString(k + ".last"), g[0] * g[1]);
             map.put(k, d);
         }
     }
@@ -502,7 +538,9 @@ public final class HubService {
         Integer built = builtView.get(name);
         if (built != null && built == entry.patches.size()) return 0;
         Snap s = snaps.get(name);
-        if (s != null && s.patchCount == entry.patches.size() && s.floor.length == sb * sb) {
+        int[] eg = expectedGrid(entry, sb);
+        if (s != null && s.patchCount == entry.patches.size()
+                && eg != null && s.gw == eg[0] && s.gh == eg[1]) {
             buildViewFromSnap(w, name, plot, sb, s);
             return 1;
         }
@@ -510,14 +548,38 @@ public final class HubService {
         return 2;
     }
 
+    /** 该世界当前应有的采样网格尺寸（快照有效性校验）。 */
+    private int[] expectedGrid(EcoWorlds.Entry entry, int sb) {
+        int spanX, spanZ;
+        if (entry.map != null) {
+            spanX = entry.map.size();
+            spanZ = entry.map.sizeZ();
+        } else {
+            if (entry.patches.isEmpty()) return null;
+            int minX = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
+            int maxX = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
+            for (EcoWorlds.Patch pt : entry.patches) {
+                minX = Math.min(minX, pt.minX());
+                minZ = Math.min(minZ, pt.minZ());
+                maxX = Math.max(maxX, pt.maxX());
+                maxZ = Math.max(maxZ, pt.maxZ());
+            }
+            spanX = maxX - minX + 1;
+            spanZ = maxZ - minZ + 1;
+        }
+        int[] g = gridOf(sb, spanX, spanZ);
+        return new int[]{g[0], g[1]};
+    }
+
     private void ensureDraftPlot(World w, Draft d) {
         buildPlatform(w, d.plot, d.preview);
         ensurePlotConsole(w, d.plot, d.preview);
         updateTitle(w, d.plot, d.preview, draftTitle(d));
         if (builtDrafts.contains(d.name)) return;
+        int[] g = gridOf(d);
         byte[] lvl = d.lastLvl != null ? d.lastLvl : d.baseLvl;
-        if (lvl == null || lvl.length != d.preview * d.preview) {
-            lvl = new byte[d.preview * d.preview];
+        if (lvl == null || lvl.length != g[0] * g[1]) {
+            lvl = new byte[g[0] * g[1]];
             java.util.Arrays.fill(lvl, (byte) SEA_LVL);
         }
         buildDraftFromLevels(w, d, lvl, null);
@@ -534,8 +596,8 @@ public final class HubService {
         return null;
     }
 
-    /** /miaeco hub new：开一块草稿沙盘（preview=沙盘边长，独立于 size）。 */
-    public String newDraft(Player p, String name, int size, int mpb, int sea,
+    /** /miaeco hub new：开一块草稿沙盘（preview=沙盘边长，独立于世界大小；支持非正方形）。 */
+    public String newDraft(Player p, String name, int sizeX, int sizeZ, int mpb, int sea,
                            boolean openEdge, double yscale, int preview) {
         if (!NAME_OK.matcher(name).matches()) return "名字只能用字母/数字/下划线/横线（≤32 字符）。";
         if (drafts.containsKey(name)) return "已有同名草稿（hub tp " + name + " 去看看）。";
@@ -546,13 +608,15 @@ public final class HubService {
         Draft d = new Draft();
         d.name = name;
         d.plot = allocPlot();
-        d.size = size;
+        d.size = sizeX;
+        d.sizeZ = sizeZ;
         d.mpb = mpb;
         d.sea = sea;
         d.openEdge = openEdge;
         d.yscale = yscale;
         d.preview = preview;
-        d.baseLvl = new byte[preview * preview];
+        int[] g = gridOf(d);
+        d.baseLvl = new byte[g[0] * g[1]];
         java.util.Arrays.fill(d.baseLvl, (byte) SEA_LVL);
         d.lastLvl = d.baseLvl.clone();
         drafts.put(name, d);
@@ -560,28 +624,39 @@ public final class HubService {
         save();
         ensureTasks();
         p.teleport(plotViewLoc(w, d.plot, d.preview));
-        p.sendMessage(P + ChatColor.GREEN + "草稿沙盘 " + name + " 已开（世界 " + size + "² @" + mpb
-                + "m/格，沙盘 " + preview + "²，海平面 " + sea + (openEdge ? "，断崖边缘" : "") + "）。");
+        p.sendMessage(P + ChatColor.GREEN + "草稿沙盘 " + name + " 已开（世界 " + d.sizeStr() + " @" + mpb
+                + "m/格，沙盘 " + preview + "²" + (sizeX != sizeZ ? "（世界矩形居中嵌入）" : "")
+                + "，海平面 " + sea + (openEdge ? "，断崖边缘" : "") + "）。");
         p.sendMessage(P + ChatColor.GRAY + "沙盘旁的操作台可调参数/抽卡/预览/送产；"
                 + "或命令 /miaeco hub roll " + name + " 抽地形（1 层雪 ≈ 45 米，海平面 = 3 格雪）。");
         return null;
     }
 
-    /** /miaeco hub roll：抽一张 coarse 地形铺到草稿沙盘（无限抽）。 */
+    /** /miaeco hub roll：抽一张 coarse 地形铺到草稿沙盘（无限抽），画墙同步刷新。 */
     public String roll(CommandSender sender, String name, Long seedOrNull) {
         Draft d = drafts.get(name);
         if (d == null) return "没有草稿 " + name + "（先 /miaeco hub new）。";
         long seed = seedOrNull != null ? seedOrNull : new java.util.Random().nextLong();
-        return eco.terra().hubPreview(sender, seed, d.size, d.mpb, d.openEdge, d.preview, meters ->
+        int[] g = gridOf(d);
+        return eco.terra().hubPreview(sender, seed, d.size, d.sizeZ, d.mpb, d.openEdge,
+                g[0], g[1], meters ->
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     Draft cur = drafts.get(name);
                     if (cur == null) return;
+                    int[] g2 = gridOf(cur);
+                    if (meters.length != g2[0] * g2[1]) {
+                        sender.sendMessage(P + ChatColor.YELLOW
+                                + "抽卡期间沙盘尺寸变了，这张卡作废——请重新 roll。");
+                        return;
+                    }
                     cur.seed = seed;
                     World w = ensureWorld();
                     if (w == null) return;
                     buildDraftFromMeters(w, cur, meters);
                     updateTitle(w, cur.plot, cur.preview, draftTitle(cur));
                     save();
+                    // 画墙跟着这张卡刷新（0.26.0：抽卡即见图，不必等 water）
+                    renderWallAsync(sender, cur, meters, cur.baseLvl, false);
                 }));
     }
 
@@ -591,36 +666,50 @@ public final class HubService {
         if (d == null) return "没有草稿 " + name + "。水系预览目前只支持草稿沙盘。";
         World w = ensureWorld();
         if (w == null) return "大厅世界不可用。";
-        int sb = d.preview;
-        byte[] snowNow = readSnowLevels(w, d.plot, sb);
+        byte[] snowNow = readDraftLevels(w, d);
         d.lastLvl = snowNow.clone();
-        float[] meters = new float[sb * sb];
-        for (int i = 0; i < sb * sb; i++) {
+        float[] meters = new float[snowNow.length];
+        for (int i = 0; i < snowNow.length; i++) {
             meters[i] = (float) (((snowNow[i] & 0xFF) - SEA_LVL) * M_PER_LEVEL);
         }
         sender.sendMessage(P + ChatColor.GRAY + "按雪面规划水系中…（近似走线，实际以生成为准）");
+        renderWallAsync(sender, d, meters, snowNow, true);
+        return null;
+    }
+
+    /**
+     * 渲染当前雪面的水系俯视图并挂上画墙；particles=true（water 命令）时同时沿雪面
+     * 铺滴水粒子并播报水系统计。roll 后以 particles=false 静默刷新画墙。
+     */
+    private void renderWallAsync(CommandSender sender, Draft d, float[] meters,
+                                 byte[] snowLvl, boolean particles) {
+        int[] g = gridOf(d);
+        int gw = g[0], gh = g[1];
+        if (meters.length != gw * gh) return;    // 网格已变（尺寸调整竞态），丢弃
         long planSeed = (d.seed != null ? d.seed : d.name.hashCode()) ^ 0x51E77AL;
         var st = eco.terra().settings();
         double ys = Math.max(0.5, Math.min(2.5, d.yscale));
         HeightMapper mapper = new HeightMapper(st.vScale() / ys, st.softStartY(), st.maxY(), d.sea);
-        int x1 = -d.size / 2, z1 = -d.size / 2;
-        int k = mapKOf(name);
+        int x1 = -d.size / 2, z1 = -d.sizeZ / 2;
+        int k = mapKOf(d.name);
+        String name = d.name;
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
-                RiverPlanner.HeightField hf = (wx, wz) ->
-                        mapper.yOfF(TerraService.sketchAt(meters, sb, x1, z1, d.size, wx, wz));
-                RiverPlanner.RiverPlan plan = RiverPlanner.plan(hf, d.sea, x1, z1, d.size,
-                        planSeed, st.riverDensity());
+                RiverPlanner.HeightField hf = (wx, wz) -> mapper.yOfF(
+                        TerraService.sketchAt(meters, gw, gh, x1, z1, d.size, d.sizeZ, wx, wz));
+                RiverPlanner.RiverPlan plan = RiverPlanner.plan(hf, d.sea, x1, z1,
+                        d.size, d.sizeZ, planSeed, st.riverDensity());
                 BufferedImage img = renderPreview(meters, plan, mapper, d, 128 * k);
                 try {
                     ImageIO.write(img, "png", mapPng(name));
                 } catch (IOException ignored) { }
-                List<double[]> pts = particlePoints(d, snowNow, plan, x1, z1);
+                List<double[]> pts = particles ? particlePoints(d, snowLvl, plan, x1, z1) : null;
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     World hub = Bukkit.getWorld(HUB_WORLD);
                     if (hub == null) return;
                     Integer plot = plotOf(name);
                     if (plot != null) attachPreviewWall(hub, name, plot, img, k);
+                    if (!particles) return;
                     int mains = 0;
                     for (RiverPlanner.River r : plan.rivers()) {
                         if (r.kind() == RiverPlanner.R_MAIN) mains++;
@@ -638,12 +727,13 @@ public final class HubService {
                     }
                 });
             } catch (Throwable t) {
-                plugin.getLogger().log(Level.WARNING, "hub water", t);
-                Bukkit.getScheduler().runTask(plugin, () ->
-                        sender.sendMessage(P + ChatColor.RED + "水系预览失败: " + t.getMessage()));
+                plugin.getLogger().log(Level.WARNING, "hub wall render", t);
+                if (particles) {
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            sender.sendMessage(P + ChatColor.RED + "水系预览失败: " + t.getMessage()));
+                }
             }
         });
-        return null;
     }
 
     /** /miaeco hub confirm：读回雪面差量作为草图，创建世界并送入生产；草稿转存档。 */
@@ -654,23 +744,24 @@ public final class HubService {
         if (eco.terra().busy()) return "有地形任务在跑，等它完成（或 terra cancel）再 confirm。";
         World w = ensureWorld();
         if (w == null) return "大厅世界不可用。";
-        int sb = d.preview;
-        byte[] now = readSnowLevels(w, d.plot, sb);
+        int[] g = gridOf(d);
+        byte[] now = readDraftLevels(w, d);
         d.lastLvl = now.clone();
-        float[] sketch = new float[sb * sb];
+        float[] sketch = new float[now.length];
         int changed = 0;
-        for (int i = 0; i < sb * sb; i++) {
+        for (int i = 0; i < now.length; i++) {
             int dl = (now[i] & 0xFF) - (d.baseLvl[i] & 0xFF);
             if (dl != 0) changed++;
             sketch[i] = (float) (dl * M_PER_LEVEL);
         }
-        var map = new EcoWorlds.MapSpec(d.size, d.mpb, d.sea, d.openEdge, d.yscale);
+        var map = new EcoWorlds.MapSpec(d.size, d.sizeZ, d.mpb, d.sea, d.openEdge, d.yscale);
         String err = eco.worlds().create(name, d.seed, map);
         if (err != null) return err;
         EcoWorlds.Entry entry = eco.worlds().entry(name);
         if (changed > 0) {
             entry.sketch = sketch;
-            entry.sketchN = sb;
+            entry.sketchN = g[0];
+            entry.sketchNZ = g[1];
             eco.worlds().save();
         }
         plots.put(name, d.plot);
@@ -734,9 +825,10 @@ public final class HubService {
             plotSb.remove(name);
             if (w != null) {
                 byte[] lvl = back.lastLvl != null ? back.lastLvl : back.baseLvl;
+                int[] bg = gridOf(back);
                 buildPlatform(w, back.plot, back.preview);
                 ensurePlotConsole(w, back.plot, back.preview);
-                if (lvl != null && lvl.length == back.preview * back.preview) {
+                if (lvl != null && lvl.length == bg[0] * bg[1]) {
                     buildDraftFromLevels(w, back, lvl, null);
                 }
                 updateTitle(w, back.plot, back.preview, draftTitle(back));
@@ -826,7 +918,7 @@ public final class HubService {
     private static final class SampleRun {
         String name;
         World target;
-        int plot, sb;
+        int plot, sb, gw, gh;
         int[] wxs, wzs;
         List<List<Integer>> groups = new ArrayList<>();
         int nextGroup, inFlight, done;
@@ -868,7 +960,7 @@ public final class HubService {
                         }
                         r.done += cells.size();
                         r.inFlight--;
-                        if (r.done >= r.sb * r.sb && r.inFlight == 0) finishRun(r);
+                        if (r.done >= r.gw * r.gh && r.inFlight == 0) finishRun(r);
                     }));
         }
     }
@@ -880,11 +972,12 @@ public final class HubService {
         Integer plot = plots.get(name);
         if (entry == null || target == null || hub == null || plot == null) return null;
         int sb = sbOf(name);
-        int x1, z1, span;
+        int x1, z1, spanX, spanZ;
         if (entry.map != null) {
-            span = entry.map.size();
-            x1 = -span / 2;
-            z1 = -span / 2;
+            spanX = entry.map.size();
+            spanZ = entry.map.sizeZ();
+            x1 = -spanX / 2;
+            z1 = -spanZ / 2;
         } else {
             if (entry.patches.isEmpty()) {
                 clearSandbox(hub, plot, sb);
@@ -899,16 +992,20 @@ public final class HubService {
                 maxX = Math.max(maxX, pt.maxX());
                 maxZ = Math.max(maxZ, pt.maxZ());
             }
-            span = Math.max(maxX - minX + 1, maxZ - minZ + 1);
+            spanX = maxX - minX + 1;
+            spanZ = maxZ - minZ + 1;
             x1 = minX;
             z1 = minZ;
         }
+        int[] g = gridOf(sb, spanX, spanZ);
         SampleRun r = new SampleRun();
         r.name = name;
         r.target = target;
         r.plot = plot;
         r.sb = sb;
-        int n = sb * sb;
+        r.gw = g[0];
+        r.gh = g[1];
+        int n = r.gw * r.gh;
         r.wxs = new int[n];
         r.wzs = new int[n];
         r.floor = new short[n];
@@ -916,8 +1013,8 @@ public final class HubService {
         java.util.Arrays.fill(r.floor, Short.MIN_VALUE);
         Map<Long, List<Integer>> byChunk = new LinkedHashMap<>();
         for (int i = 0; i < n; i++) {
-            r.wxs[i] = x1 + (int) ((i % sb + 0.5) * span / (double) sb);
-            r.wzs[i] = z1 + (int) ((i / sb + 0.5) * span / (double) sb);
+            r.wxs[i] = x1 + (int) ((i % r.gw + 0.5) * spanX / (double) r.gw);
+            r.wzs[i] = z1 + (int) ((i / r.gw + 0.5) * spanZ / (double) r.gh);
             long key = ((long) (r.wxs[i] >> 4) << 32) ^ ((r.wzs[i] >> 4) & 0xFFFFFFFFL);
             byChunk.computeIfAbsent(key, k -> new ArrayList<>()).add(i);
         }
@@ -930,6 +1027,8 @@ public final class HubService {
         EcoWorlds.Entry entry = eco.worlds().entry(r.name);
         Snap s = new Snap();
         s.patchCount = entry == null ? 0 : entry.patches.size();
+        s.gw = r.gw;
+        s.gh = r.gh;
         s.floor = r.floor;
         s.surf = r.surf;
         snaps.put(r.name, s);
@@ -944,35 +1043,38 @@ public final class HubService {
     private record Col(int snow, int glassY) { }
 
     private void buildViewFromSnap(World w, String name, int plot, int sb, Snap s) {
+        int gw = s.gw, gh = s.gh;
+        int offX = (sb - gw) / 2, offZ = (sb - gh) / 2;
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
-        for (int i = 0; i < sb * sb; i++) {
+        for (int i = 0; i < gw * gh; i++) {
             if (s.floor[i] == Short.MIN_VALUE) continue;
             minY = Math.min(minY, s.floor[i]);
             maxY = Math.max(maxY, Math.max(s.floor[i], s.surf[i]));
         }
-        Col[] cols = new Col[sb * sb];
+        Col[] cols = emptyCols(sb);
         int hiCell = -1, loCell = -1, hiY = Integer.MIN_VALUE, loY = Integer.MAX_VALUE;
         if (minY != Integer.MAX_VALUE) {
             int span = Math.max(8, maxY - minY);
-            for (int i = 0; i < sb * sb; i++) {
+            for (int i = 0; i < gw * gh; i++) {
+                Col c;
                 if (s.floor[i] == Short.MIN_VALUE) {
-                    cols[i] = new Col(0, -1);
-                    continue;
-                }
-                boolean water = s.surf[i] > s.floor[i];
-                int lvl = 4 + (int) Math.round(92.0 * (s.floor[i] - minY) / span);
-                if (water) {
-                    int glassLvl = Math.max(lvl, 4 + (int) Math.round(92.0 * (s.surf[i] - minY) / span));
-                    int glassY = blockTopY(glassLvl);
-                    cols[i] = new Col(Math.min(lvl, (glassY - BASE_Y - 1) * 8), glassY);
+                    c = new Col(0, -1);
                 } else {
-                    cols[i] = new Col(lvl, -1);
-                    if (s.floor[i] > hiY) { hiY = s.floor[i]; hiCell = i; }
-                    if (s.floor[i] < loY) { loY = s.floor[i]; loCell = i; }
+                    boolean water = s.surf[i] > s.floor[i];
+                    int lvl = 4 + (int) Math.round(92.0 * (s.floor[i] - minY) / span);
+                    if (water) {
+                        int glassLvl = Math.max(lvl,
+                                4 + (int) Math.round(92.0 * (s.surf[i] - minY) / span));
+                        int glassY = blockTopY(glassLvl);
+                        c = new Col(Math.min(lvl, (glassY - BASE_Y - 1) * 8), glassY);
+                    } else {
+                        c = new Col(lvl, -1);
+                        if (s.floor[i] > hiY) { hiY = s.floor[i]; hiCell = i; }
+                        if (s.floor[i] < loY) { loY = s.floor[i]; loCell = i; }
+                    }
                 }
+                cols[(i / gw + offZ) * sb + i % gw + offX] = c;
             }
-        } else {
-            java.util.Arrays.fill(cols, new Col(0, -1));
         }
         final int fHi = hiCell, fLo = loCell, fHiY = hiY, fLoY = loY;
         EcoWorlds.Entry entry = eco.worlds().entry(name);
@@ -980,32 +1082,42 @@ public final class HubService {
         placeSandbox(w, plot, sb, cols, () -> {
             builtView.put(name, stamp);
             removeTagged(w, plot, sb, "miaeco_hub_mark_" + plot);
-            if (fHi >= 0) markCell(w, plot, sb, fHi, ChatColor.GOLD + "▲ 最高 y=" + fHiY);
-            if (fLo >= 0 && fLo != fHi) markCell(w, plot, sb, fLo, ChatColor.AQUA + "▼ 最低 y=" + fLoY);
+            if (fHi >= 0) {
+                markCell(w, plot, offX + fHi % gw, offZ + fHi / gw,
+                        ChatColor.GOLD + "▲ 最高 y=" + fHiY);
+            }
+            if (fLo >= 0 && fLo != fHi) {
+                markCell(w, plot, offX + fLo % gw, offZ + fLo / gw,
+                        ChatColor.AQUA + "▼ 最低 y=" + fLoY);
+            }
             updateTitle(w, plot, sb, viewTitle(name));
         });
     }
 
     private void buildDraftFromMeters(World w, Draft d, float[] meters) {
         int sb = d.preview;
-        Col[] cols = new Col[sb * sb];
-        byte[] base = new byte[sb * sb];
+        int[] g = gridOf(d);
+        int gw = g[0], gh = g[1], offX = g[2], offZ = g[3];
+        Col[] cols = emptyCols(sb);
+        byte[] base = new byte[gw * gh];
         int hiCell = -1, loCell = -1;
         float hiM = -Float.MAX_VALUE, loM = Float.MAX_VALUE;
-        for (int i = 0; i < sb * sb; i++) {
+        for (int i = 0; i < gw * gh; i++) {
             float m = meters[i];
             int lvl = lvlOfMeters(m);
             int placed;
+            Col c;
             if (m < 0) {
                 int glassY = blockTopY(SEA_LVL);
                 placed = Math.min(lvl, (glassY - BASE_Y - 1) * 8);
-                cols[i] = new Col(placed, glassY);
+                c = new Col(placed, glassY);
             } else {
                 placed = Math.max(lvl, 1);
-                cols[i] = new Col(placed, -1);
+                c = new Col(placed, -1);
                 if (m > hiM) { hiM = m; hiCell = i; }
                 if (m < loM) { loM = m; loCell = i; }
             }
+            cols[(i / gw + offZ) * sb + i % gw + offX] = c;
             base[i] = (byte) placed;
         }
         d.baseLvl = base;
@@ -1014,21 +1126,87 @@ public final class HubService {
         final float fHiM = hiM, fLoM = loM;
         placeSandbox(w, d.plot, sb, cols, () -> {
             removeTagged(w, d.plot, sb, "miaeco_hub_mark_" + d.plot);
-            if (fHi >= 0) markCell(w, d.plot, sb, fHi, ChatColor.GOLD + "▲ 最高 ~" + (int) fHiM + "m");
-            if (fLo >= 0 && fLo != fHi) markCell(w, d.plot, sb, fLo, ChatColor.AQUA + "▼ 最低 ~" + (int) fLoM + "m");
+            if (fHi >= 0) {
+                markCell(w, d.plot, offX + fHi % gw, offZ + fHi / gw,
+                        ChatColor.GOLD + "▲ 最高 ~" + (int) fHiM + "m");
+            }
+            if (fLo >= 0 && fLo != fHi) {
+                markCell(w, d.plot, offX + fLo % gw, offZ + fLo / gw,
+                        ChatColor.AQUA + "▼ 最低 ~" + (int) fLoM + "m");
+            }
         });
         builtDrafts.add(d.name);
     }
 
     private void buildDraftFromLevels(World w, Draft d, byte[] lvl, Runnable onDone) {
         int sb = d.preview;
-        Col[] cols = new Col[sb * sb];
-        for (int i = 0; i < sb * sb; i++) {
+        int[] g = gridOf(d);
+        int gw = g[0], gh = g[1], offX = g[2], offZ = g[3];
+        Col[] cols = emptyCols(sb);
+        for (int i = 0; i < gw * gh && i < lvl.length; i++) {
             int v = lvl[i] & 0xFF;
             // 低于海平面层级的柱按水显示（草稿玻璃恒在海平面层）
-            cols[i] = v < SEA_LVL ? new Col(v, blockTopY(SEA_LVL)) : new Col(Math.max(v, 1), -1);
+            cols[(i / gw + offZ) * sb + i % gw + offX] =
+                    v < SEA_LVL ? new Col(v, blockTopY(SEA_LVL)) : new Col(Math.max(v, 1), -1);
         }
         placeSandbox(w, d.plot, sb, cols, onDone);
+    }
+
+    private static Col[] emptyCols(int sb) {
+        Col[] cols = new Col[sb * sb];
+        java.util.Arrays.fill(cols, new Col(0, -1));
+        return cols;
+    }
+
+    /** 调整草稿沙盘尺寸（0.26.0）：雪面双线性重采样到新网格，清区重建。 */
+    public String setDraftPreview(String name, int newSb) {
+        Draft d = drafts.get(name);
+        if (d == null) return "没有草稿 " + name + "。";
+        newSb = Math.max(MIN_SB, Math.min(MAX_SB, newSb));
+        if (newSb == d.preview) return null;
+        World w = Bukkit.getWorld(HUB_WORLD);
+        int[] og = gridOf(d);
+        byte[] last = d.lastLvl;
+        if (w != null) {
+            last = readDraftLevels(w, d);           // 以沙盘现状为准（可能手修过）
+            clearBox(w, plotX(d.plot) - 1, plotZ(d.plot) - 1,
+                    plotX(d.plot) + platW(Math.max(d.preview, newSb)) + 4,
+                    plotZ(d.plot) + platW(Math.max(d.preview, newSb)) + 1,
+                    BASE_Y, BASE_Y + 24);
+            removeAllPlotTags(w, d.plot, Math.max(d.preview, newSb));
+        }
+        d.preview = newSb;
+        int[] ng = gridOf(d);
+        d.baseLvl = resampleLevels(d.baseLvl, og[0], og[1], ng[0], ng[1]);
+        d.lastLvl = resampleLevels(last, og[0], og[1], ng[0], ng[1]);
+        builtDrafts.remove(name);
+        if (w != null) ensureDraftPlot(w, d);
+        save();
+        return null;
+    }
+
+    /** 层级网格双线性重采样（沙盘尺寸调整时保留雪面形态）。 */
+    private static byte[] resampleLevels(byte[] src, int sw, int sh, int dw, int dh) {
+        byte[] out = new byte[dw * dh];
+        if (src == null || src.length != sw * sh) {
+            java.util.Arrays.fill(out, (byte) SEA_LVL);
+            return out;
+        }
+        for (int z = 0; z < dh; z++) {
+            for (int x = 0; x < dw; x++) {
+                double u = Math.max(0, Math.min(sw - 1.0, (x + 0.5) * sw / dw - 0.5));
+                double v = Math.max(0, Math.min(sh - 1.0, (z + 0.5) * sh / dh - 0.5));
+                int x0 = (int) u, x1 = Math.min(sw - 1, x0 + 1);
+                int z0 = (int) v, z1 = Math.min(sh - 1, z0 + 1);
+                double tx = u - x0, tz = v - z0;
+                double val = (1 - tz) * ((1 - tx) * (src[z0 * sw + x0] & 0xFF)
+                        + tx * (src[z0 * sw + x1] & 0xFF))
+                        + tz * ((1 - tx) * (src[z1 * sw + x0] & 0xFF)
+                        + tx * (src[z1 * sw + x1] & 0xFF));
+                out[z * dw + x] = (byte) Math.max(0, Math.min(MAX_LVL, (int) Math.round(val)));
+            }
+        }
+        return out;
     }
 
     /** 分批铺盘：每 tick 清+铺 3 行；同地块并发时挂起后跑（最后一次生效）。 */
@@ -1073,12 +1251,15 @@ public final class HubService {
         }.runTaskTimer(plugin, 1L, 1L);
     }
 
-    /** 读当前雪面层级（confirm/water 用）。 */
-    private byte[] readSnowLevels(World w, int plot, int sb) {
-        byte[] out = new byte[sb * sb];
-        int px = plotX(plot), pz = plotZ(plot);
-        for (int i = 0; i < sb * sb; i++) {
-            out[i] = (byte) readColumnLvl(w, px + INSET + i % sb, pz + INSET + i / sb);
+    /** 读草稿当前雪面层级（confirm/water/尺寸调整用）：只读世界矩形内的 gw×gh 格。 */
+    private byte[] readDraftLevels(World w, Draft d) {
+        int[] g = gridOf(d);
+        int gw = g[0], gh = g[1], offX = g[2], offZ = g[3];
+        byte[] out = new byte[gw * gh];
+        int px = plotX(d.plot), pz = plotZ(d.plot);
+        for (int i = 0; i < gw * gh; i++) {
+            out[i] = (byte) readColumnLvl(w,
+                    px + INSET + offX + i % gw, pz + INSET + offZ + i / gw);
         }
         return out;
     }
@@ -1177,9 +1358,9 @@ public final class HubService {
         });
     }
 
-    private void markCell(World w, int plot, int sb, int cell, String text) {
+    private void markCell(World w, int plot, int lx, int lz, String text) {
         String tag = "miaeco_hub_mark_" + plot;
-        int bx = plotX(plot) + INSET + cell % sb, bz = plotZ(plot) + INSET + cell / sb;
+        int bx = plotX(plot) + INSET + lx, bz = plotZ(plot) + INSET + lz;
         int topY = w.getHighestBlockYAt(bx, bz) + 1;
         Location loc = new Location(w, bx + 0.5, topY + 0.8, bz + 0.5);
         w.spawn(loc, TextDisplay.class, td -> {
@@ -1224,7 +1405,7 @@ public final class HubService {
         EcoWorlds.Entry e = eco.worlds().entry(worldName);
         StringBuilder sb = new StringBuilder(ChatColor.WHITE + "" + ChatColor.BOLD + worldName);
         if (e != null && e.map != null) {
-            sb.append('\n').append(ChatColor.GRAY).append(e.map.size()).append("² @")
+            sb.append('\n').append(ChatColor.GRAY).append(e.map.sizeStr()).append(" @")
                     .append(e.map.metersPerBlock()).append("m/格 海平面 ").append(e.map.seaLevel());
         } else if (e != null) {
             sb.append('\n').append(ChatColor.GRAY).append("画布世界 · ")
@@ -1239,7 +1420,7 @@ public final class HubService {
             for (EcoWorlds.Patch pt : e.patches) {
                 covered += (long) (pt.maxX() - pt.minX() + 1) * (pt.maxZ() - pt.minZ() + 1);
             }
-            long total = (long) e.map.size() * e.map.size();
+            long total = (long) e.map.size() * e.map.sizeZ();
             sb.append('\n').append(covered >= total ? ChatColor.GREEN + "✔ 已生成"
                     : covered > 0 ? ChatColor.GOLD + "◐ 部分生成（terra resume 可续）"
                     : ChatColor.DARK_GRAY + "▢ 未生成");
@@ -1250,7 +1431,7 @@ public final class HubService {
     private String draftTitle(Draft d) {
         return ChatColor.WHITE + "" + ChatColor.BOLD + d.name + ChatColor.RESET
                 + ChatColor.LIGHT_PURPLE + "（草稿）"
-                + '\n' + ChatColor.GRAY + d.size + "² @" + d.mpb + "m/格 海平面 " + d.sea
+                + '\n' + ChatColor.GRAY + d.sizeStr() + " @" + d.mpb + "m/格 海平面 " + d.sea
                 + (d.openEdge ? " 断崖边缘" : "") + (d.yscale != 1.0 ? " y×" + fmt1(d.yscale) : "")
                 + '\n' + (d.seed == null
                 ? ChatColor.YELLOW + "还没抽卡——右键旁边的操作台"
@@ -1381,20 +1562,26 @@ public final class HubService {
 
     // ============================ 水系预览渲染 ============================
 
-    /** R×R 俯视图：高程分层设色 + 湖/河/海（与 riverMap 工具同风格）。 */
+    /** R×R 俯视图：高程分层设色 + 湖/河/海（与 riverMap 工具同风格）。
+     *  非正方形世界按纵横比居中 letterbox，边框外深灰。 */
     private BufferedImage renderPreview(float[] meters, RiverPlanner.RiverPlan plan,
                                         HeightMapper mapper, Draft d, int R) {
-        int sb = d.preview;
-        int x1 = -d.size / 2, z1 = -d.size / 2;
+        int[] g = gridOf(d);
+        int gw = g[0], gh = g[1];
+        int x1 = -d.size / 2, z1 = -d.sizeZ / 2;
         BufferedImage img = new BufferedImage(R, R, BufferedImage.TYPE_INT_RGB);
+        double scale = Math.min(R / (double) d.size, R / (double) d.sizeZ);
+        int worldW = Math.max(1, (int) Math.round(d.size * scale));
+        int worldH = Math.max(1, (int) Math.round(d.sizeZ * scale));
+        int ox = (R - worldW) / 2, oy = (R - worldH) / 2;
         int sea = d.sea;
         int maxY = sea;
-        int[][] ys = new int[R][R];
-        for (int pz = 0; pz < R; pz++) {
-            for (int px = 0; px < R; px++) {
-                double wx = x1 + (px + 0.5) * d.size / (double) R;
-                double wz = z1 + (pz + 0.5) * d.size / (double) R;
-                float m = TerraService.sketchAt(meters, sb, x1, z1, d.size, wx, wz);
+        int[][] ys = new int[worldH][worldW];
+        for (int pz = 0; pz < worldH; pz++) {
+            for (int px = 0; px < worldW; px++) {
+                double wx = x1 + (px + 0.5) / scale;
+                double wz = z1 + (pz + 0.5) / scale;
+                float m = TerraService.sketchAt(meters, gw, gh, x1, z1, d.size, d.sizeZ, wx, wz);
                 int y = mapper.yOf(m);
                 ys[pz][px] = m < 0 ? -Math.max(1, sea - y) : y;
                 if (y > maxY) maxY = y;
@@ -1402,31 +1589,35 @@ public final class HubService {
         }
         for (int pz = 0; pz < R; pz++) {
             for (int px = 0; px < R; px++) {
+                img.setRGB(px, pz, 0x1C1D24);                    // letterbox 底
+            }
+        }
+        for (int pz = 0; pz < worldH; pz++) {
+            for (int px = 0; px < worldW; px++) {
                 int v = ys[pz][px];
                 int rgb;
                 if (v < 0) {
                     rgb = lerp(0x4F86C8, 0x11274E, Math.min(1, -v / 60.0));
                 } else {
                     rgb = hypso(v, sea, maxY);
-                    int yE = px + 1 < R ? Math.max(0, ys[pz][px + 1]) : v;
-                    int yS = pz + 1 < R ? Math.max(0, ys[pz + 1][px]) : v;
+                    int yE = px + 1 < worldW ? Math.max(0, ys[pz][px + 1]) : v;
+                    int yS = pz + 1 < worldH ? Math.max(0, ys[pz + 1][px]) : v;
                     double light = Math.max(0.6, Math.min(1.25, 1 + 0.05 * ((v - yE) + (v - yS))));
                     rgb = shade(rgb, light);
                 }
-                img.setRGB(px, pz, rgb);
+                img.setRGB(ox + px, oy + pz, rgb);
             }
         }
-        double pxPerBlock = R / (double) d.size;
         for (RiverPlanner.Lake lk : plan.lakes()) {
             for (int gz = 0; gz < lk.gh(); gz++) {
                 for (int gx = 0; gx < lk.gw(); gx++) {
                     if (!lk.mask().get(gz * lk.gw() + gx)) continue;
-                    int px0 = (int) ((lk.ox() + gx * lk.cell() - x1) * pxPerBlock);
-                    int pz0 = (int) ((lk.oz() + gz * lk.cell() - z1) * pxPerBlock);
-                    int px1 = (int) ((lk.ox() + (gx + 1) * lk.cell() - x1) * pxPerBlock);
-                    int pz1 = (int) ((lk.oz() + (gz + 1) * lk.cell() - z1) * pxPerBlock);
-                    for (int b = Math.max(0, pz0); b <= Math.min(R - 1, pz1); b++) {
-                        for (int a = Math.max(0, px0); a <= Math.min(R - 1, px1); a++) {
+                    int px0 = ox + (int) ((lk.ox() + gx * lk.cell() - x1) * scale);
+                    int pz0 = oy + (int) ((lk.oz() + gz * lk.cell() - z1) * scale);
+                    int px1 = ox + (int) ((lk.ox() + (gx + 1) * lk.cell() - x1) * scale);
+                    int pz1 = oy + (int) ((lk.oz() + (gz + 1) * lk.cell() - z1) * scale);
+                    for (int b = Math.max(oy, pz0); b <= Math.min(oy + worldH - 1, pz1); b++) {
+                        for (int a = Math.max(ox, px0); a <= Math.min(ox + worldW - 1, px1); a++) {
                             img.setRGB(a, b, 0x2F8FD0);
                         }
                     }
@@ -1438,9 +1629,9 @@ public final class HubService {
             List<RiverPlanner.Node> ns = r.nodes();
             for (int i = 0; i + 1 < ns.size(); i++) {
                 RiverPlanner.Node a = ns.get(i), b = ns.get(i + 1);
-                double ax = (a.x() - x1) * pxPerBlock, az = (a.z() - z1) * pxPerBlock;
-                double bx = (b.x() - x1) * pxPerBlock, bz = (b.z() - z1) * pxPerBlock;
-                int wpx = Math.max(1, (int) Math.round(a.halfW() * 2 * pxPerBlock));
+                double ax = ox + (a.x() - x1) * scale, az = oy + (a.z() - z1) * scale;
+                double bx = ox + (b.x() - x1) * scale, bz = oy + (b.z() - z1) * scale;
+                int wpx = Math.max(1, (int) Math.round(a.halfW() * 2 * scale));
                 int steps = (int) Math.ceil(Math.max(Math.abs(bx - ax), Math.abs(bz - az))) + 1;
                 for (int s = 0; s <= steps; s++) {
                     double t = s / (double) steps;
@@ -1449,7 +1640,9 @@ public final class HubService {
                     for (int dz = -(wpx / 2); dz <= wpx / 2; dz++) {
                         for (int dx = -(wpx / 2); dx <= wpx / 2; dx++) {
                             int qx = cx + dx, qz = cz + dz;
-                            if (qx >= 0 && qz >= 0 && qx < R && qz < R) img.setRGB(qx, qz, col);
+                            if (qx >= ox && qz >= oy && qx < ox + worldW && qz < oy + worldH) {
+                                img.setRGB(qx, qz, col);
+                            }
                         }
                     }
                 }
@@ -1462,13 +1655,14 @@ public final class HubService {
     private List<double[]> particlePoints(Draft d, byte[] snowLvl, RiverPlanner.RiverPlan plan,
                                           int x1, int z1) {
         List<double[]> pts = new ArrayList<>();
-        int sb = d.preview;
-        double px0 = plotX(d.plot) + INSET, pz0 = plotZ(d.plot) + INSET;
-        double blocksPerCell = d.size / (double) sb;
+        int[] g = gridOf(d);
+        int gw = g[0], gh = g[1], offX = g[2], offZ = g[3];
+        double px0 = plotX(d.plot) + INSET + offX, pz0 = plotZ(d.plot) + INSET + offZ;
+        double cellX = d.size / (double) gw, cellZ = d.sizeZ / (double) gh;
         java.util.function.BiFunction<Double, Double, double[]> toHub = (wx, wz) -> {
-            double fx = (wx - x1) / blocksPerCell, fz = (wz - z1) / blocksPerCell;
-            if (fx < 0 || fz < 0 || fx > sb || fz > sb) return null;
-            int ci = Math.min(sb - 1, (int) (double) fz) * sb + Math.min(sb - 1, (int) (double) fx);
+            double fx = (wx - x1) / cellX, fz = (wz - z1) / cellZ;
+            if (fx < 0 || fz < 0 || fx > gw || fz > gh) return null;
+            int ci = Math.min(gh - 1, (int) (double) fz) * gw + Math.min(gw - 1, (int) (double) fx);
             int lvl = snowLvl == null ? SEA_LVL : (snowLvl[ci] & 0xFF);
             double y = BASE_Y + 1 + lvl / 8.0 + 0.15;
             return new double[]{px0 + fx, y, pz0 + fz};
@@ -1479,7 +1673,7 @@ public final class HubService {
             for (int i = 0; i + 1 < ns.size(); i++) {
                 RiverPlanner.Node a = ns.get(i), b = ns.get(i + 1);
                 double len = Math.hypot(b.x() - a.x(), b.z() - a.z());
-                double step = blocksPerCell * 0.55;
+                double step = Math.min(cellX, cellZ) * 0.55;
                 for (double t = 0; t < len; t += step) {
                     double[] hp = toHub.apply(a.x() + (b.x() - a.x()) * t / len,
                             a.z() + (b.z() - a.z()) * t / len);

@@ -114,20 +114,20 @@ public final class TerraService implements Listener {
         return null;
     }
 
-    /** 地图世界创建后调用：以 (0,0) 为中心生成 size×size 地图 + 自动生态。 */
+    /** 地图世界创建后调用：以 (0,0) 为中心生成 size×sizeZ 地图 + 自动生态。 */
     public String startMap(CommandSender sender, String worldName) {
         if (!st.enabled()) return "地形生成未启用（config.yml terrain.enabled）。";
         if (job != null) return "已有地形任务在跑（/miaeco terra status 查看）。";
         EcoWorlds.Entry entry = worlds.entry(worldName);
         if (entry == null || entry.map == null) return "不是地图世界: " + worldName;
-        int s = entry.map.size();
-        // 断点续跑：分片是确定性网格，已覆盖面积达 s² 即完成；否则跳过已完成分片续跑
+        int sx = entry.map.size(), sz = entry.map.sizeZ();
+        // 断点续跑：分片是确定性网格，已覆盖面积达 sx×sz 即完成；否则跳过已完成分片续跑
         long covered = 0;
         for (EcoWorlds.Patch pt : entry.patches) {
             covered += (long) (pt.maxX() - pt.minX() + 1) * (pt.maxZ() - pt.minZ() + 1);
         }
-        if (covered >= (long) s * s) return "该地图已生成完毕（重来一张用 /miaeco world regen）。";
-        Region sel = new Region(worldName, -s / 2, 0, -s / 2, -s / 2 + s - 1, 0, -s / 2 + s - 1);
+        if (covered >= (long) sx * sz) return "该地图已生成完毕（重来一张用 /miaeco world regen）。";
+        Region sel = new Region(worldName, -sx / 2, 0, -sz / 2, -sx / 2 + sx - 1, 0, -sz / 2 + sz - 1);
         Job j = new Job(sender, worldName, entry, sel, st.autoEco());
         this.job = j;
         pool.execute(j::run);
@@ -179,18 +179,18 @@ public final class TerraService implements Listener {
     }
 
     /**
-     * 大厅沙盘"抽卡"：只跑 coarse 粗扫（秒级；首次含权重下载/装载），把 size×size
-     * 地图按 sb×sb 网格出高度缩略（<b>米</b>，openEdge 时含山体增幅、edge=sea 时含
+     * 大厅沙盘"抽卡"：只跑 coarse 粗扫（秒级；首次含权重下载/装载），把 sizeX×sizeZ
+     * 地图按 gw×gh 网格出高度缩略（<b>米</b>，openEdge 时含山体增幅、edge=sea 时含
      * 海环衰减——与真实生成同链），回调在工作线程。
      */
-    public String hubPreview(CommandSender sender, long seed, int size, int mpb,
-                             boolean openEdge, int sb,
+    public String hubPreview(CommandSender sender, long seed, int sizeX, int sizeZ, int mpb,
+                             boolean openEdge, int gw, int gh,
                              java.util.function.Consumer<float[]> onDone) {
         if (!st.enabled()) return "地形生成未启用（config.yml terrain.enabled）。";
         if (job != null) return "已有地形任务在跑（/miaeco terra status 查看），稍后再抽。";
         Job j = new Job(sender, null, null, null, false);
         this.job = j;
-        pool.execute(() -> j.runHubPreview(seed, size, mpb, openEdge, sb, onDone));
+        pool.execute(() -> j.runHubPreview(seed, sizeX, sizeZ, mpb, openEdge, gw, gh, onDone));
         return null;
     }
 
@@ -230,8 +230,9 @@ public final class TerraService implements Listener {
         final CaveCarver carver;       // 洞穴/崖蚀共用噪声（都关则 null）
         final AtomicBoolean cancelled = new AtomicBoolean(false);
         final TerraProgress progress;
-        final float[] sketch;          // hub 草图（米偏移，sketchN×sketchN；null=无）
+        final float[] sketch;          // hub 草图（米偏移，sketchN×sketchNZ；null=无）
         final int sketchN;
+        final int sketchNZ;
         volatile String stageName = "准备";
         volatile RiverPlanner.RiverPlan rivers = RiverPlanner.RiverPlan.EMPTY;  // 全图水系（规划一次）
 
@@ -246,6 +247,7 @@ public final class TerraService implements Listener {
             this.openEdge = mapMode && entry.map.openEdge();
             this.sketch = mapMode ? entry.sketch : null;
             this.sketchN = mapMode ? entry.sketchN : 0;
+            this.sketchNZ = mapMode ? (entry.sketchNZ > 0 ? entry.sketchNZ : entry.sketchN) : 0;
             double ys = mapMode ? Math.max(0.5, Math.min(2.5, entry.map.yScale())) : 1.0;
             this.mapper = new HeightMapper(st.vScale() / ys, st.softStartY(), st.maxY(),
                     mapMode ? entry.map.seaLevel() : HeightMapper.SEA_LEVEL);
@@ -324,20 +326,20 @@ public final class TerraService implements Listener {
             }
         }
 
-        /** hub 抽卡：coarse 粗扫 → sb×sb 高度缩略（米，与真实生成同映射前段）。 */
-        void runHubPreview(long seed, int size, int mpb2, boolean open, int sb,
-                           java.util.function.Consumer<float[]> onDone) {
+        /** hub 抽卡：coarse 粗扫 → gw×gh 高度缩略（米，与真实生成同映射前段）。 */
+        void runHubPreview(long seed, int sizeX, int sizeZ, int mpb2, boolean open,
+                           int gw, int gh, java.util.function.Consumer<float[]> onDone) {
             try {
                 ensureModels();
                 checkCancel();
                 stage("抽卡预览（coarse 粗扫 seed=" + seed + "）");
                 LocalTerrainProvider.init(seed);
                 double npb = mpb2 <= 15 ? 1.0 / Math.max(1, TerrainConfig.scale()) : mpb2 / 30.0;
-                int x1 = -size / 2, z1 = -size / 2;
+                int x1 = -sizeX / 2, z1 = -sizeZ / 2;
                 int ci0 = (int) Math.floor(z1 * npb / 256.0) - 1;
                 int cj0 = (int) Math.floor(x1 * npb / 256.0) - 1;
-                int ci1 = (int) Math.ceil((z1 + size) * npb / 256.0) + 2;
-                int cj1 = (int) Math.ceil((x1 + size) * npb / 256.0) + 2;
+                int ci1 = (int) Math.ceil((z1 + sizeZ) * npb / 256.0) + 2;
+                int cj1 = (int) Math.ceil((x1 + sizeX) * npb / 256.0) + 2;
                 var t = LocalTerrainProvider.getPipelineCoarse(ci0, cj0, ci1, cj1);
                 int CH = ci1 - ci0, CW = cj1 - cj0;
                 float[][] elev = new float[CH][CW];
@@ -348,12 +350,12 @@ public final class TerraService implements Listener {
                         elev[r][c] = Math.signum(v) * v * v;
                     }
                 }
-                int band = Math.max(24, Math.min(96, size / 8));
-                float[] out = new float[sb * sb];
-                for (int cz = 0; cz < sb; cz++) {
-                    for (int cx = 0; cx < sb; cx++) {
-                        double wx = x1 + (cx + 0.5) * size / (double) sb;
-                        double wz = z1 + (cz + 0.5) * size / (double) sb;
+                int band = Math.max(24, Math.min(96, Math.min(sizeX, sizeZ) / 8));
+                float[] out = new float[gw * gh];
+                for (int cz = 0; cz < gh; cz++) {
+                    for (int cx = 0; cx < gw; cx++) {
+                        double wx = x1 + (cx + 0.5) * sizeX / (double) gw;
+                        double wz = z1 + (cz + 0.5) * sizeZ / (double) gh;
                         double gi = wz * npb / 256.0 - ci0 - 0.5;
                         double gj = wx * npb / 256.0 - cj0 - 0.5;
                         float m = bilinear(elev, CH, CW, gi, gj);
@@ -361,10 +363,10 @@ public final class TerraService implements Listener {
                             if (m > 0) m *= 1 + 0.35f * Math.min(1f, m / 900f);
                         } else {
                             int d = (int) Math.min(Math.min(wx - x1, wz - z1),
-                                    Math.min(x1 + size - 1 - wx, z1 + size - 1 - wz));
+                                    Math.min(x1 + sizeX - 1 - wx, z1 + sizeZ - 1 - wz));
                             m = edgeFalloff(m, d, band);
                         }
-                        out[cz * sb + cx] = m;
+                        out[cz * gw + cx] = m;
                     }
                 }
                 progress.done("抽卡就绪（seed=" + seed + "）——沙盘已铺；满意 confirm，不满意继续 roll，"
@@ -400,20 +402,21 @@ public final class TerraService implements Listener {
         /** 地图世界：分片流水线（推理→铺设→地貌→生态 逐片推进，超大地图内存恒定，断点可续）。 */
         private void runMapTiled() throws Exception {
             final int APRON = 16;                    // 规划裙边：坡度/滩涂/海岸带跨片连续
-            int s = entry.map.size();
+            int sX = entry.map.size(), sZ = entry.map.sizeZ();
             int p = mpb <= 15 ? 0 : Math.max(1, mpb / 30);
             int tile = p == 0 || p == 1 ? 960 : p == 2 ? 768 : 480;   // 单片原生跨度 ≤~2000
-            int mapX1 = -s / 2, mapZ1 = -s / 2;
-            int nT = Math.max(1, (int) Math.ceil(s / (double) tile));
+            int mapX1 = -sX / 2, mapZ1 = -sZ / 2;
+            int nTx = Math.max(1, (int) Math.ceil(sX / (double) tile));
+            int nTz = Math.max(1, (int) Math.ceil(sZ / (double) tile));
             ensureModels();
             checkCancel();
             LocalTerrainProvider.init(entry.seed);
             // 全图水文规划：coarse 粗扫（秒级）→ 填洼/流向/汇水 → 树状河网+湖泊+地貌，
             // 定线一次、逐片栅格化（断点续跑重算一致，确定性）
-            if (st.riverDensity() > 0 && s >= 320) {
+            if (st.riverDensity() > 0 && Math.min(sX, sZ) >= 320) {
                 stage("水文规划（填洼/汇水/河网）");
                 try {
-                    rivers = planRivers(mapX1, mapZ1, s);
+                    rivers = planRivers(mapX1, mapZ1, sX, sZ);
                     int main = 0, oxbow = 0;
                     for (RiverPlanner.River r : rivers.rivers()) {
                         if (r.kind() == RiverPlanner.R_MAIN) main++;
@@ -430,17 +433,17 @@ public final class TerraService implements Listener {
                 }
             }
             List<EcoWorlds.Patch> already = List.copyOf(entry.patches);
-            int total = nT * nT, idx = 0, skipped = 0;
+            int total = nTx * nTz, idx = 0, skipped = 0;
             long t0 = System.currentTimeMillis();
-            if (total > 1) progress.chat("地图 " + s + "×" + s + " 分为 " + total + " 片流水推进"
+            if (total > 1) progress.chat("地图 " + sX + "×" + sZ + " 分为 " + total + " 片流水推进"
                     + (already.isEmpty() ? "" : "（检测到已完成分片，续跑）") + "。");
-            for (int tz = 0; tz < nT; tz++) {
-                for (int tx = 0; tx < nT; tx++) {
+            for (int tz = 0; tz < nTz; tz++) {
+                for (int tx = 0; tx < nTx; tx++) {
                     idx++;
-                    int cx1 = mapX1 + (int) ((long) s * tx / nT);
-                    int cx2 = mapX1 + (int) ((long) s * (tx + 1) / nT) - 1;
-                    int cz1 = mapZ1 + (int) ((long) s * tz / nT);
-                    int cz2 = mapZ1 + (int) ((long) s * (tz + 1) / nT) - 1;
+                    int cx1 = mapX1 + (int) ((long) sX * tx / nTx);
+                    int cx2 = mapX1 + (int) ((long) sX * (tx + 1) / nTx) - 1;
+                    int cz1 = mapZ1 + (int) ((long) sZ * tz / nTz);
+                    int cz2 = mapZ1 + (int) ((long) sZ * (tz + 1) / nTz) - 1;
                     if (coveredBy(already, cx1, cz1, cx2, cz2)) {
                         skipped++;
                         continue;
@@ -462,7 +465,7 @@ public final class TerraService implements Listener {
                     progress.update(1.0, (System.currentTimeMillis() - tInf) / 1000 + "s · "
                             + (LocalTerrainProvider.windowCount() - w0) + " 窗口");
                     checkCancel();
-                    Plan plan = buildPlanMap(data, cx1, cz1, W, H, APRON, mapX1, mapZ1, s);
+                    Plan plan = buildPlanMap(data, cx1, cz1, W, H, APRON, mapX1, mapZ1, sX, sZ);
                     checkCancel();
                     stage(tag + "地形铺设（约 " + human(plan.totalOps) + " 处）");
                     applyStrips(plan, cx1, cz1, W, H);
@@ -481,7 +484,7 @@ public final class TerraService implements Listener {
                 }
             }
             long mins = (System.currentTimeMillis() - t0) / 60_000L;
-            progress.done("地图世界生成完成 @ " + world + "（" + s + "×" + s
+            progress.done("地图世界生成完成 @ " + world + "（" + sX + "×" + sZ
                     + (total > 1 ? "，" + total + " 片" + (skipped > 0 ? "（续跑跳过 " + skipped + "）" : "")
                     + "，" + mins + " 分钟" : "") + "）");
         }
@@ -569,9 +572,9 @@ public final class TerraService implements Listener {
          */
         private Plan buildPlanMap(LocalTerrainProvider.HeightmapData data,
                                   int x1, int z1, int W, int H, int apron,
-                                  int mapX1, int mapZ1, int mapSize) {
+                                  int mapX1, int mapZ1, int mapSizeX, int mapSizeZ) {
             int EW = W + 2 * apron, EH = H + 2 * apron;
-            int band = Math.max(24, Math.min(96, mapSize / 8));
+            int band = Math.max(24, Math.min(96, Math.min(mapSizeX, mapSizeZ) / 8));
             int sea = mapper.sea();
             int[] ey = new int[EW * EH];
             boolean[] eWater = new boolean[EW * EH];
@@ -581,13 +584,14 @@ public final class TerraService implements Listener {
                 for (int ex = 0; ex < EW; ex++) {
                     int gx = x1 - apron + ex, gz = z1 - apron + ez;
                     int d = Math.min(Math.min(gx - mapX1, gz - mapZ1),
-                            Math.min(mapX1 + mapSize - 1 - gx, mapZ1 + mapSize - 1 - gz));
+                            Math.min(mapX1 + mapSizeX - 1 - gx, mapZ1 + mapSizeZ - 1 - gz));
                     float m = boost(data.heightmap[ez][ex]);
                     short b = data.biomeIds[ez][ex];
                     if (sketch != null) {
                         // hub 雪面草图：低频修正（米），细节仍来自扩散推理；
                         // 极性翻转的列做群系保底（抬出海的地当平原、压下去的当海）
-                        m += sketchAt(sketch, sketchN, mapX1, mapZ1, mapSize, gx, gz);
+                        m += sketchAt(sketch, sketchN, sketchNZ, mapX1, mapZ1,
+                                mapSizeX, mapSizeZ, gx, gz);
                         if (m >= 0 && EcoBiomes.isOcean(b)) b = 1;
                         else if (m < 0 && !EcoBiomes.isOcean(b)) b = 44;
                     }
@@ -678,12 +682,12 @@ public final class TerraService implements Listener {
         }
 
         /** 全图水文规划：coarse 张量（~128 格/像素）双线性成高度场，与铺设同一映射链。 */
-        private RiverPlanner.RiverPlan planRivers(int mapX1, int mapZ1, int s) throws Exception {
+        private RiverPlanner.RiverPlan planRivers(int mapX1, int mapZ1, int sX, int sZ) throws Exception {
             double npb = mpb <= 15 ? 1.0 / Math.max(1, TerrainConfig.scale()) : mpb / 30.0; // 原生px/格
             int ci0 = (int) Math.floor(mapZ1 * npb / 256.0) - 1;
             int cj0 = (int) Math.floor(mapX1 * npb / 256.0) - 1;
-            int ci1 = (int) Math.ceil((mapZ1 + s) * npb / 256.0) + 2;
-            int cj1 = (int) Math.ceil((mapX1 + s) * npb / 256.0) + 2;
+            int ci1 = (int) Math.ceil((mapZ1 + sZ) * npb / 256.0) + 2;
+            int cj1 = (int) Math.ceil((mapX1 + sX) * npb / 256.0) + 2;
             var t = LocalTerrainProvider.getPipelineCoarse(ci0, cj0, ci1, cj1);
             int CH = ci1 - ci0, CW = cj1 - cj0;
             float[][] elev = new float[CH][CW];
@@ -694,20 +698,22 @@ public final class TerraService implements Listener {
                     elev[r][c] = Math.signum(v) * v * v;         // elev_sqrt → 米
                 }
             }
-            int band = Math.max(24, Math.min(96, s / 8));
+            int band = Math.max(24, Math.min(96, Math.min(sX, sZ) / 8));
             RiverPlanner.HeightField hf = (wx, wz) -> {
                 double gi = wz * npb / 256.0 - ci0 - 0.5;
                 double gj = wx * npb / 256.0 - cj0 - 0.5;
                 float m = boost(bilinear(elev, CH, CW, gi, gj));
-                if (sketch != null) m += sketchAt(sketch, sketchN, mapX1, mapZ1, s, wx, wz);
+                if (sketch != null) {
+                    m += sketchAt(sketch, sketchN, sketchNZ, mapX1, mapZ1, sX, sZ, wx, wz);
+                }
                 if (!openEdge) {
                     int d = (int) Math.min(Math.min(wx - mapX1, wz - mapZ1),
-                            Math.min(mapX1 + s - 1 - wx, mapZ1 + s - 1 - wz));
+                            Math.min(mapX1 + sX - 1 - wx, mapZ1 + sZ - 1 - wz));
                     m = edgeFalloff(m, d, band);
                 }
                 return mapper.yOfF(m);
             };
-            return RiverPlanner.plan(hf, mapper.sea(), mapX1, mapZ1, s,
+            return RiverPlanner.plan(hf, mapper.sea(), mapX1, mapZ1, sX, sZ,
                     entry.seed ^ 0x51E77AL, st.riverDensity());
         }
 
@@ -1706,20 +1712,26 @@ public final class TerraService implements Listener {
     }
 
     /**
-     * hub 雪面草图在世界坐标处的双线性插值（米）：n×n 网格铺满 size×size 地图，
+     * hub 雪面草图在世界坐标处的双线性插值（米）：nX×nZ 网格铺满 sizeX×sizeZ 地图，
      * 网格值取单元中心、越界钳边。纯函数（buildPlanMap 与 planRivers 共用同一链）。
      */
+    public static float sketchAt(float[] sk, int nX, int nZ, int mapX1, int mapZ1,
+                                 int sizeX, int sizeZ, double wx, double wz) {
+        double u = (wx - mapX1) / sizeX * nX - 0.5;
+        double v = (wz - mapZ1) / sizeZ * nZ - 0.5;
+        double x = Math.max(0, Math.min(nX - 1.0, u));
+        double y = Math.max(0, Math.min(nZ - 1.0, v));
+        int x0 = (int) x, x1 = Math.min(nX - 1, x0 + 1);
+        int y0 = (int) y, y1 = Math.min(nZ - 1, y0 + 1);
+        double tx = x - x0, ty = y - y0;
+        return (float) ((1 - ty) * ((1 - tx) * sk[y0 * nX + x0] + tx * sk[y0 * nX + x1])
+                + ty * ((1 - tx) * sk[y1 * nX + x0] + tx * sk[y1 * nX + x1]));
+    }
+
+    /** 方形便捷重载（旧调用兼容）。 */
     public static float sketchAt(float[] sk, int n, int mapX1, int mapZ1, int size,
                                  double wx, double wz) {
-        double u = (wx - mapX1) / size * n - 0.5;
-        double v = (wz - mapZ1) / size * n - 0.5;
-        double x = Math.max(0, Math.min(n - 1.0, u));
-        double y = Math.max(0, Math.min(n - 1.0, v));
-        int x0 = (int) x, x1 = Math.min(n - 1, x0 + 1);
-        int y0 = (int) y, y1 = Math.min(n - 1, y0 + 1);
-        double tx = x - x0, ty = y - y0;
-        return (float) ((1 - ty) * ((1 - tx) * sk[y0 * n + x0] + tx * sk[y0 * n + x1])
-                + ty * ((1 - tx) * sk[y1 * n + x0] + tx * sk[y1 * n + x1]));
+        return sketchAt(sk, n, n, mapX1, mapZ1, size, size, wx, wz);
     }
 
     /** 2D 双线性采样（越界钳边），河流规划的 coarse 高度场用。 */
