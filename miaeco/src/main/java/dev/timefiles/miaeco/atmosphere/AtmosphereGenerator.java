@@ -1644,14 +1644,15 @@ public final class AtmosphereGenerator {
                         top = Material.GRAVEL;   // 石坡碎屑窝（零星）
                     }
                 } else if (rockEdge) {
-                    // 山麓过渡带：石斑+粗土斑点缀，其余裸土还草——山坡不再全秃
+                    // 山麓过渡带：石斑+砾石裙点缀、粗土收敛，其余裸土还草——
+                    // 0.30 减褐增绿：拉远看是绿坡嵌灰斑，不再大片土色
                     if (patch < 0.26) {
                         top = m < 0.55 ? Material.STONE : Material.COBBLESTONE;
                         force = true;
-                    } else if (patch < 0.48) {
+                    } else if (patch < 0.35) {
+                        top = Material.GRAVEL;
+                    } else if (patch < 0.44) {
                         top = Material.COARSE_DIRT;
-                    } else if (patch < 0.60) {
-                        top = Material.DIRT;
                     } else if (gm == Material.DIRT || gm == Material.COARSE_DIRT) {
                         top = Material.GRASS_BLOCK;
                         force = true;

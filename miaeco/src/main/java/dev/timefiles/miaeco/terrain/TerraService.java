@@ -1328,15 +1328,33 @@ public final class TerraService implements Listener {
                         : Material.COARSE_DIRT;
                 return new Material[]{top, Material.GRAVEL, Material.STONE};
             }
-            boolean rock = slope >= 5 || (slope >= 3 && y > mapper.sea() + 127) || b == 35 || b == 95;
-            if (rock) {
+            // —— 山体上色（0.30，WorldMachine Colouriser 思路）——
+            // 海拔带（雪线/塌积线随低频噪声起伏、软过渡）× 坡度色表（陡壁=岩相
+            // 分区、中坡=塌积碎石、缓坡=高山草甸/雪原）× 凹凸（凹沟=侵蚀砾石道
+            // flow/wear，凸脊=风蚀露岩）。沙漠/恶地/红树保留自有皮肤不入带。
+            int rel = y - mapper.sea();
+            boolean rockBiome = b == 35 || b == 95;
+            boolean dryBiome = b == 5 || b == 26 || b == 92;
+            if (!dryBiome && (rockBiome || b == 33 || rel > 96)) {
+                Material[] mk = mountainSkin(p, i, b, wx, wz, slope, rel, rockBiome);
+                if (mk != null) return mk;
+            } else if (slope >= 5) {
+                if (!dryBiome && nearRiver(p, i)) {
+                    // 河/湖切出的低地陡岸：土坡为主偶石斑——和周边草地同一色系，
+                    // 不再是整面"石头做的河岸"
+                    double zone = PlanOps.patch(entry.seed ^ 0xB4A1L, wx, wz, 16.0);
+                    return zone < 0.16
+                            ? new Material[]{Material.STONE, Material.STONE, Material.STONE}
+                            : zone < 0.60
+                            ? new Material[]{Material.COARSE_DIRT, Material.DIRT, Material.STONE}
+                            : new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.STONE};
+                }
                 // 岩相 30 格斑块分区：整片石/安山/凝灰交替，石坡不再逐列花斑
                 double zone = PlanOps.patch(entry.seed ^ 0x5A0CL, wx, wz, 30.0);
                 Material top = zone < 0.42 ? Material.STONE : zone < 0.70 ? Material.ANDESITE
                         : Material.TUFF;
                 return new Material[]{top, Material.STONE, Material.STONE};
             }
-            if (b == 33) return new Material[]{Material.SNOW_BLOCK, Material.SNOW_BLOCK, Material.STONE};
             if (b == 5) return new Material[]{Material.SAND, Material.SAND, Material.SAND, Material.SANDSTONE};
             if (b == 26) return new Material[]{Material.RED_SAND, Material.TERRACOTTA,
                     Material.ORANGE_TERRACOTTA, Material.TERRACOTTA};
@@ -1366,6 +1384,110 @@ public final class TerraService implements Listener {
                 return new Material[]{Material.MUD, Material.MUD, Material.DIRT};
             }
             return new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.DIRT, Material.DIRT};
+        }
+
+        /**
+         * 高山分层上色（WM Colouriser：Base/Slope/Flow+Wear/Talus/Snow 五层的方块化）。
+         * 返回 null = 交回常规群系皮（山麓缓坡照旧是草原/森林那套）。
+         * 雪线 ~sea+170、塌积线 ~sea+128，均随 22~26 格低频噪声起伏（雪群系整体下移），
+         * 边界自然犬牙交错不出等高线感。
+         */
+        private Material[] mountainSkin(Plan p, int i, short b, int wx, int wz,
+                                        int slope, int rel, boolean rockBiome) {
+            // 凹凸探针（4 邻均值−本列）：正=凹（汇水冲沟），负=凸（脊线）
+            int W = p.w, H = p.h, x = i % W, z = i / W;
+            int y4 = p.y[z * W + Math.max(0, x - 1)] + p.y[z * W + Math.min(W - 1, x + 1)]
+                    + p.y[Math.max(0, z - 1) * W + x] + p.y[Math.min(H - 1, z + 1) * W + x];
+            int curv = y4 - 4 * p.y[i];
+            boolean gully = curv >= 3 && slope >= 2;
+            boolean ridge = curv <= -3 && slope >= 3;
+            if (rockBiome) {
+                double zone = PlanOps.patch(entry.seed ^ 0x5A0CL, wx, wz, 30.0);
+                Material top = gully ? Material.GRAVEL
+                        : zone < 0.42 ? Material.STONE : zone < 0.70 ? Material.ANDESITE
+                        : Material.TUFF;
+                return new Material[]{top, Material.STONE, Material.STONE};
+            }
+            boolean cold = b == 33 || EcoBiomes.snowySurface(b);
+            double snowLine = 170 - (cold ? 70 : 0)
+                    + (PlanOps.patch(entry.seed ^ 0x5E01L, wx, wz, 26.0) - 0.5) * 28;
+            double talusLine = 128 - (cold ? 55 : 0)
+                    + (PlanOps.patch(entry.seed ^ 0x7A15L, wx, wz, 22.0) - 0.5) * 22;
+            if (rel > snowLine) {
+                if (slope >= 5) {
+                    // 雪线上的陡壁挂不住雪：冷色岩相（石/安山/方解石白岩带）
+                    double zone = PlanOps.patch(entry.seed ^ 0x5A0CL, wx, wz, 30.0);
+                    Material top = zone < 0.45 ? Material.STONE
+                            : zone < 0.78 ? Material.ANDESITE : Material.CALCITE;
+                    return new Material[]{top, Material.STONE, Material.STONE};
+                }
+                if (slope >= 3 || ridge) {
+                    // 雪岩过渡带（transient snow）：8 格斑块雪/石相间
+                    return PlanOps.patch(entry.seed ^ 0x53E2L, wx, wz, 8.0) < 0.5
+                            ? new Material[]{Material.SNOW_BLOCK, Material.STONE, Material.STONE}
+                            : new Material[]{Material.STONE, Material.STONE, Material.STONE};
+                }
+                return new Material[]{Material.SNOW_BLOCK, Material.SNOW_BLOCK, Material.STONE};
+            }
+            if (rel > talusLine) {
+                if (slope >= 5 || ridge) {
+                    double zone = PlanOps.patch(entry.seed ^ 0x5A0CL, wx, wz, 30.0);
+                    Material top = zone < 0.42 ? Material.STONE
+                            : zone < 0.70 ? Material.ANDESITE : Material.TUFF;
+                    return new Material[]{top, Material.STONE, Material.STONE};
+                }
+                if (gully) {
+                    return new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
+                }
+                if (slope >= 3) {
+                    // 塌积带：圆石/砾/石 20 格大斑（山肩碎石裙）
+                    double zone = PlanOps.patch(entry.seed ^ 0x7A16L, wx, wz, 20.0);
+                    Material top = zone < 0.34 ? Material.COBBLESTONE
+                            : zone < 0.66 ? Material.GRAVEL : Material.STONE;
+                    return new Material[]{top, Material.GRAVEL, Material.STONE};
+                }
+                // 高山草甸：草为主，灰化土/粗土成片点缀
+                double zone = PlanOps.patch(entry.seed ^ 0x6EAD0L, wx, wz, 18.0);
+                if (zone < 0.13) return new Material[]{Material.COARSE_DIRT, Material.DIRT, Material.STONE};
+                if (zone > 0.90) return new Material[]{Material.PODZOL, Material.DIRT, Material.STONE};
+                return new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.STONE};
+            }
+            // 山麓带（sea+96 ~ 塌积线）：陡壁岩相、凹沟砾石道；持续陡草坡用大斑
+            // 混入石/砾/粗土（侧面成片可读，不再是漫山碎土点）；缓坡交回群系皮
+            if (slope >= 5) {
+                double zone = PlanOps.patch(entry.seed ^ 0x5A0CL, wx, wz, 30.0);
+                Material top = zone < 0.42 ? Material.STONE
+                        : zone < 0.70 ? Material.ANDESITE : Material.TUFF;
+                return new Material[]{top, Material.STONE, Material.STONE};
+            }
+            if (gully && slope >= 3) {
+                return new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
+            }
+            if (slope >= 3) {
+                double zone = PlanOps.patch(entry.seed ^ 0x6EAD1L, wx, wz, 24.0);
+                if (zone < 0.20) return new Material[]{Material.STONE, Material.STONE, Material.STONE};
+                if (zone < 0.34) return new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
+                if (zone < 0.52) return new Material[]{Material.COARSE_DIRT, Material.DIRT, Material.STONE};
+                return new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.STONE};
+            }
+            // 雪峰群系在带下方的缓坡照旧全雪（老规则兜底）
+            if (b == 33) return new Material[]{Material.SNOW_BLOCK, Material.SNOW_BLOCK, Material.STONE};
+            return null;
+        }
+
+        /** Chebyshev r≤3 内有河/湖水列（低地陡岸的"贴水"判定）。 */
+        private static boolean nearRiver(Plan p, int i) {
+            int W = p.w, H = p.h, x = i % W, z = i / W;
+            for (int dz = -3; dz <= 3; dz++) {
+                int nz = z + dz;
+                if (nz < 0 || nz >= H) continue;
+                for (int dx = -3; dx <= 3; dx++) {
+                    int nx = x + dx;
+                    if (nx < 0 || nx >= W) continue;
+                    if (p.river[nz * W + nx]) return true;
+                }
+            }
+            return false;
         }
 
         // ---- 阶段 6：地貌奇观 ----
@@ -1718,6 +1840,7 @@ public final class TerraService implements Listener {
 
     /** 规划数组集合。 */
     private static final class Plan {
+        final int w, h;
         final int[] y;
         final short[] biome;
         final boolean[] water;
@@ -1736,6 +1859,8 @@ public final class TerraService implements Listener {
         long totalOps;
 
         Plan(int w, int h) {
+            this.w = w;
+            this.h = h;
             y = new int[w * h];
             biome = new short[w * h];
             water = new boolean[w * h];

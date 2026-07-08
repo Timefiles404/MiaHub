@@ -548,7 +548,9 @@ public final class RiverPlanner {
         }
     }
 
-    /** 沿线河道足印内的地面（中心 + 两侧 0.7hw 三探针取低，中频场）。 */
+    /** 沿线河道足印内的地面（中心 + 两侧 0.7hw 三探针取低，中频场）。
+     *  0.30：加岸外低侧探针——山腰横穿时水位跟低岸走（河切进坡里成谷口，
+     *  下坡侧不再垫出高于原地形的漫滩台）。 */
     private static float[] channelFloor(float[] xs, float[] zs, float[] hws, HeightField mid) {
         int m = xs.length;
         float[] g = new float[m];
@@ -558,9 +560,13 @@ public final class RiverPlanner {
             float len = (float) Math.max(1e-3, Math.hypot(dx, dz));
             float px = -dz / len, pz = dx / len;
             float o = hws[i] * 0.7f;
-            g[i] = Math.min(mid.yAt(xs[i], zs[i]),
+            float chan = Math.min(mid.yAt(xs[i], zs[i]),
                     Math.min(mid.yAt(xs[i] + px * o, zs[i] + pz * o),
                             mid.yAt(xs[i] - px * o, zs[i] - pz * o)));
+            float ob = hws[i] + 2.5f;
+            float bank = Math.min(mid.yAt(xs[i] + px * ob, zs[i] + pz * ob),
+                    mid.yAt(xs[i] - px * ob, zs[i] - pz * ob));
+            g[i] = chan - bank > 2 ? bank + 1 : chan;
         }
         return g;
     }
@@ -779,6 +785,14 @@ public final class RiverPlanner {
             int lx0 = Math.max(0, bx0 - lk.cell()), lx1 = Math.min(EW - 1, bx0 + spanX + lk.cell());
             int lz0 = Math.max(0, bz0 - lk.cell()), lz1 = Math.min(EH - 1, bz0 + spanZ + lk.cell());
             if (lx0 > lx1 || lz0 > lz1) continue;
+            // 0.30 陡岸保形：齐平压滨只给缓岸（沙滩/湖滨）；山坡入湖保留原坡——
+            // 不再沿湖缘把 ≤+2 的坡列切平，旁边 +3 列一留就是 3 格垂直石壁。
+            // 陡缓判断读窗口地形快照，压平过程不自污染。
+            int ww = lx1 - lx0 + 1, wh = lz1 - lz0 + 1;
+            int[] snap = new int[ww * wh];
+            for (int lz = lz0; lz <= lz1; lz++)
+                for (int lx = lx0; lx <= lx1; lx++)
+                    snap[(lz - lz0) * ww + lx - lx0] = ey[lz * EW + lx];
             for (int lz = lz0; lz <= lz1; lz++) {
                 for (int lx = lx0; lx <= lx1; lx++) {
                     double gx = (lx - bx0) / (double) lk.cell() - 0.5;
@@ -798,10 +812,19 @@ public final class RiverPlanner {
                         continue;
                     }
                     if (eWater[i]) continue;
-                    if (ey[i] > lk.level() + 2) continue;         // 湖中高地=岛
-                    if (ey[i] >= lk.level()) {
-                        ey[i] = lk.level();                       // 齐平湖滨
-                        if (ind < 0.62) eShoal[i] = true;
+                    int h = ey[i] - lk.level();
+                    if (h > 2) continue;                          // 湖中高地=岛
+                    if (h >= 0) {
+                        int sx = lx - lx0, sz = lz - lz0;
+                        int c = snap[sz * ww + sx];
+                        int dmax = Math.abs(snap[sz * ww + Math.max(0, sx - 2)] - c);
+                        dmax = Math.max(dmax, Math.abs(snap[sz * ww + Math.min(ww - 1, sx + 2)] - c));
+                        dmax = Math.max(dmax, Math.abs(snap[Math.max(0, sz - 2) * ww + sx] - c));
+                        dmax = Math.max(dmax, Math.abs(snap[Math.min(wh - 1, sz + 2) * ww + sx] - c));
+                        if (dmax <= 2) {
+                            ey[i] = lk.level();                   // 齐平湖滨（仅缓岸）
+                            if (ind < 0.62) eShoal[i] = true;
+                        }
                     } else {
                         ey[i] = Math.min(ey[i], lk.level() - 1);
                         eRiver[i] = true;
@@ -919,8 +942,12 @@ public final class RiverPlanner {
                 int wlB = Math.max(Math.max(wl, bankWl[i]), lakeGuard[i]);
                 int orig = ey[i];
                 if (orig >= wlB) {
-                    // 谷壁削坡：高岸放宽到高差 ×1.6（至多 FEATHER_MAX），河谷有坡度感
-                    float fw = Math.max(BANK_W, Math.min(FEATHER_MAX, (orig - wlB) * 1.6f));
+                    // 谷壁削坡：高岸放宽到高差 ×1.6（至多 FEATHER_MAX）；
+                    // 低岸(≤5)额外加宽（0.30 补回温和版周边过渡）——平原河谷
+                    // 周围一圈缓缓沉向河面，不再像插进槽里
+                    float bh = orig - wlB;
+                    float fw = Math.max(BANK_W, Math.min(FEATHER_MAX,
+                            bh * 1.6f + Math.max(0, 5 - bh) * 1.9f));
                     if (d <= hw + fw) {
                         double t = (d - hw) / fw;
                         double s = t * t * (3 - 2 * t);
@@ -937,9 +964,13 @@ public final class RiverPlanner {
                         }
                     }
                 } else {
-                    // 河漫滩：规划水位高于实际地形——宽羽化平缓降回原地形，
-                    // 漫滩地表保持所在群系皮肤（长草），不再是沙砾窄堤
-                    float fw = Math.max(4, Math.min(FEATHER_MAX, (wlB - orig) * 2.5f));
+                    // 河漫滩：规划水位高于实际地形——小抬升(≤4)宽羽化平缓降回原
+                    // 地形（漫滩地表保持所在群系皮肤）；大抬升收窄成紧堤（0.30，
+                    // 岸侧探针后仅存于回水潭/湖口残余），不再在下坡侧垫出大台阶
+                    float lift = wlB - orig;
+                    float fw = lift <= 4
+                            ? Math.max(4, Math.min(FEATHER_MAX, lift * 2.5f))
+                            : Math.max(3.5f, 11 - lift);
                     if (d <= hw + fw) {
                         double t = (d - hw) / fw;
                         double s = t * t * (3 - 2 * t);
@@ -975,10 +1006,13 @@ public final class RiverPlanner {
                         eRiver[i] = true;
                         eWl[i] = h.wl();
                         if (eFlow != null) eFlow[i] = 70;         // 涌泉=湍
-                    } else if (d <= 2.6 && Math.abs(ey[i] - h.wl()) <= 5) {
-                        ey[i] = h.wl();                           // 齐平沿口（低则成堤）
+                    } else if (d <= 2.6 && ey[i] - h.wl() >= 0 && ey[i] - h.wl() <= 5) {
+                        ey[i] = h.wl();                           // 齐平沿口（高则削平）
                         eLand[i] = maxL(eLand[i], L_SPRING);
-                    } else if (d <= 3.4 && ey[i] < h.wl() && h.wl() - ey[i] <= 5) {
+                    } else if (d <= 2.6 && h.wl() - ey[i] <= 2) {
+                        ey[i] = h.wl();                           // 低则小堤（0.30 封顶 2 格，
+                        eLand[i] = maxL(eLand[i], L_SPRING);      // 山坡涌泉不再垫环形高堤）
+                    } else if (d <= 3.4 && ey[i] < h.wl() && h.wl() - ey[i] <= 2) {
                         ey[i] = h.wl();
                     }
                 }

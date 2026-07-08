@@ -131,7 +131,9 @@ public final class RiverMapTool {
                     rgb = lerp(0x59D6F2, 0x1E7ECB, Math.min(1, (depth - 1) / 4.0));
                     int mis = eyB[i] - eWl[i];
                     if (mis > 8) rgb = 0xC03038;                 // 贴地残余：深切劈山热点
-                    else if (mis < -4) rgb = 0xC838C8;           // 贴地残余：壅水/漫滩热点
+                    else if (mis < -4 && (eFlow[i] & 0xFF) > 0) {
+                        rgb = 0xC838C8;                          // 贴地残余：壅水/漫滩热点
+                    }                                            // （湖体天然深，不算热点）
                 } else if (eWater[i]) {
                     int depth = sea - y;
                     rgb = lerp(0x4F86C8, 0x11274E, Math.min(1, depth / 60.0));
