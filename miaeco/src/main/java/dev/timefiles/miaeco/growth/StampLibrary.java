@@ -85,21 +85,58 @@ public final class StampLibrary {
 
     /** 随机挑一棵（可按 family 过滤，null 为全部）。 */
     public static Prefab random(String family, Random rng) {
+        return random(family, 0, rng);
+    }
+
+    /** 随机挑一棵（族过滤 + 高度上限，maxHeight ≤0 不限；过滤后空池退回不限高）。 */
+    public static Prefab random(String family, int maxHeight, Random rng) {
         List<Prefab> pool = new ArrayList<>();
         for (Prefab p : all().values()) {
-            if (family == null || p.family().equalsIgnoreCase(family)) pool.add(p);
+            if (family != null && !p.family().equalsIgnoreCase(family)) continue;
+            if (maxHeight > 0 && p.height() > maxHeight) continue;
+            pool.add(p);
         }
-        if (pool.isEmpty()) return null;
+        if (pool.isEmpty()) {
+            return maxHeight > 0 ? random(family, 0, rng) : null;
+        }
         return pool.get(rng.nextInt(pool.size()));
+    }
+
+    /**
+     * 模板树模式的族映射：所有树种都必须落到一个预制族（普通 {@link #familyFor}
+     * 返回 null 的借形态最接近的族）。maple/ginkgo 不走 special——羊毛彩冠巨树
+     * 仅作地标点缀，成片铺开会很怪。
+     */
+    public static String familyForTemplate(String speciesId) {
+        return switch (speciesId) {
+            case "maple", "ginkgo" -> "oak";
+            case "cherry" -> "birch";
+            case "palm", "banyan", "mangrove", "jungle" -> "jungle";
+            case "spruce", "snowy_spruce", "cypress", "fir", "pine" -> "spruce";
+            case "birch", "aspen" -> "birch";
+            default -> {
+                String fam = familyFor(speciesId);
+                yield fam == null || fam.equals("special") ? "oak" : fam;
+            }
+        };
     }
 
     /** 盖印为绝对方块写入（绕 Y 轴 rot×90°），基座 (0,0,0) 对齐到 (bx,by,bz)。 */
     public static List<BlockEdit> place(Prefab p, int bx, int by, int bz, int rot) {
+        return place(p, bx, by, bz, rot, false);
+    }
+
+    /** 盖印（先 X 镜像后旋转）：rot 0..3 × mirror = 8 种朝向变体。 */
+    public static List<BlockEdit> place(Prefab p, int bx, int by, int bz, int rot, boolean mirror) {
         List<BlockEdit> out = new ArrayList<>(p.cells().size());
         int r = rot & 3;
         for (Prefab.Cell c : p.cells()) {
             int x = c.x(), z = c.z();
             BlockSpec spec = c.spec();
+            if (mirror) {
+                x = -x;
+                spec = mirrorSpec(spec);
+            }
             for (int i = 0; i < r; i++) {
                 int t = x;
                 x = -z;
@@ -109,6 +146,26 @@ public final class StampLibrary {
             out.add(new BlockEdit(bx + x, by + c.y(), bz + z, spec));
         }
         return out;
+    }
+
+    /** X 镜像（x'=-x）：东西朝向互换，轴向/其余状态不变。 */
+    private static BlockSpec mirrorSpec(BlockSpec s) {
+        if (s.state == BlockSpec.State.VINE_FACES && s.faces != null) {
+            Set<BlockFace> f = EnumSet.noneOf(BlockFace.class);
+            for (BlockFace face : s.faces) f.add(mirrorFace(face));
+            return BlockSpec.vine(f);
+        }
+        if (s.state == BlockSpec.State.STAIR && s.facing != null) {
+            return BlockSpec.stair(s.material, mirrorFace(s.facing), s.aux == 1);
+        }
+        if (s.state == BlockSpec.State.BUTTON && s.facing != null) {
+            return BlockSpec.button(s.material, mirrorFace(s.facing), s.aux);
+        }
+        return s;
+    }
+
+    private static BlockFace mirrorFace(BlockFace f) {
+        return f == BlockFace.EAST ? BlockFace.WEST : f == BlockFace.WEST ? BlockFace.EAST : f;
     }
 
     private static BlockSpec rotate(BlockSpec s) {

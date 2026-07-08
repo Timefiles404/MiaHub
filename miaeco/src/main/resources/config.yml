@@ -49,6 +49,9 @@ terrain:
   geo-features: true
   # 地图世界全局河流数量倍率（0=不出河；蜿蜒合流、源自高地入海，全图统一规划）
   rivers: 1.0
+  # 画布世界 terra gen 默认只种树库模板树（镜像×旋转变体，生成快且规整）；
+  # 地图世界按创建参数 trees=template|auto（hub 草稿操作台也可切）
+  template-trees: false
   # ONNX 推理线程数（0=自动：核数-2 给主线程留核；-1=全核；>0 指定核数）
   inference-threads: 0
   # cpu | auto | gpu：auto/gpu 会自动下载 GPU 运行时（ORT CUDA EP ~526MB +

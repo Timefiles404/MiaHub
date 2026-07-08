@@ -102,6 +102,8 @@ public final class HubService {
         int sea;
         boolean openEdge;
         double yscale;
+        double variety = 1.0;       // 地形多样性（0.28.0：合成条件图采样跨度倍率）
+        boolean ttrees;             // 只种树库模板树
         int preview = DEFAULT_SB;   // 沙盘边长（控制台可调）
         Long seed;                  // null = 还没抽过
         byte[] baseLvl;             // 抽卡基线层级（confirm 时与雪面求差，gw×gh）
@@ -218,6 +220,8 @@ public final class HubService {
             yml.set(b + "sea", d.sea);
             yml.set(b + "edge", d.openEdge ? "open" : "sea");
             yml.set(b + "yscale", d.yscale);
+            yml.set(b + "variety", d.variety);
+            yml.set(b + "ttrees", d.ttrees);
             yml.set(b + "preview", d.preview);
             if (d.seed != null) yml.set(b + "seed", d.seed);
             if (d.baseLvl != null) yml.set(b + "base", Base64.getEncoder().encodeToString(d.baseLvl));
@@ -282,6 +286,8 @@ public final class HubService {
             d.sea = ds.getInt(k + ".sea", 63);
             d.openEdge = "open".equals(ds.getString(k + ".edge", "sea"));
             d.yscale = ds.getDouble(k + ".yscale", 1.0);
+            d.variety = ds.getDouble(k + ".variety", 1.0);
+            d.ttrees = ds.getBoolean(k + ".ttrees", false);
             d.preview = Math.max(MIN_SB, Math.min(MAX_SB, ds.getInt(k + ".preview", DEFAULT_SB)));
             if (ds.contains(k + ".seed")) d.seed = ds.getLong(k + ".seed");
             int[] g = gridOf(d);
@@ -598,7 +604,8 @@ public final class HubService {
 
     /** /miaeco hub new：开一块草稿沙盘（preview=沙盘边长，独立于世界大小；支持非正方形）。 */
     public String newDraft(Player p, String name, int sizeX, int sizeZ, int mpb, int sea,
-                           boolean openEdge, double yscale, int preview) {
+                           boolean openEdge, double yscale, double variety, boolean ttrees,
+                           int preview) {
         if (!NAME_OK.matcher(name).matches()) return "名字只能用字母/数字/下划线/横线（≤32 字符）。";
         if (drafts.containsKey(name)) return "已有同名草稿（hub tp " + name + " 去看看）。";
         if (eco.worlds().isManaged(name) || Bukkit.getWorld(name) != null) return "已有同名世界。";
@@ -614,6 +621,8 @@ public final class HubService {
         d.sea = sea;
         d.openEdge = openEdge;
         d.yscale = yscale;
+        d.variety = variety;
+        d.ttrees = ttrees;
         d.preview = preview;
         int[] g = gridOf(d);
         d.baseLvl = new byte[g[0] * g[1]];
@@ -639,7 +648,7 @@ public final class HubService {
         long seed = seedOrNull != null ? seedOrNull : new java.util.Random().nextLong();
         int[] g = gridOf(d);
         return eco.terra().hubPreview(sender, seed, d.size, d.sizeZ, d.mpb, d.openEdge,
-                g[0], g[1], meters ->
+                d.variety, g[0], g[1], meters ->
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     Draft cur = drafts.get(name);
                     if (cur == null) return;
@@ -754,7 +763,8 @@ public final class HubService {
             if (dl != 0) changed++;
             sketch[i] = (float) (dl * M_PER_LEVEL);
         }
-        var map = new EcoWorlds.MapSpec(d.size, d.sizeZ, d.mpb, d.sea, d.openEdge, d.yscale);
+        var map = new EcoWorlds.MapSpec(d.size, d.sizeZ, d.mpb, d.sea, d.openEdge, d.yscale,
+                d.variety, d.ttrees);
         String err = eco.worlds().create(name, d.seed, map);
         if (err != null) return err;
         EcoWorlds.Entry entry = eco.worlds().entry(name);

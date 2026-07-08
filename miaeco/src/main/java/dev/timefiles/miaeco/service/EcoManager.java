@@ -152,7 +152,8 @@ public final class EcoManager {
                 cfg.getBoolean(tb + "geo-features", true),
                 cfg.getInt(tb + "split-cells", 90000),
                 cfg.getInt(tb + "map-max-size", 10240),
-                cfg.getDouble(tb + "rivers", 1.0));
+                cfg.getDouble(tb + "rivers", 1.0),
+                cfg.getBoolean(tb + "template-trees", false));
     }
 
     /** hub 控制台改完 config 后调用：落盘并热更 terra 配置快照（下个任务生效）。 */

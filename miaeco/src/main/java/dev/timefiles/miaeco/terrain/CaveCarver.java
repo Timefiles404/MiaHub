@@ -17,11 +17,20 @@ public final class CaveCarver {
     private final FastNoiseLite a;
     private final FastNoiseLite b;
     private final FastNoiseLite cheese;
+    private final int deepY;      // 深处放宽阈值的起始 Y（海平面下 23 格）
+    private final int cheeseY;    // 奶酪大厅上限 Y（海平面下 29 格）
 
     public CaveCarver(long seed) {
+        this(seed, HeightMapper.SEA_LEVEL);
+    }
+
+    /** 0.28.0：深度带随世界海平面平移（旧阈值 y<40/y<34 以 sea=63 标定）。 */
+    public CaveCarver(long seed, int sea) {
         a = noise((int) (seed & 0x7FFFFFFFL), 0.021f);
         b = noise((int) ((seed >>> 17) & 0x7FFFFFFFL) ^ 0x5EED, 0.021f);
         cheese = noise((int) ((seed >>> 34) & 0x7FFFFFFFL) ^ 77, 0.013f);
+        this.deepY = sea - 23;
+        this.cheeseY = sea - 29;
     }
 
     private static FastNoiseLite noise(int seed, float freq) {
@@ -36,9 +45,9 @@ public final class CaveCarver {
         float ys = y * 1.7f;
         float na = a.GetNoise(wx, ys, wz);
         float nb = b.GetNoise(wx, ys, wz);
-        float thr = 0.0042f + (y < 40 ? (40 - y) * 0.00005f : 0f);
+        float thr = 0.0042f + (y < deepY ? (deepY - y) * 0.00005f : 0f);
         if (na * na + nb * nb < thr) return true;
-        return y < 34 && cheese.GetNoise(wx, y * 2.2f, wz) > 0.74f;
+        return y < cheeseY && cheese.GetNoise(wx, y * 2.2f, wz) > 0.74f;
     }
 
     /** 陡坡崖面凹蚀（调用方限定在 slope≥5 的柱身带内）。 */

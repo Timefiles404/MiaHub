@@ -27,13 +27,15 @@ public final class RiverMapTool {
         int size = Integer.getInteger("miaeco.mapSize", 1024);
         long seed = Long.getLong("miaeco.mapSeed", 20260707L);
         double yscale = Double.parseDouble(System.getProperty("miaeco.yscale", "2.0"));
-        int mpb = 60, p = mpb / 30, sea = 63;
+        double variety = Double.parseDouble(System.getProperty("miaeco.variety", "2.0"));
+        int sea = Integer.getInteger("miaeco.sea", 0);
+        int mpb = 60, p = mpb / 30;
         HeightMapper mapper = new HeightMapper(40.0 / yscale, 250, 300, sea);
         int x1 = -size / 2, z1 = -size / 2;
 
-        System.out.printf("== river map: size=%d seed=%d edge=open yscale=%.1f scale=%dm/格 ==%n",
-                size, seed, yscale, mpb);
-        LocalTerrainProvider.init(seed);
+        System.out.printf("== river map: size=%d seed=%d edge=open yscale=%.1f variety=%.1f sea=%d scale=%dm/格 ==%n",
+                size, seed, yscale, variety, sea, mpb);
+        LocalTerrainProvider.init(seed, variety);
 
         // ---- 全局河流规划（与 TerraService.planRivers 同构：coarse 双线性 + boost + yOfF）----
         double npb = p;                                          // 原生 px / 格

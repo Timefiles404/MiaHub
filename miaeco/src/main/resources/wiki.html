@@ -50,7 +50,7 @@
 <tr><td><code>/miaeco atmo apply | clear | info &lt;森林&gt;</code></td><td>铺开氛围 / 精确恢复原地形 / 查看设置</td></tr>
 <tr><td><code>/miaeco atmo feature &lt;森林&gt; &lt;特征&gt; &lt;0~5&gt;</code></td><td>单项强度：river/town/groundcover/water/paths/soil/rocks/ruins（0=关，river 5 档水系尤其强烈，town=人烟）</td></tr>
 <tr><td><code>/miaeco world create &lt;名&gt; [seed=N] | list | tp &lt;名&gt; | remove &lt;名&gt; confirm</code></td><td>专用生态世界管理（平原画布；remove 连文件夹删除）</td></tr>
-<tr><td><code>/miaeco world create &lt;名&gt; size=N|AxB [scale=15|30|60|120] [sea=Y] [edge=sea|open] [yscale=X]</code></td><td>地图世界：虚空+中心自动地形与生态；size 可写 <code>1000x500</code> 生成非正方形；scale=每格米数（比例尺），sea=海平面；edge=open 四周不强制为海（断崖边缘+更强山体），yscale 竖向缩放 0.5~2.5（越大山越高）</td></tr>
+<tr><td><code>/miaeco world create &lt;名&gt; size=N|AxB [scale=15|30|60|120] [sea=Y] [edge=sea|open] [yscale=X] [variety=V] [trees=template|auto]</code></td><td>地图世界：虚空+中心自动地形与生态；size 可写 <code>1000x500</code>；<b>默认 sea=0 yscale=2 variety=2</b>（0.28.0：立体世界+多样地形）；variety=地形多样性 0.5~4（一图跨几倍地理性格）；trees=template 只种树库模板树（快且规整）</td></tr>
 <tr><td><code>/miaeco world regen &lt;名&gt; [seed=N] confirm</code></td><td>地图世界删档重生成（默认换新种子，同参数重跑）</td></tr>
 <tr><td><code>/miaeco terra gen [noeco]</code></td><td>在选区生成真实地形+自动群系+自动森林（noeco=只地形）</td></tr>
 <tr><td><code>/miaeco terra resume [地图世界]</code></td><td>地图分片断点续跑（取消/崩溃后从下一片接着生成）</td></tr>
@@ -58,7 +58,7 @@
 <tr><td><code>/miaeco geo gen &lt;类型&gt; [强度] [风格]</code></td><td>在选区散布地貌奇观：stone_forest 石林 / karst_towers 峰林 / hoodoos 蘑菇岩 / arch 岩拱 / monoliths 孤石 / hot_spring 温泉；风格 stone/karst/sand/red/ice</td></tr>
 <tr><td><code>/miaeco geo types | undo</code></td><td>列出类型 / 撤销最近一次地貌</td></tr>
 <tr><td><code>/miaeco hub</code></td><td>进入 MiaEco 大厅：每个世界一块 20×20 <b>积雪沙盘</b>（雪高=地形，1 层雪=1/8 格精度；蓝玻璃=水面；最高/最低点悬浮标注；生成中的世界随分片实时"长出来"）</td></tr>
-<tr><td><code>/miaeco hub new &lt;名&gt; [size=N|AxB] [preview=12~48] [scale=…] [sea=…] [edge=…] [yscale=…]</code></td><td>开草稿沙盘：size 可写 <code>1000x500</code>（非正方形按比例居中嵌入沙盘）；preview=沙盘边长（操作台可再调）</td></tr>
+<tr><td><code>/miaeco hub new &lt;名&gt; [size=N|AxB] [preview=12~48] [scale=…] [sea=…] [edge=…] [yscale=…] [variety=…] [trees=template|auto]</code></td><td>开草稿沙盘：size 可写 <code>1000x500</code>；默认 sea=0 yscale=2 variety=2；trees=template 只种树库模板树；全参数操作台可再调</td></tr>
 <tr><td><code>/miaeco hub roll &lt;名&gt; [seed]</code></td><td>抽卡：抽一个种子做 coarse 粗扫铺到沙盘（秒级，无限抽到满意为止）</td></tr>
 <tr><td><code>/miaeco hub water &lt;名&gt;</code></td><td>水系预览：按当前雪面规划河流湖泊，滴水粒子贴雪面画河 90 秒 + 沙盘旁画框挂 128² 俯视地图画</td></tr>
 <tr><td><code>/miaeco hub confirm &lt;名&gt;</code></td><td>送入生产：读回雪面修形差量（1 层雪 ≈ 45 米）作为草图混入扩散地形，创建世界并开始生成</td></tr>
@@ -66,6 +66,12 @@
 <tr><td><code>/miaeco clear &lt;森林&gt;</code></td><td>清除该森林所有树方块</td></tr>
 <tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（147 棵建筑师设计树）</td></tr>
 </table>
+
+<h2>0.28.0 大地一体观感 · 模板树模式 · 立体世界（sea=0）· 地形多样性</h2>
+<p><b>① 地表大片化（去"麻子"）：</b>拉远看地面不再是逐列乱撒的碎点。皮肤与林床的随机决策全部改成<b>大尺度斑块分区</b>——同一斑块内整片同材、变化只发生在斑块边界：山体硬化的岩相分选 7→26 格、林床土斑 9→34 格且<b>斑块内同材</b>、苔藓区 13→22 格；<b>树冠之外的开阔地土斑覆盖率砍 65%</b>（草原/林间空地是大片纯草）；terra 皮肤同步：岩坡 30 格分区（不再逐列石/安山/凝灰花斑）、冲积扇/砾石滩/红树滩/滨海草甸/沼泽泥斑全部成片化。</p>
+<p><b>② 模板树模式（trees=template）：</b>只盖印 147 棵建筑师设计的树库预制树——<b>镜像×旋转 = 8 种朝向变体</b>（预制树管线全链支持镜像，含持久化与清除）；族按树种映射（枫/银杏不铺羊毛彩冠 special，那只作地标），85% 用高 ≤18 的常规体、高大者偶发作视觉锚点。选点/密度/混龄沿用原有种植逻辑，但<b>跳过元胞生长模拟</b>——大图种树的算力大头直接消失。world create / hub new 加 <code>trees=template|auto</code>，草稿操作台一键切换；画布世界走 config <code>terrain.template-trees</code>（控制台配置页可切）。</p>
+<p><b>③ 立体世界：</b>新地图默认 <b>sea=0</b>（原 63）——海床用到 Y=-60、山峰余量整整 300 格，脚下不再是百格虚空浪费；默认 <b>yscale=2</b>（山更高更立体）。配套修正所有以 sea=63 标定的绝对高度规则：露岩线、洞穴深度带（奶酪厅/深处放宽随海平面平移）、<b>树种海拔适生区间按实际海平面平移</b>（否则低地无树）。旧世界参数不变。</p>
+<p><b>④ 地形多样性（variety）：</b>此前一张 2k 图只走过条件场 ~0.4 个波长——整图一种"性格"、难出高山海岛。新增 <b>variety 旋钮（0.5~4，新图默认 2）</b>：合成条件图（高程+气候）按倍率跨采样，同样大小的图跨过几倍的地理性格——山地、海岸、群岛、气候带在一张 2k/4k 图上交替出现，也为火山/冰原等专属地貌打底。按世界持久化（regen/续跑一致），抽卡预览同参生效，riverMap 工具加 <code>-Pmiaeco.variety/-Pmiaeco.sea</code>。</p>
 
 <h2>0.27.0 河流贴地精修——水路长在地形里</h2>
 <p><b>根治河流与实际地形的落差残余：</b>此前水位来自数百米级的 coarse 粗场，与精细推理地形局部一差好几格，铺设时只能硬凑——水低于地太多（>5 格）就把山劈出一道深缝，水高于地就靠漫滩垫起来。0.27.0 起水路"两步走"：粗场只负责<b>定线</b>（流域填洼/汇水/湖泊照旧），定线后整条河在 <b>latent 低频场</b>上<b>二次拟合</b>——它是扩散精细地形的低频骨架（~8 原生像素/样本），与最终地表只差 decoder 的高频残差。</p>
@@ -239,6 +245,7 @@
 
 <h2>路线图（框架待扩展）</h2>
 <ul>
+<li><b>河流路由的中频场感知</b>：目前定线只看 coarse 粗场，横穿 50~100 格波长的丘陵带时靠贴地精修凿峡/壅湖兜底（0.28.0 已给宽河加大鞍口搜索与壅湖上限）；下一步让 D8 路由本身在 latent lowfreq 上做代价细化，大河主动绕丘。</li>
 <li><b>石林奇观回归</b>：按真实石林（云南石林/喀斯特针状岩）参考做精细化采样与形态重建（0.25.0 起暂下线）。</li>
 <li>邻域元胞规则：竞争、林窗更新、火灾/病害传播。</li>
 <li>更真实的物理：分支承重断裂、根系随坡度、光照遮蔽影响生长势。</li>

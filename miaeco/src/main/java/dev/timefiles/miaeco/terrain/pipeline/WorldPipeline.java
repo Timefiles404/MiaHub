@@ -107,13 +107,31 @@ public final class WorldPipeline implements AutoCloseable {
         this.residual = buildDecoderStage();
     }
 
+    private volatile float variety = 1f;
+
     /** Lightweight seed change (Python change_seed): update seed and synthetic map, clear tile caches. Models stay loaded. */
     public void setSeed(long newSeed) {
         long s = newSeed & 0xFFFFFFFFFFFFFFFFL;
         if (s == this.seed) return;
         this.seed = s;
-        this.syntheticMapFactory = new SyntheticMapFactory(s);
+        SyntheticMapFactory f = new SyntheticMapFactory(s);
+        f.setStretch(variety);
+        this.syntheticMapFactory = f;
         tileStore.clearAllCaches();
+    }
+
+    /**
+     * 地形多样性（合成条件图采样跨度倍率，0.28.0）。改变时清空全部张量缓存。
+     *
+     * @return true=值发生了变化（调用方需同步清自己的成品缓存）
+     */
+    public boolean setVariety(double v) {
+        float f = (float) Math.max(0.25, Math.min(4.0, v));
+        if (Math.abs(f - variety) < 1e-6f) return false;
+        variety = f;
+        syntheticMapFactory.setStretch(f);
+        tileStore.clearAllCaches();
+        return true;
     }
 
     // =========================================================================

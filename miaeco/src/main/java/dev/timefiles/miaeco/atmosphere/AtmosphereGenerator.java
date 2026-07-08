@@ -1623,7 +1623,9 @@ public final class AtmosphereGenerator {
                 int wz = g.region().minZ() + lz;
                 int slope = g.slope(lx, lz);
                 int rel = relief[i];
-                double patch = noise(s ^ 0x50BEL, wx, wz, 7.0);
+                // 0.28.0 大片化：分选斑块 7→26 格——拉远看是整片的岩相/土相分区，
+                // 不再是逐列碎点（"麻子"）；材质在斑块内一致，变化发生在斑块边界
+                double patch = noise(s ^ 0x50BEL, wx, wz, 26.0);
                 double m = hash01(s ^ 0xA7L, wx, wz);
                 double wet = wetOf(wetDist, i);
                 boolean rockZone = slope >= 5 || (slope >= 2 && rel >= 9);
@@ -1638,8 +1640,8 @@ public final class AtmosphereGenerator {
                             : patch < 0.80 ? Material.TUFF : Material.COBBLESTONE;
                     if (mossBase >= 0.2 && m < 0.04 + mossBase * 0.15) {
                         top = Material.MOSSY_COBBLESTONE;
-                    } else if (m > 0.955) {
-                        top = Material.GRAVEL;   // 石坡碎屑窝
+                    } else if (m > 0.985) {
+                        top = Material.GRAVEL;   // 石坡碎屑窝（零星）
                     }
                 } else if (rockEdge) {
                     // 山麓过渡带：石斑+粗土斑点缀，其余裸土还草——山坡不再全秃
@@ -1663,7 +1665,7 @@ public final class AtmosphereGenerator {
                 } else {
                     // 苔藓大区：低频区域场按主题苔藓度圈出成片"茂密浅草地"，
                     // 缘带苔毯羽化、区内留草孔隙；再往下才是中坡土斑/还草与平地主题斑块
-                    double mz = noise(s ^ 0x3055L, wx, wz, 13.0);
+                    double mz = noise(s ^ 0x3055L, wx, wz, 22.0);
                     double mossT = 0.34 * Math.min(1.0,
                             mossBase * (0.8 + 0.4 * wet) * (g.canopy(lx, lz) ? 1.2 : 1.0));
                     if (slope <= 3 && mz < mossT) {
@@ -1689,11 +1691,14 @@ public final class AtmosphereGenerator {
                             force = true;
                         }
                     } else {
-                        // 平缓地：主题土壤斑块（原逻辑）
-                        double n = Math.pow(noise(s, wx, wz, 9.0), 1.3);
-                        if (n <= cover) {
-                            top = soils[(int) (hash01(s ^ 0xA5, wx, wz) * soils.length)
-                                    % soils.length];
+                        // 平缓地：主题土壤斑块（0.28.0 大片化）——低频口袋圈成片、
+                        // 口袋内整片同材（材质按更低频分区挑，不逐列掷点）；
+                        // 树冠下沿用主题覆盖率，开阔地收敛 65%：草原/林间空地大片留纯草
+                        double n = Math.pow(noise(s, wx, wz, 34.0), 1.3);
+                        double cov = g.canopy(lx, lz) ? cover : cover * 0.35;
+                        if (n <= cov) {
+                            top = soils[(int) (noise(s ^ 0xA5L, wx, wz, 21.0)
+                                    * soils.length * 0.999) % soils.length];
                         }
                     }
                 }

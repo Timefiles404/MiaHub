@@ -228,6 +228,7 @@ public final class ForestStore {
         if (t.isPrefab()) {
             m.put("prefab", t.prefabId());
             m.put("prefabRot", t.prefabRot());
+            if (t.prefabMirror()) m.put("prefabMirror", true);
         }
         return m;
     }
@@ -250,7 +251,8 @@ public final class ForestStore {
             Object pf = m.get("prefab");
             if (pf != null && !String.valueOf(pf).isEmpty()) {
                 Object pr = m.get("prefabRot");
-                t.prefab(String.valueOf(pf), pr instanceof Number num ? num.intValue() : 0);
+                t.prefab(String.valueOf(pf), pr instanceof Number num ? num.intValue() : 0,
+                        Boolean.TRUE.equals(m.get("prefabMirror")));
             }
             GrowthStage stage = GrowthStage.valueOf(String.valueOf(m.get("stage")));
             t.stage(stage);

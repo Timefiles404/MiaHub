@@ -212,7 +212,7 @@ public final class PlacementService {
             if (!far) continue;
             StampLibrary.Prefab pf = StampLibrary.random(fam, r);
             if (pf == null) continue;
-            t.prefab(pf.id(), r.nextInt(4));
+            t.prefab(pf.id(), r.nextInt(4), r.nextBoolean());
             t.stage(GrowthStage.MATURE);        // 地标一出场就是成树
             landmarks.add(t);
             radii.add(Math.max(3, (int) Math.round(pf.canopyW() * 0.45)));

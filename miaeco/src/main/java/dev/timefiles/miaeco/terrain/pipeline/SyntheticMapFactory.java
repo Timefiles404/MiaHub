@@ -37,6 +37,17 @@ public final class SyntheticMapFactory {
     // Per-seed noise instances (channels 0..4)
     private final FastNoiseLite[] noises = new FastNoiseLite[N_CHANNELS];
 
+    /**
+     * 采样坐标倍率（0.28.0 地形多样性）：同样的窗口跨过 stretch 倍的条件图空间——
+     * 山地↔海岸↔深海、气候带在一张图里交替出现。Perlin 边缘分布平稳，
+     * 分位数表与 stretch 无关，坐标缩放不破坏 quantile 匹配。
+     */
+    private volatile float stretch = 1f;
+
+    public void setStretch(float s) {
+        this.stretch = s;
+    }
+
     private static float[][] cachedDataQuantiles;
     private static float cachedATempStd;
     private static float cachedBTempStd;
@@ -151,9 +162,10 @@ public final class SyntheticMapFactory {
             int k = 0;
             // Python: noise is sampled at (Xs, Ys) where Xs = col (x1..x2) and Ys = row (y1..y2)
             // meshgrid(x, y) with x=col-range, y=row-range → result[r][c] = noise(x1+c, y1+r)
+            float st = stretch;
             for (int r = 0; r < H; r++) {
                 for (int c = 0; c < W; c++) {
-                    float noiseVal = fnl.GetNoise(x1 + c, y1 + r);
+                    float noiseVal = fnl.GetNoise((x1 + c) * st, (y1 + r) * st);
                     rawChannels[ch][k++] = interp(noiseVal, nq, dq);
                 }
             }

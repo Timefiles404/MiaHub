@@ -23,6 +23,7 @@ public final class TreeInstance {
     private double vigor = 0.85;    // 地形适宜度 → 生长活力 0..1
     private String prefabId;        // 非 null = 树库地标预制树（形态取自 StampLibrary，不参与演替）
     private int prefabRot;          // 预制树绕 Y 旋转（0..3 × 90°）
+    private boolean prefabMirror;   // 预制树 X 镜像（旋转×镜像=8 种朝向变体）
     private GrowthStage stage;
     private GrowthStage builtStage;   // 当前已写入世界的形态阶段；null=尚未生长
     private double builtProgress;     // 已写入形态的阶段内进度
@@ -64,8 +65,14 @@ public final class TreeInstance {
 
     public String prefabId() { return prefabId; }
     public int prefabRot() { return prefabRot; }
+    public boolean prefabMirror() { return prefabMirror; }
     public boolean isPrefab() { return prefabId != null; }
-    public void prefab(String id, int rot) { this.prefabId = id; this.prefabRot = rot & 3; }
+    public void prefab(String id, int rot) { prefab(id, rot, false); }
+    public void prefab(String id, int rot, boolean mirror) {
+        this.prefabId = id;
+        this.prefabRot = rot & 3;
+        this.prefabMirror = mirror;
+    }
 
     public GrowthStage stage() { return stage; }
     public void stage(GrowthStage s) {

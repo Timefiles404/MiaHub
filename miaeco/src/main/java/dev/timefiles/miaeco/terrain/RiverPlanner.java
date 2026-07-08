@@ -521,7 +521,8 @@ public final class RiverPlanner {
             float dz = oz[Math.min(m - 1, i + 2)] - oz[Math.max(0, i - 2)];
             float len = (float) Math.max(1e-3, Math.hypot(dx, dz));
             float px = -dz / len, pz = dx / len;
-            double span = Math.min(15, 4 + 1.5 * hws[i]);
+            // 宽河搜索半径更大：大河更会找鞍口过岭，而不是从丘脊正中切过去
+            double span = Math.min(26, 4 + 2.6 * hws[i]);
             double best = 0, bestScore = Double.MAX_VALUE;
             for (double o = -span; o <= span + 1e-6; o += 1.5) {
                 double y = mid.yAt(ox[i] + px * o, oz[i] + pz * o) + Math.abs(o) * 0.22;
@@ -587,7 +588,10 @@ public final class RiverPlanner {
         float run = Float.MAX_VALUE;
         for (int i = 0; i < m; i++) {
             float b = (float) Math.max(2.5, Math.min(8, 2.5 + (g[i] - sea) * 0.035));
-            float cand = Math.max(t[i], Math.min(f[i] - b, t[i] + POND_MAX));
+            // 宽河壅水上限放宽（+≤2.5）：大河遇丘壅成湖泊型河段（潭区自动展宽），
+            // 远比从丘脊正中切一道深槽自然；小溪仍严守 2.5
+            float pmax = POND_MAX + Math.min(2.5f, hws[i] * 0.35f);
+            float cand = Math.max(t[i], Math.min(f[i] - b, t[i] + pmax));
             run = Math.min(run, cand);
             w[i] = run;
         }

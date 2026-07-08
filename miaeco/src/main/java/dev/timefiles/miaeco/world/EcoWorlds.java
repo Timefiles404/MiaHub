@@ -45,17 +45,27 @@ public final class EcoWorlds {
     /**
      * 地图世界规格：size>0 表示"虚空画布 + 中心 size×sizeZ 自动地形"（0.26.0 起支持
      * 非正方形，size=X 跨度、sizeZ=Z 跨度；正方形两者相等）。
-     * openEdge=true 四周不强制为海（断崖边缘、山体增幅）；yScale 竖向缩放（1=默认，越大山越高）。
+     * openEdge=true 四周不强制为海（断崖边缘、山体增幅）；yScale 竖向缩放（越大山越高）。
+     * variety（0.28.0）＝地形多样性：合成条件图的采样跨度倍率——同样大小的图跨过
+     * 几倍的"地理性格"（山地↔海岸↔深海、气候带），旧世界 1.0 不变，新世界默认 2.0。
+     * templateTrees（0.28.0）＝只种树库模板树（镜像×旋转变体，跳过算法生长模拟）。
      */
     public record MapSpec(int size, int sizeZ, int metersPerBlock, int seaLevel,
-                          boolean openEdge, double yScale) {
+                          boolean openEdge, double yScale, double variety,
+                          boolean templateTrees) {
         public MapSpec(int size, int metersPerBlock, int seaLevel) {
-            this(size, size, metersPerBlock, seaLevel, false, 1.0);
+            this(size, size, metersPerBlock, seaLevel, false, 1.0, 1.0, false);
         }
 
-        /** 正方形便捷构造（旧调用兼容）。 */
+        /** 正方形便捷构造（旧调用兼容，variety=1 无模板树）。 */
         public MapSpec(int size, int metersPerBlock, int seaLevel, boolean openEdge, double yScale) {
-            this(size, size, metersPerBlock, seaLevel, openEdge, yScale);
+            this(size, size, metersPerBlock, seaLevel, openEdge, yScale, 1.0, false);
+        }
+
+        /** 0.26.0 双轴构造（旧调用兼容，variety=1 无模板树）。 */
+        public MapSpec(int size, int sizeZ, int metersPerBlock, int seaLevel,
+                       boolean openEdge, double yScale) {
+            this(size, sizeZ, metersPerBlock, seaLevel, openEdge, yScale, 1.0, false);
         }
 
         public boolean square() {
@@ -110,7 +120,9 @@ public final class EcoWorlds {
                             sec.getInt(name + ".map.mpb", 30),
                             sec.getInt(name + ".map.sea", 63),
                             "open".equals(sec.getString(name + ".map.edge", "sea")),
-                            sec.getDouble(name + ".map.yscale", 1.0)) : null;
+                            sec.getDouble(name + ".map.yscale", 1.0),
+                            sec.getDouble(name + ".map.variety", 1.0),
+                            sec.getBoolean(name + ".map.ttrees", false)) : null;
                     Entry e = new Entry(name, seed, map);
                     int skn = sec.getInt(name + ".map.sketchn", 0);
                     int sknz = sec.getInt(name + ".map.sketchnz", skn);
@@ -165,6 +177,8 @@ public final class EcoWorlds {
                 yml.set(base + "map.sea", e.map.seaLevel());
                 yml.set(base + "map.edge", e.map.openEdge() ? "open" : "sea");
                 yml.set(base + "map.yscale", e.map.yScale());
+                yml.set(base + "map.variety", e.map.variety());
+                yml.set(base + "map.ttrees", e.map.templateTrees());
                 if (e.sketch != null && e.sketchN > 0) {
                     java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(e.sketch.length * 4);
                     bb.asFloatBuffer().put(e.sketch);

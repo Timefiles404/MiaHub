@@ -94,7 +94,10 @@ public final class GrowthService {
         if (t.isPrefab()) {
             if (t.builtStage() == null) {
                 StampLibrary.Prefab pf = StampLibrary.get(t.prefabId());
-                if (pf != null) edits.addAll(StampLibrary.place(pf, t.x(), t.y(), t.z(), t.prefabRot()));
+                if (pf != null) {
+                    edits.addAll(StampLibrary.place(pf, t.x(), t.y(), t.z(),
+                            t.prefabRot(), t.prefabMirror()));
+                }
             }
             return edits;
         }
@@ -126,7 +129,8 @@ public final class GrowthService {
                 if (t.isPrefab()) {
                     StampLibrary.Prefab pf = StampLibrary.get(t.prefabId());
                     if (pf != null) {
-                        for (BlockEdit pe : StampLibrary.place(pf, t.x(), t.y(), t.z(), t.prefabRot())) {
+                        for (BlockEdit pe : StampLibrary.place(pf, t.x(), t.y(), t.z(),
+                                t.prefabRot(), t.prefabMirror())) {
                             e.add(new BlockEdit(pe.x(), pe.y(), pe.z(), BlockSpec.AIR));
                         }
                     }

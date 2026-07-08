@@ -51,6 +51,7 @@ public final class TerraDumpTool {
         }
         fail |= mapModeRun(outDir);
         fail |= tileSeamRun();
+        fail |= varietyRun();
         fail |= geoCaveRun();
         fail |= splitterRun();
         fail |= simpleEcoRun();
@@ -61,6 +62,35 @@ public final class TerraDumpTool {
         fail |= canopyRun();
         System.out.println(fail ? "TERRA CHECK: FAIL" : "TERRA CHECK: PASS");
         if (fail) System.exit(1);
+    }
+
+    /**
+     * 地形多样性（0.28.0）：variety 改变合成条件图采样跨度——同 seed 不同 variety
+     * 必须产出不同 coarse；回设相同 variety 结果逐位一致（缓存失效 + 确定性）。
+     */
+    private static boolean varietyRun() throws Exception {
+        LocalTerrainProvider.init(SEED + 31L, 1.0);
+        float[] a = LocalTerrainProvider.getPipelineCoarse(0, 0, 2, 2).data.clone();
+        LocalTerrainProvider.init(SEED + 31L, 2.0);
+        float[] b = LocalTerrainProvider.getPipelineCoarse(0, 0, 2, 2).data.clone();
+        LocalTerrainProvider.init(SEED + 31L, 1.0);
+        float[] c = LocalTerrainProvider.getPipelineCoarse(0, 0, 2, 2).data.clone();
+        boolean fail = false;
+        boolean diff = false;
+        for (int i = 0; i < a.length && !diff; i++) diff = Math.abs(a[i] - b[i]) > 1e-4f;
+        if (!diff) {
+            System.out.println("VARIETY NO-EFFECT FAIL（variety=2 与 1 的 coarse 完全一致）");
+            fail = true;
+        }
+        for (int i = 0; i < a.length; i++) {
+            if (a[i] != c[i]) {
+                System.out.println("VARIETY DETERMINISM FAIL @" + i);
+                fail = true;
+                break;
+            }
+        }
+        System.out.printf("variety: 跨度生效 %s, 回设一致 %s%n", diff ? "OK" : "NO", fail ? "?" : "OK");
+        return fail;
     }
 
     /** 水文规划：合成 山地→海 + 内陆盆地 场上建流域，验证 湖/汇流/泉/单调/齐平/跨片一致。 */

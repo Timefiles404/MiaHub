@@ -45,12 +45,13 @@ import java.util.logging.Level;
  */
 public final class TerraService implements Listener {
 
-    /** config.yml terrain.* 的快照。 */
+    /** config.yml terrain.* 的快照。templateTrees=画布世界的模板树默认（地图世界按 MapSpec）。 */
     public record Settings(boolean enabled, int blocksPerTick, int maxSelection, int feather,
                            double vScale, int softStartY, int maxY,
                            boolean autoEco, int ecoMinCells, int ecoCap, long maxEcoFootprint,
                            boolean caves, boolean cliffErosion, boolean geoFeatures,
-                           int splitCells, int mapMaxSize, double riverDensity) { }
+                           int splitCells, int mapMaxSize, double riverDensity,
+                           boolean templateTrees) { }
 
     public Settings settings() { return st; }
 
@@ -184,13 +185,13 @@ public final class TerraService implements Listener {
      * 海环衰减——与真实生成同链），回调在工作线程。
      */
     public String hubPreview(CommandSender sender, long seed, int sizeX, int sizeZ, int mpb,
-                             boolean openEdge, int gw, int gh,
+                             boolean openEdge, double variety, int gw, int gh,
                              java.util.function.Consumer<float[]> onDone) {
         if (!st.enabled()) return "地形生成未启用（config.yml terrain.enabled）。";
         if (job != null) return "已有地形任务在跑（/miaeco terra status 查看），稍后再抽。";
         Job j = new Job(sender, null, null, null, false);
         this.job = j;
-        pool.execute(() -> j.runHubPreview(seed, sizeX, sizeZ, mpb, openEdge, gw, gh, onDone));
+        pool.execute(() -> j.runHubPreview(seed, sizeX, sizeZ, mpb, openEdge, variety, gw, gh, onDone));
         return null;
     }
 
@@ -233,6 +234,7 @@ public final class TerraService implements Listener {
         final float[] sketch;          // hub 草图（米偏移，sketchN×sketchNZ；null=无）
         final int sketchN;
         final int sketchNZ;
+        final boolean templateTrees;   // 只种树库模板树（跳过算法生长模拟）
         volatile String stageName = "准备";
         volatile RiverPlanner.RiverPlan rivers = RiverPlanner.RiverPlan.EMPTY;  // 全图水系（规划一次）
         final int[] riverFit = new int[3];   // 贴地质量累计（深切>8 / 壅水>4 / 河道列；含裙边重复，仅诊断）
@@ -252,8 +254,9 @@ public final class TerraService implements Listener {
             double ys = mapMode ? Math.max(0.5, Math.min(2.5, entry.map.yScale())) : 1.0;
             this.mapper = new HeightMapper(st.vScale() / ys, st.softStartY(), st.maxY(),
                     mapMode ? entry.map.seaLevel() : HeightMapper.SEA_LEVEL);
+            this.templateTrees = mapMode ? entry.map.templateTrees() : st.templateTrees();
             this.carver = entry != null && (st.caves() || st.cliffErosion())
-                    ? new CaveCarver(entry.seed ^ 0xCA4EL) : null;
+                    ? new CaveCarver(entry.seed ^ 0xCA4EL, mapper.sea()) : null;
             this.progress = new TerraProgress(plugin, sender, world == null ? "" : world);
         }
 
@@ -329,12 +332,13 @@ public final class TerraService implements Listener {
 
         /** hub 抽卡：coarse 粗扫 → gw×gh 高度缩略（米，与真实生成同映射前段）。 */
         void runHubPreview(long seed, int sizeX, int sizeZ, int mpb2, boolean open,
-                           int gw, int gh, java.util.function.Consumer<float[]> onDone) {
+                           double variety, int gw, int gh,
+                           java.util.function.Consumer<float[]> onDone) {
             try {
                 ensureModels();
                 checkCancel();
                 stage("抽卡预览（coarse 粗扫 seed=" + seed + "）");
-                LocalTerrainProvider.init(seed);
+                LocalTerrainProvider.init(seed, variety);
                 double npb = mpb2 <= 15 ? 1.0 / Math.max(1, TerrainConfig.scale()) : mpb2 / 30.0;
                 int x1 = -sizeX / 2, z1 = -sizeZ / 2;
                 int ci0 = (int) Math.floor(z1 * npb / 256.0) - 1;
@@ -411,7 +415,7 @@ public final class TerraService implements Listener {
             int nTz = Math.max(1, (int) Math.ceil(sZ / (double) tile));
             ensureModels();
             checkCancel();
-            LocalTerrainProvider.init(entry.seed);
+            LocalTerrainProvider.init(entry.seed, entry.map.variety());
             // 全图水文规划：coarse 粗扫（秒级）→ 填洼/流向/汇水 → 树状河网+湖泊+地貌，
             // 定线一次、逐片栅格化（断点续跑重算一致，确定性）
             if (st.riverDensity() > 0 && Math.min(sX, sZ) >= 320) {
@@ -1301,15 +1305,19 @@ public final class TerraService implements Listener {
                 }
                 return new Material[]{Material.SAND, Material.SAND, Material.GRAVEL};
             }
-            // 冲积扇：砾沙混杂的辫状堆积面
+            // 冲积扇：砾沙分区的辫状堆积面（0.28.0 大片化：斑块内同材，不逐列掷点）
             if (p.land[i] == RiverPlanner.L_FAN) {
-                Material top = hash < 0.45 ? Material.GRAVEL : hash < 0.8 ? Material.SAND
+                double zone = PlanOps.patch(entry.seed ^ 0xFA2CL, wx, wz, 15.0);
+                Material top = zone < 0.45 ? Material.GRAVEL : zone < 0.8 ? Material.SAND
                         : Material.COARSE_DIRT;
                 return new Material[]{top, Material.GRAVEL, Material.STONE};
             }
-            boolean rock = slope >= 5 || (slope >= 3 && y > 190) || b == 35 || b == 95;
+            boolean rock = slope >= 5 || (slope >= 3 && y > mapper.sea() + 127) || b == 35 || b == 95;
             if (rock) {
-                Material top = hash < 0.45 ? Material.STONE : hash < 0.75 ? Material.ANDESITE : Material.TUFF;
+                // 岩相 30 格斑块分区：整片石/安山/凝灰交替，石坡不再逐列花斑
+                double zone = PlanOps.patch(entry.seed ^ 0x5A0CL, wx, wz, 30.0);
+                Material top = zone < 0.42 ? Material.STONE : zone < 0.70 ? Material.ANDESITE
+                        : Material.TUFF;
                 return new Material[]{top, Material.STONE, Material.STONE};
             }
             if (b == 33) return new Material[]{Material.SNOW_BLOCK, Material.SNOW_BLOCK, Material.STONE};
@@ -1317,25 +1325,30 @@ public final class TerraService implements Listener {
             if (b == 26) return new Material[]{Material.RED_SAND, Material.TERRACOTTA,
                     Material.ORANGE_TERRACOTTA, Material.TERRACOTTA};
             if (b == 92) {
-                // 红树滩：泥地混草皮斑
-                return hash < 0.72 ? new Material[]{Material.MUD, Material.MUD, Material.DIRT}
+                // 红树滩：泥地为主，草皮成片嵌入
+                return PlanOps.patch(entry.seed ^ 0x92C1L, wx, wz, 18.0) < 0.68
+                        ? new Material[]{Material.MUD, Material.MUD, Material.DIRT}
                         : new Material[]{Material.GRASS_BLOCK, Material.MUD, Material.DIRT};
             }
             if (b == 93) {
-                // 砾石滩：砾石为主混石头/圆石
-                Material top = hash < 0.62 ? Material.GRAVEL : hash < 0.84 ? Material.STONE
+                // 砾石滩：砾石为主，石/圆石成片分区
+                double zone = PlanOps.patch(entry.seed ^ 0x93C1L, wx, wz, 14.0);
+                Material top = zone < 0.62 ? Material.GRAVEL : zone < 0.84 ? Material.STONE
                         : Material.COBBLESTONE;
                 return new Material[]{top, Material.GRAVEL, Material.STONE};
             }
             if (b == 94) {
-                // 滨海草甸：草皮，零星沙窝
-                return hash < 0.12 ? new Material[]{Material.SAND, Material.DIRT, Material.DIRT}
+                // 滨海草甸：草皮，成片小沙窝（不再逐列撒沙点）
+                return PlanOps.patch(entry.seed ^ 0x94C1L, wx, wz, 10.0) < 0.10
+                        ? new Material[]{Material.SAND, Material.DIRT, Material.DIRT}
                         : new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.DIRT};
             }
             if (b == EcoBiomes.BEACH || b == EcoBiomes.SNOWY_BEACH) {
                 return new Material[]{Material.SAND, Material.SAND, Material.SANDSTONE};
             }
-            if (b == 6 && hash < 0.3) return new Material[]{Material.MUD, Material.MUD, Material.DIRT};
+            if (b == 6 && PlanOps.patch(entry.seed ^ 0x6C1L, wx, wz, 20.0) < 0.30) {
+                return new Material[]{Material.MUD, Material.MUD, Material.DIRT};
+            }
             return new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.DIRT, Material.DIRT};
         }
 
@@ -1519,10 +1532,17 @@ public final class TerraService implements Listener {
                 // 有树种就种（开阔地的孤树/疏林也走同一条链）
                 boolean trees = species.length > 0;
                 if (trees) {
+                    // 树种海拔适生区间的默认值以 sea=63 标定；sea=0 等地图世界按实际
+                    // 海平面平移，低地森林不再因 minY 而绝迹（0.28.0）
+                    int seaOff = mapper.sea() - HeightMapper.SEA_LEVEL;
                     for (String s : species) {
                         String[] parts = s.split(":");
                         TreeSpecies sp = eco.newSpeciesFromDefaults(parts[0].toLowerCase(Locale.ROOT));
                         if (parts.length > 1) sp.density(Double.parseDouble(parts[1]));
+                        if (seaOff != 0) {
+                            sp.minY(sp.minY() + seaOff);
+                            sp.maxY(sp.maxY() + seaOff);
+                        }
                         f.addSpecies(sp);
                     }
                 }
@@ -1559,6 +1579,7 @@ public final class TerraService implements Listener {
                                         complete.run();
                                         return;
                                     }
+                                    if (templateTrees) stampAll(planted);
                                     eco.succession().seedMatureMix(f, planted);
                                     for (TreeInstance t : planted) f.addTree(t);
                                     terraGrowth.grow(f, w, new ArrayList<>(planted), cnt ->
@@ -1582,6 +1603,25 @@ public final class TerraService implements Listener {
                         return;
                     }
                 }
+            }
+        }
+
+        /**
+         * 模板树模式（0.28.0）：全部点位换成树库预制树——族按树种映射（枫/银杏不走
+         * 羊毛彩冠 special，成片会怪）、镜像×旋转 8 变体、85% 限高 ≤18 的常规体
+         * （高大者偶发作视觉锚点）；地标提升（promoteLandmarks）产出的保持不动。
+         * 预制树首次生长即整棵盖印，跳过元胞生长模拟——大图种树的算力大头没了。
+         */
+        private void stampAll(List<TreeInstance> planted) {
+            for (TreeInstance t : planted) {
+                if (t.isPrefab()) continue;
+                java.util.Random r = new java.util.Random(t.seed() ^ 0x7E3D1A7EL);
+                String fam = dev.timefiles.miaeco.growth.StampLibrary.familyForTemplate(t.speciesId());
+                var pf = dev.timefiles.miaeco.growth.StampLibrary.random(
+                        fam, r.nextDouble() < 0.85 ? 18 : 0, r);
+                if (pf == null) continue;
+                t.prefab(pf.id(), r.nextInt(4), r.nextBoolean());
+                t.stage(dev.timefiles.miaeco.model.GrowthStage.MATURE);
             }
         }
 

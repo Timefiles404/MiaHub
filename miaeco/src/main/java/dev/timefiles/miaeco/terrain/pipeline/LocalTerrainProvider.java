@@ -85,6 +85,14 @@ public final class LocalTerrainProvider {
 
     /** Seed is 64-bit world seed. Creates provider once; later worlds only update seed and clear caches (lightweight). */
     public static synchronized void init(long seed) {
+        init(seed, 1.0);
+    }
+
+    /**
+     * 0.28.0：seed + 地形多样性（合成条件图采样跨度倍率，按世界持久化）。
+     * variety 变化时张量与成品缓存一并清空——不同 variety 的同 seed 是不同地形。
+     */
+    public static synchronized void init(long seed, double variety) {
         PipelineModels.awaitLoad();
         PipelineModels models = PipelineModels.getInstance();
         if (models == null) throw new IllegalStateException("PipelineModels failed to load");
@@ -94,6 +102,10 @@ public final class LocalTerrainProvider {
         } else if (instanceSeed != seed) {
             INSTANCE.pipeline.setSeed(seed);
             instanceSeed = seed;
+            CACHE.clear();
+            PENDING.clear();
+        }
+        if (INSTANCE.pipeline.setVariety(variety)) {
             CACHE.clear();
             PENDING.clear();
         }

@@ -145,6 +145,8 @@ public final class HubConsole implements Listener {
         lore.add(ChatColor.GRAY + (map
                 ? "地图世界 " + e.map.sizeStr() + " @" + e.map.metersPerBlock() + "m/格 海平面 " + e.map.seaLevel()
                 + (e.map.openEdge() ? " 断崖" : "") + (e.map.yScale() != 1.0 ? " y×" + HubService.fmt1(e.map.yScale()) : "")
+                + (e.map.variety() != 1.0 ? " 多样×" + HubService.fmt1(e.map.variety()) : "")
+                + (e.map.templateTrees() ? " 模板树" : "")
                 : "画布世界（选区式 terra gen）"));
         lore.add(ChatColor.GRAY + "seed=" + e.seed + " · 地形块 " + e.patches.size());
         int forests = 0;
@@ -385,6 +387,14 @@ public final class HubConsole implements Listener {
         m.inv.setItem(17, item(Material.SNOW_BLOCK, ChatColor.AQUA + "沙盘尺寸 " + d.preview + "²",
                 ChatColor.GRAY + "左键 +4 / 右键 -4（" + HubService.MIN_SB + "~" + HubService.MAX_SB + "）",
                 ChatColor.GRAY + "雪面按新尺寸重采样保留形态"));
+        m.inv.setItem(18, item(Material.FILLED_MAP, ChatColor.AQUA + "地形多样性 ×" + HubService.fmt1(d.variety),
+                ChatColor.GRAY + "左键 +0.5 / 右键 -0.5（0.5~4）",
+                ChatColor.GRAY + "越大一张图跨过越多地理性格（山地/海岛/气候带）",
+                ChatColor.GRAY + "改完重新 roll 预览才会反映"));
+        m.inv.setItem(19, item(d.ttrees ? Material.OAK_SAPLING : Material.OAK_LOG,
+                (d.ttrees ? ChatColor.GREEN : ChatColor.AQUA) + "树木 " + (d.ttrees ? "模板树" : "算法生长"),
+                ChatColor.GRAY + "点击切换：模板树=只盖印树库预制树",
+                ChatColor.GRAY + "（镜像×旋转变体，生成快且更规整）"));
         m.inv.setItem(21, confirmable(m, 21, Material.EMERALD_BLOCK, ChatColor.GREEN + "送入生产 confirm",
                 ChatColor.GRAY + "读回雪面修形作为草图，创建世界并生成"));
         m.inv.setItem(23, confirmable(m, 23, Material.LAVA_BUCKET, ChatColor.RED + "删除草稿",
@@ -445,6 +455,17 @@ public final class HubConsole implements Listener {
                 if (err != null) p.sendMessage(P + ChatColor.RED + err);
                 drawDraft(m);
             }
+            case 18 -> {
+                d.variety = Math.max(0.5, Math.min(4,
+                        Math.round((d.variety + (right ? -0.5 : 0.5)) * 10) / 10.0));
+                hub.draftParamsChanged(d);
+                drawDraft(m);
+            }
+            case 19 -> {
+                d.ttrees = !d.ttrees;
+                hub.draftParamsChanged(d);
+                drawDraft(m);
+            }
             case 21 -> {
                 if (!armed(m, 21)) {
                     drawDraft(m);
@@ -491,6 +512,8 @@ public final class HubConsole implements Listener {
                 cfg.getBoolean("terrain.cliff-erosion", true)));
         m.inv.setItem(13, toggleItem(Material.SPYGLASS, "地貌奇观",
                 cfg.getBoolean("terrain.geo-features", true)));
+        m.inv.setItem(14, toggleItem(Material.OAK_SAPLING, "模板树（画布默认）",
+                cfg.getBoolean("terrain.template-trees", false)));
         m.inv.setItem(15, item(Material.BOOK, ChatColor.AQUA + "只读参数",
                 ChatColor.GRAY + "推理设备 device=" + cfg.getString("terrain.device", "cpu"),
                 ChatColor.GRAY + "垂直比例 " + cfg.getInt("terrain.vertical-meters-per-block", 40) + "m/格",
@@ -522,6 +545,11 @@ public final class HubConsole implements Listener {
             }
             case 13 -> {
                 cfg.set("terrain.geo-features", !cfg.getBoolean("terrain.geo-features", true));
+                eco.reloadTerraSettings();
+                drawConfig(m);
+            }
+            case 14 -> {
+                cfg.set("terrain.template-trees", !cfg.getBoolean("terrain.template-trees", false));
                 eco.reloadTerraSettings();
                 drawConfig(m);
             }

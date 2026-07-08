@@ -93,9 +93,11 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 Long seed = null;
                 Integer size = null;
                 int sizeZ = 0;
-                int scaleM = 30, sea = 63;
-                boolean openEdge = false;
-                double yscale = 1.0;
+                // 0.28.0 新图默认：sea=0（把 -60~0 的海床空间用起来、山峰余量 300 格）、
+                // yscale=2（更高的山）、variety=2（一图跨多种地理性格）
+                int scaleM = 30, sea = 0;
+                boolean openEdge = false, ttrees = false;
+                double yscale = 2.0, variety = 2.0;
                 for (int i = 3; i < args.length; i++) {
                     String a = args[i];
                     int eq = a.indexOf('=');
@@ -127,6 +129,14 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                                 openEdge = v.equalsIgnoreCase("open");
                             }
                             case "yscale" -> yscale = Double.parseDouble(v);
+                            case "variety" -> variety = Double.parseDouble(v);
+                            case "trees" -> {
+                                if (!v.equalsIgnoreCase("template") && !v.equalsIgnoreCase("auto")) {
+                                    sender.sendMessage(P + ChatColor.RED + "trees 只支持 template（只种树库模板树）/ auto（算法生长）。");
+                                    return;
+                                }
+                                ttrees = v.equalsIgnoreCase("template");
+                            }
                             default -> { sender.sendMessage(P + ChatColor.RED + "未知参数 " + k); return; }
                         }
                     } catch (NumberFormatException e) {
@@ -148,7 +158,11 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                     }
                     if (sea < 0 || sea > 200) { sender.sendMessage(P + ChatColor.RED + "sea 需在 0~200。"); return; }
                     if (yscale < 0.5 || yscale > 2.5) {
-                        sender.sendMessage(P + ChatColor.RED + "yscale 需在 0.5~2.5（1=默认，越大山越高）。");
+                        sender.sendMessage(P + ChatColor.RED + "yscale 需在 0.5~2.5（默认 2，越大山越高）。");
+                        return;
+                    }
+                    if (variety < 0.5 || variety > 4) {
+                        sender.sendMessage(P + ChatColor.RED + "variety 需在 0.5~4（地形多样性：一张图跨过几倍的地理性格，默认 2）。");
                         return;
                     }
                     // CPU 推理耗时预估提示（512² 原生 ≈ 27s 标定）
@@ -161,7 +175,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                                 "提示：这张图 CPU 推理预计约 %.1f 小时（分片推进可随时 cancel，"
                                         + "terra resume 续跑）。config 里 terrain.device=gpu 可大幅加速。", hours));
                     }
-                    map = new dev.timefiles.miaeco.world.EcoWorlds.MapSpec(size, sizeZ, scaleM, sea, openEdge, yscale);
+                    map = new dev.timefiles.miaeco.world.EcoWorlds.MapSpec(size, sizeZ, scaleM, sea,
+                            openEdge, yscale, variety, ttrees);
                 }
                 sender.sendMessage(P + ChatColor.GRAY + "创建世界中…");
                 String err = worlds.create(args[2], seed, map);
@@ -170,7 +185,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 if (map != null) {
                     sender.sendMessage(P + ChatColor.GREEN + "地图世界 " + args[2] + " 已建（seed=" + s
                             + " size=" + map.sizeStr() + " 比例尺=" + scaleM + "m/格 海平面=" + sea
-                            + (openEdge ? " 边缘=断崖" : "") + (yscale != 1.0 ? " yscale=" + yscale : "")
+                            + (openEdge ? " 边缘=断崖" : "") + " yscale=" + yscale
+                            + " variety=" + variety + (ttrees ? " 模板树" : "")
                             + "，覆盖真实地貌约 " + (size * scaleM / 1000) + "×" + (sizeZ * scaleM / 1000)
                             + "km），开始自动生成…");
                     String e2 = eco.terra().startMap(sender, args[2]);
@@ -262,8 +278,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
 
     private void helpWorld(CommandSender s) {
         msg(s, "/miaeco world create <名> [seed=N]", "新建平原画布世界（选区式 terra gen）");
-        msg(s, "/miaeco world create <名> size=N [scale=15|30|60|120] [sea=Y] [edge=sea|open] [yscale=X]",
-                "新建地图世界：虚空+中心 N×N 自动地形与生态；edge=open 四周不强制为海（断崖边缘+更强山体）；yscale 竖向缩放 0.5~2.5");
+        msg(s, "/miaeco world create <名> size=N [scale=15|30|60|120] [sea=Y] [edge=sea|open] [yscale=X] [variety=V] [trees=template|auto]",
+                "新建地图世界（默认 sea=0 yscale=2 variety=2）：variety=地形多样性（一图跨几倍地理性格）；trees=template 只种树库模板树（快且规整）");
         msg(s, "/miaeco world list | tp <名>", "列出/传送");
         msg(s, "/miaeco world regen <名> [seed=N] confirm", "地图世界删档重生成（默认换新种子）");
         msg(s, "/miaeco world remove <名> confirm", "卸载并删除世界文件");
@@ -355,14 +371,14 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 if (!(sender instanceof Player p)) { sender.sendMessage(P + ChatColor.RED + "只有玩家能开草稿。"); return; }
                 if (args.length < 3) {
                     sender.sendMessage(P + ChatColor.RED
-                            + "用法: /miaeco hub new <名> [size=N] [preview=P] [scale=15|30|60|120] [sea=Y] [edge=sea|open] [yscale=X]");
+                            + "用法: /miaeco hub new <名> [size=N] [preview=P] [scale=…] [sea=Y] [edge=…] [yscale=X] [variety=V] [trees=template|auto]");
                     sender.sendMessage(P + ChatColor.GRAY
-                            + "size=世界大小（创建后固定）；preview=沙盘边长 12~48（想看得大就调大）。");
+                            + "size=世界大小（创建后固定）；preview=沙盘边长 12~48；默认 sea=0 yscale=2 variety=2（其余都能在操作台再调）。");
                     return;
                 }
-                int size = 1024, sizeZ = 1024, scaleM = 30, sea = 63, preview = 20;
-                boolean openEdge = false;
-                double yscale = 1.0;
+                int size = 1024, sizeZ = 1024, scaleM = 30, sea = 0, preview = 20;
+                boolean openEdge = false, ttrees = false;
+                double yscale = 2.0, variety = 2.0;
                 for (int i = 3; i < args.length; i++) {
                     String a = args[i];
                     int eq = a.indexOf('=');
@@ -381,6 +397,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                             case "sea" -> sea = Integer.parseInt(v);
                             case "edge" -> openEdge = v.equalsIgnoreCase("open");
                             case "yscale" -> yscale = Double.parseDouble(v);
+                            case "variety" -> variety = Double.parseDouble(v);
+                            case "trees" -> ttrees = v.equalsIgnoreCase("template");
                             default -> { sender.sendMessage(P + ChatColor.RED + "未知参数 " + k); return; }
                         }
                     } catch (NumberFormatException e) {
@@ -400,7 +418,9 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
                 }
                 if (sea < 0 || sea > 200) { sender.sendMessage(P + ChatColor.RED + "sea 需在 0~200。"); return; }
                 if (yscale < 0.5 || yscale > 2.5) { sender.sendMessage(P + ChatColor.RED + "yscale 需在 0.5~2.5。"); return; }
-                String err = hub.newDraft(p, args[2], size, sizeZ, scaleM, sea, openEdge, yscale, preview);
+                if (variety < 0.5 || variety > 4) { sender.sendMessage(P + ChatColor.RED + "variety 需在 0.5~4。"); return; }
+                String err = hub.newDraft(p, args[2], size, sizeZ, scaleM, sea, openEdge, yscale,
+                        variety, ttrees, preview);
                 if (err != null) sender.sendMessage(P + ChatColor.RED + err);
             }
             case "roll" -> {
@@ -596,7 +616,8 @@ public final class MiaEcoCommand implements CommandExecutor, TabCompleter {
         }
         Location base = p.getLocation().getBlock().getLocation();
         var edits = dev.timefiles.miaeco.growth.StampLibrary.place(
-                pf, base.getBlockX(), base.getBlockY(), base.getBlockZ(), rng.nextInt(4));
+                pf, base.getBlockX(), base.getBlockY(), base.getBlockZ(),
+                rng.nextInt(4), rng.nextBoolean());
         lastStamp.put(p.getUniqueId(), edits);
         eco.editor().apply(p.getWorld(), edits, n -> p.sendMessage(P + ChatColor.GREEN
                 + "盖印 " + pf.id() + ChatColor.GRAY + "（" + pf.family() + " 高" + pf.height()

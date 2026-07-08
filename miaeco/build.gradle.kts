@@ -86,6 +86,8 @@ tasks.register<JavaExec>("riverMap") {
     systemProperty("miaeco.mapSize", (findProperty("miaeco.mapSize") ?: "1024").toString())
     systemProperty("miaeco.mapSeed", (findProperty("miaeco.mapSeed") ?: "20260707").toString())
     systemProperty("miaeco.yscale", (findProperty("miaeco.yscale") ?: "2.0").toString())
+    systemProperty("miaeco.variety", (findProperty("miaeco.variety") ?: "2.0").toString())
+    systemProperty("miaeco.sea", (findProperty("miaeco.sea") ?: "0").toString())
     args(layout.buildDirectory.dir("rivermap").get().asFile.absolutePath)
 }
 
