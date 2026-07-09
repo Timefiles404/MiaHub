@@ -79,18 +79,19 @@ public final class TownWorks {
         };
     }
 
-    static void town(GroundSnapshot g, AtmosphereTheme th, AtmosphereSettings st, long seed,
-                     List<int[]> treeBases, Map<Long, BlockEdit> edits, boolean[] claimed,
-                     boolean[] pool, int[] wetDist) {
+    /** @return 各户房屋中心（区域局部坐标，{lx,lz}），供野径"近人烟"判定；无房屋返回空表 */
+    static List<int[]> town(GroundSnapshot g, AtmosphereTheme th, AtmosphereSettings st, long seed,
+                            List<int[]> treeBases, Map<Long, BlockEdit> edits, boolean[] claimed,
+                            boolean[] pool, int[] wetDist) {
         DEBUG.clear();
         double dens = st.densityOf("town");
         double strength = themeStrength(th) * dens;
-        if (strength <= 0.01) return;
+        if (strength <= 0.01) return List.of();
         List<TownPieces.Piece> pieces = TownPieces.forBiome(biomeOf(th));
-        if (pieces.isEmpty()) return;
+        if (pieces.isEmpty()) return List.of();
         int w = g.width(), d = g.depth();
         long area = (long) w * d;
-        if (area < 1600) return;                    // 区域太小：无房屋
+        if (area < 1600) return List.of();          // 区域太小：无房屋
 
         Random rng = new Random(seed ^ AtmosphereGenerator.S_TOWN ^ th.id().hashCode());
 
@@ -110,7 +111,7 @@ public final class TownWorks {
 
         // 1) 净空垫台候选：按最大脚印类扫描（房屋具体挑选时再按类过滤）
         List<int[]> sites = findSites(g, treeBlk, claimed, pool, wetDist, rng);
-        if (sites.isEmpty()) return;                // 无净空：无房屋
+        if (sites.isEmpty()) return List.of();      // 无净空：无房屋
 
         // 2) 分档
         int budget = area < 4000 ? 1
@@ -149,7 +150,7 @@ public final class TownWorks {
                     treeBlk, edits, claimed, pool, placedRects);
             if (h != null) houses.add(h);
         }
-        if (houses.isEmpty()) return;
+        if (houses.isEmpty()) return List.of();
 
         // 4) 院落：每户 0~2 个元素（菜畦/柴堆/干草垛，按件名分派），避开门侧
         for (Housed h : houses) {
@@ -173,14 +174,20 @@ public final class TownWorks {
             }
         }
 
-        // 6) 小路：各户门前 → 村心；村心（或独户门前）→ 区域边缘（接外界）；沿途灯柱
+        // 房屋中心表（野径"近人烟"判定 + 对外小路渐隐都用它）
+        List<int[]> centers = new ArrayList<>(houses.size());
+        for (Housed h : houses) {
+            centers.add(new int[]{h.ox() + h.rsx() / 2, h.oz() + h.rsz() / 2});
+        }
+
+        // 6) 小路：各户门前 → 村心；村心（或独户门前）→ 外界（离屋 26 格渐隐收尾）；沿途灯柱
         long ns = seed ^ AtmosphereGenerator.S_TOWN ^ 0x77L;
         Material fence = fenceOf(th);
         int exitLx = houses.get(0).doorEndLx(), exitLz = houses.get(0).doorEndLz();
         if (houses.size() > 1) {
             for (Housed h : houses) {
                 trail(g, th, rng, ns, h.doorEndLx(), h.doorEndLz(), pcx, pcz,
-                        treeBases, treeBlk, fence, 0.5, edits, claimed, pool);
+                        treeBases, treeBlk, fence, 0.5, edits, claimed, pool, null, false);
             }
             exitLx = pcx;
             exitLz = pcz;
@@ -189,7 +196,9 @@ public final class TownWorks {
         int tx = alongX ? (exitLx < w / 2 ? w - 2 : 1) : exitLx;
         int tz = alongX ? exitLz : (exitLz < d / 2 ? d - 2 : 1);
         trail(g, th, rng, ns ^ 0x5L, exitLx, exitLz, tx, tz,
-                treeBases, treeBlk, fence, village ? 0.3 : 0.0, edits, claimed, pool);
+                treeBases, treeBlk, fence, village ? 0.3 : 0.0, edits, claimed, pool,
+                centers, true);
+        return centers;
     }
 
     // ============================ 选址 ============================
@@ -510,11 +519,15 @@ public final class TownWorks {
         }
     }
 
-    /** 村内/对外小路：A* 成本与全区小路一致（避水绕树贴地形），沿途小径盖印 + 灯柱。 */
+    /**
+     * 村内/对外小路：A* 成本与全区小路一致（避水绕树贴地形），沿途小径盖印 + 灯柱。
+     * fade=true 时按离房屋距离渐隐（对外小路用，见 AtmosphereGenerator.stampTrail）。
+     */
     private static void trail(GroundSnapshot g, AtmosphereTheme th, Random rng, long wiggle,
                               int sx, int sz, int tx, int tz, List<int[]> treeBases,
                               boolean[] treeBlk, Material fence, double lanternRate,
-                              Map<Long, BlockEdit> edits, boolean[] claimed, boolean[] pool) {
+                              Map<Long, BlockEdit> edits, boolean[] claimed, boolean[] pool,
+                              List<int[]> houses, boolean fade) {
         int w = g.width();
         List<int[]> routed = AtmosphereGenerator.route(g, sx, sz, tx, tz, (lx, lz, fx, fz) -> {
             if (!g.valid(lx, lz)) return 90;
@@ -528,7 +541,8 @@ public final class TownWorks {
             return c;
         });
         if (routed == null) return;
-        AtmosphereGenerator.stampTrail(g, th, rng, routed, treeBases, edits, claimed, pool);
+        AtmosphereGenerator.stampTrail(g, th, rng, routed, treeBases, edits, claimed, pool,
+                houses, fade);
         if (lanternRate <= 0) return;
         // 路灯：每 ~8 格路侧一盏（垂直于路向偏一格），最多 10 盏
         int lit = 0;

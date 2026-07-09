@@ -1311,17 +1311,14 @@ public final class TerraService implements Listener {
         /** 顶皮决策：峰岩/雪块/沙漠/恶地/海岸带/水底/沼泽泥/常规草 + 交界散点混合。 */
         private Material[] skinFor(Plan p, int i, int wx, int wz) {
             short b = p.biome[i];
-            // 官道路面（0.33.0）：城外大道按群系配材质（城内街道由 CityWorks 铺）
+            // 官道路面（0.34.0 RoadWeaver 式）：群系调色板 + 补丁噪声连片磨损——
+            // 车辙磨得狠的路段成片硬质（石/砂岩），路况差的路段成片软土，
+            // 不再是逐格五彩纸屑（城内街道由 CityWorks 铺）
             if (p.civ[i] == CivPlanner.C_ROAD && !p.water[i]) {
-                double r = hash01(entry.seed ^ 0x60AD5L, wx, wz);
-                if (b == 5 || b == 26 || b == 90) {
-                    return new Material[]{r < 0.55 ? Material.SMOOTH_SANDSTONE
-                            : r < 0.85 ? Material.SANDSTONE : Material.CUT_SANDSTONE,
-                            Material.SANDSTONE, Material.STONE};
-                }
-                return new Material[]{r < 0.42 ? Material.DIRT_PATH
-                        : r < 0.72 ? Material.GRAVEL : Material.COBBLESTONE,
-                        Material.GRAVEL, Material.STONE};
+                double wear = 0.35 + 0.5 * RoadPaint.patchNoise(entry.seed ^ 0x3EA6L,
+                        wx / 3, wz / 3);
+                Material top = RoadPaint.pick(RoadPaint.highway(b), entry.seed, wx, wz, wear);
+                return new Material[]{top, Material.GRAVEL, Material.STONE};
             }
             // 群系交界：按距离概率借邻群系的顶面块（只换最上一格，轻微咬合）
             if (p.mix[i] != 0 && !p.water[i]
@@ -1710,9 +1707,10 @@ public final class TerraService implements Listener {
             };
             World w = Bukkit.getWorld(world);
             if (w == null) return;
-            // 桥（本片官道跨水段）
+            // 桥（本片官道跨水段：石桥面/栏杆/桥墩）+ 沿路装饰（路灯/里程碑/指路牌/驿站）
             List<BlockEdit> bridgeEdits = new ArrayList<>();
-            CityWorks.bridges(g, x1, z1, bridgeEdits);
+            CityWorks.bridges(g, civ, x1, z1, entry.seed, bridgeEdits);
+            CityWorks.roadside(g, civ, x1, z1, entry.seed, bridgeEdits);
             if (!bridgeEdits.isEmpty()) applyEditsSync(w, bridgeEdits);
             // 聚落（中心在本片内才建；规划期已保证地块整体落在单片）
             for (CivPlanner.Site site : civ.sites()) {
@@ -1910,6 +1908,39 @@ public final class TerraService implements Listener {
 
         // ---- 阶段 7：生态 ----
 
+        /**
+         * 人居适宜度 0..1（0.34.0）：区域平均海拔（rel&gt;40 衰减、~62 归零）、平均坡度
+         * （&gt;1.2 衰减）、高地格占比（rel&gt;58 的格超一成加速归零）三重相乘——
+         * 高山/陡坡区域的 town+paths 密度按此缩放，山体表面拒绝人烟。
+         */
+        private double habitatOf(Plan p, RegionSegmenter.EcoRegion r, java.util.BitSet mask,
+                                 int mw, int mh, int W) {
+            int seaLv = mapper.sea();
+            long relSum = 0, slSum = 0;
+            int n = 0, high = 0;
+            for (int mz = 0; mz < mh; mz += 3) {
+                int rowP = (r.minLZ() + mz) * W + r.minLX();
+                int rowM = mz * mw;
+                for (int mx = 0; mx < mw; mx += 3) {
+                    if (!mask.get(rowM + mx)) continue;
+                    int rel = p.y[rowP + mx] - seaLv;
+                    if (rel > 0) relSum += rel;
+                    slSum += p.slope[rowP + mx];
+                    if (rel > 58) high++;
+                    n++;
+                }
+            }
+            if (n == 0) return 1;
+            double relMean = (double) relSum / n;
+            double slMean = (double) slSum / n;
+            double fHigh = (double) high / n;
+            double f = 1.0;
+            if (relMean > 40) f *= Math.max(0, 1.0 - (relMean - 40) / 22.0);
+            if (slMean > 1.2) f *= Math.max(0, 1.0 - (slMean - 1.2) / 1.4);
+            if (fHigh > 0.10) f *= Math.max(0, 1.0 - (fHigh - 0.10) * 2.2);
+            return f;
+        }
+
         private void runEco(Plan p, int x1, int z1, int W, int H) {
             stage("生态分区");
             List<RegionSegmenter.EcoRegion> raw =
@@ -1999,6 +2030,15 @@ public final class TerraService implements Listener {
                 f.atmosphere().theme(theme);
                 for (Map.Entry<String, Double> fe : ecoDef.features().entrySet()) {
                     f.atmosphere().density(fe.getKey(), fe.getValue());
+                }
+                // 0.34.0 高处拒人烟：区域海拔越高/坡面越陡，散屋与小路越少，
+                // 山体（雪山尤甚）彻底无人烟——小路不再污染大世界山面
+                double human = habitatOf(p, r, mask, mw, mh, W);
+                if (human < 0.999) {
+                    f.atmosphere().density("town", human <= 0.08 ? 0
+                            : f.atmosphere().densityOf("town") * human);
+                    f.atmosphere().density("paths", human <= 0.08 ? 0
+                            : f.atmosphere().densityOf("paths") * human);
                 }
                 // 氛围小河流 0.24.0 全面废弃：河流一律由全局水文规划统一定线
                 // （0.22.0 起地图模式已关；画布模式的"每区一条短直河"观感差，一并停用。

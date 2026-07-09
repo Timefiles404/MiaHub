@@ -67,6 +67,20 @@ tasks.register<JavaExec>("dumpTerra") {
     args(layout.buildDirectory.dir("terradump").get().asFile.absolutePath)
 }
 
+// 城建快速探针（合成场，无模型）：件库统计 + 首都三风格重放
+tasks.register<JavaExec>("cityProbe") {
+    group = "verification"
+    description = "Fast synthetic-city replay with piece stats (no model needed)"
+    dependsOn("compileJava")
+    mainClass.set("dev.timefiles.miaeco.tool.CityProbeTool")
+    classpath = files(
+        provider { project.the<JavaPluginExtension>().sourceSets["main"].output },
+        provider { project.configurations["compileClasspath"] },
+        provider { terraTool }
+    )
+    jvmArgs("-Xmx1g")
+}
+
 // 离线河流地形平面图（edge=open + yscale，真实权重）：build/rivermap/river_map.png
 tasks.register<JavaExec>("riverMap") {
     group = "verification"

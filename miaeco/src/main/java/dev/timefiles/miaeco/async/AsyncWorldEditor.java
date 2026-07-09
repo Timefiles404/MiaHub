@@ -62,6 +62,7 @@ public final class AsyncWorldEditor {
                     Block b = world.getBlockAt(e.x(), e.y(), e.z());
                     b.setBlockData(toData(e.spec()), false);
                     attachLoot(b, e.spec());
+                    attachSign(b, e.spec());
                 }
                 if (cursor >= edits.size()) {
                     cancel();
@@ -90,6 +91,7 @@ public final class AsyncWorldEditor {
                     undo.add(new Undo(e.x(), e.y(), e.z(), b.getBlockData().getAsString()));
                     b.setBlockData(toData(e.spec()), false);
                     attachLoot(b, e.spec());
+                    attachSign(b, e.spec());
                 }
                 if (cursor >= edits.size()) {
                     cancel();
@@ -124,6 +126,21 @@ public final class AsyncWorldEditor {
                 }
             }
         }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    /** 告示牌写正面文字（官道路牌）：写完打蜡防手滑编辑。 */
+    private static void attachSign(Block b, BlockSpec spec) {
+        if (spec.signText == null) return;
+        org.bukkit.block.BlockState bs = b.getState();
+        if (bs instanceof org.bukkit.block.Sign sign) {
+            org.bukkit.block.sign.SignSide side =
+                    sign.getSide(org.bukkit.block.sign.Side.FRONT);
+            for (int i = 0; i < 4 && i < spec.signText.length; i++) {
+                if (spec.signText[i] != null) side.setLine(i, spec.signText[i]);
+            }
+            sign.setWaxed(true);
+            sign.update(true, false);
+        }
     }
 
     /** 容器方块挂原版战利品表（村庄箱子/木桶）：首次打开时按表生成内容。 */

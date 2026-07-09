@@ -251,13 +251,26 @@ public final class TerraDumpTool {
                     @Override public short biome(int lx, int lz) { return (short) biome; }
                     @Override public int wlvl(int lx, int lz) { return sea; }
                 };
-        for (int biome : new int[]{1, 5}) {
+        for (int biome : new int[]{1, 5, 94}) {
             List<BlockEdit> edits = new ArrayList<>();
             try {
                 String sum = dev.timefiles.miaeco.terrain.CityWorks.build(
                         mk.apply(biome), ox, oz, cap, 20260709L, edits);
                 if (edits.size() < 5000) {
                     System.out.println("CITY BUILD THIN FAIL biome=" + biome + ": " + edits.size());
+                    fail = true;
+                }
+                if (biome == 94 && !sum.contains("希腊白城")) {
+                    System.out.println("GREEK CITY FAIL: 海岸城未切希腊风 -> " + sum);
+                    fail = true;
+                }
+                // 房屋数防回归（0.34.0 曾因扫描奇偶错开街线归零）
+                int hIdx = sum.indexOf("房屋×");
+                int hEnd = hIdx < 0 ? -1 : sum.indexOf(' ', hIdx);
+                int housesN = hIdx < 0 ? -1
+                        : Integer.parseInt(sum.substring(hIdx + 3, hEnd < 0 ? sum.length() : hEnd));
+                if (housesN < 15) {
+                    System.out.println("CITY HOUSES FAIL biome=" + biome + ": " + housesN + " <15");
                     fail = true;
                 }
                 System.out.println("civ city biome=" + biome + ": " + sum + " (" + edits.size() + " edits)");
@@ -272,9 +285,50 @@ public final class TerraDumpTool {
         for (byte b : eCiv) {
             if (b == dev.timefiles.miaeco.terrain.CivPlanner.C_BRIDGE) bridge++;
         }
+        // 官道后处理（0.34.0）：中心线 ~1 格步距、桥段有 deck 高、坡度限制生效
+        int badStep = 0, badGrade = 0, bridgePts = 0;
+        for (var r : civ.roads()) {
+            for (int k = 1; k < r.len(); k++) {
+                double st = Math.hypot(r.xs()[k] - r.xs()[k - 1], r.zs()[k] - r.zs()[k - 1]);
+                if (st > 2.2) badStep++;
+                if (!r.bridge(k) && !r.bridge(k - 1)
+                        && Math.abs(r.ys()[k] - r.ys()[k - 1]) > 1) {
+                    badGrade++;
+                }
+                if (r.bridge(k)) bridgePts++;
+            }
+        }
+        if (badStep > 0) {
+            System.out.println("ROAD RESAMPLE FAIL: " + badStep + " 段步距 >2.2");
+            fail = true;
+        }
+        if (badGrade > 0) {
+            System.out.println("ROAD GRADE FAIL: " + badGrade + " 段坡 >1/格");
+            fail = true;
+        }
+        // 全图粗地面上的桥/沿路装饰冒烟（civ 通道置空：只验证生成与裁剪不炸）
+        var gFull = new dev.timefiles.miaeco.terrain.CityWorks.Ground() {
+            @Override public int w() { return sX; }
+            @Override public int h() { return sZ; }
+            @Override public int y(int lx, int lz) { return Math.round(hf.yAt(mapX1 + lx, mapZ1 + lz)); }
+            @Override public boolean water(int lx, int lz) { return hf.yAt(mapX1 + lx, mapZ1 + lz) < sea; }
+            @Override public byte civ(int lx, int lz) { return dev.timefiles.miaeco.terrain.CivPlanner.C_NONE; }
+            @Override public short biome(int lx, int lz) { return 1; }
+            @Override public int wlvl(int lx, int lz) { return sea; }
+        };
+        List<BlockEdit> deco = new ArrayList<>();
+        dev.timefiles.miaeco.terrain.CityWorks.bridges(gFull, civ, mapX1, mapZ1, 20260709L, deco);
+        int bridgeEdits = deco.size();
+        dev.timefiles.miaeco.terrain.CityWorks.roadside(gFull, civ, mapX1, mapZ1, 20260709L, deco);
+        int decoEdits = deco.size() - bridgeEdits;
+        if (decoEdits == 0) {
+            System.out.println("ROADSIDE EMPTY FAIL（应有路灯/路牌/里程碑）");
+            fail = true;
+        }
         System.out.println("civ: 聚落 " + civ.sites().size() + "（首都 " + caps + "）官道 "
                 + civ.roads().size() + " 条, 首都窗口 plot=" + plot + " road=" + road
-                + " bridge=" + bridge + " OK");
+                + " bridge=" + bridge + " 桥点 " + bridgePts + " 桥块 " + bridgeEdits
+                + " 沿路饰 " + decoEdits + " OK");
         return fail;
     }
 

@@ -2,33 +2,78 @@ package dev.timefiles.miaeco.terrain;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.PriorityQueue;
 
 /**
- * 文明规划（0.33.0）：地图世界的聚落选址 + 官道网，一次规划、逐片栅格化——
- * 与水文规划同一模式（coarse 高度场定案，跨片/断点续跑逐位一致）。
+ * 文明规划（0.33.0，0.34.0 大改）：地图世界的聚落选址 + 官道网，一次规划、
+ * 逐片栅格化——与水文规划同一模式（coarse 高度场定案，跨片/断点续跑逐位一致）。
  *
  * <p><b>选址</b>（GDMC 适宜度场思路）：8 格网格上算 平坦度+近水带+海拔带+边距，
  * 贪心取分高点并保持聚落间距；首都优先河流交汇/河口侧。每个聚落地块必须整体落在
  * 单一分片内（建造阶段一次成城，避免跨片半城被后续地形覆盖）。
  *
- * <p><b>官道</b>：聚落全连通 MST + β-skeleton 捷径；逐边 8 格 A*（坡度²+涉水惩罚
- * +已有路负成本→自然涌现干线），路面高度沿线滑动平均（可行走坡度），跨水段标桥。
+ * <p><b>有机城缘</b>（0.34.0）：每城一条 rim(θ) 半径函数——谐波起伏叠加 + 沿射线
+ * 地形裁剪（城区只向与 pad 高差小的平缓处伸展）+ 圆周平滑。城市不再是圆章，
+ * 依地形成形；墙/街/房/农田全部跟随 rim。
  *
- * <p><b>栅格化</b>：城市地块高斯羽化压平到 pad（含城外农田带），路走廊 ±3 限深
- * 切填贴路面高，p.civ 标记（1=路 2=桥 3=地块）——生态/树木/氛围自动避让。
+ * <p><b>官道</b>（0.34.0 RoadWeaver 式重做）：聚落全连通 MST + β-skeleton 捷径；
+ * 逐边 8 格 A*（坡度²+坡度硬阻断+地形破碎度+偏航+涉水/近水惩罚+已有路负成本），
+ * 然后走 RoadWeaver 的后处理流水线：共线简化 → 1:2:1 松弛 → Catmull-Rom 样条 →
+ * 1 格弧长重采样为中心线 → 窗口±8 均值 + 双向限坡（每 2 格 ≤1，防振荡）得 targetY
+ * → 桥梁区间（合并近邻/最短长度/引道渐变/水面+2 恒高桥面）。
+ *
+ * <p><b>栅格化</b>：城地块按 rim 压平（含农田带，外羽化）；官道按中心线距离场
+ * 投影插值贴 targetY（核心 ±2 切填、路肩 smoothstep 收边），跨水段标桥。
+ * p.civ 标记（1=路 2=桥 3=地块）——生态/树木/氛围自动避让。
  */
 public final class CivPlanner {
 
     /** p.civ 值。 */
     public static final byte C_NONE = 0, C_ROAD = 1, C_BRIDGE = 2, C_PLOT = 3;
 
-    /** tier：1=城镇 2=大城 3=首都。radius=城区半径（农田带再外扩 FIELD_BAND）。 */
-    public record Site(int wx, int wz, int tier, int radius, int pad, List<Float> gateDirs) { }
+    /** rim 角采样数（有机城缘轮廓的等角度采样）。 */
+    public static final int RIM_N = 64;
 
-    /** 官道：折点世界坐标 + 平滑路面高（与折点一一对应）。 */
-    public record Road(float[] xs, float[] zs, int[] ys) { }
+    /**
+     * tier：1=城镇 2=大城 3=首都。radius=城区名义半径（上界，间距/裁剪用）；
+     * rim=按角度的实际城缘半径（0.34.0 有机轮廓）。农田带在 rim 外再扩 FIELD_BAND。
+     */
+    public record Site(int wx, int wz, int tier, int radius, int pad, float[] rim,
+                       List<Float> gateDirs) { }
+
+    /** 有机城缘半径（theta 弧度，世界角）：rim 数组圆周线性插值。 */
+    public static float rimAt(Site s, double theta) {
+        float[] rim = s.rim();
+        if (rim == null || rim.length == 0) return s.radius();
+        double t = theta / (2 * Math.PI) * rim.length;
+        int i0 = (int) Math.floor(t);
+        double f = t - i0;
+        i0 = Math.floorMod(i0, rim.length);
+        int i1 = (i0 + 1) % rim.length;
+        return (float) (rim[i0] * (1 - f) + rim[i1] * f);
+    }
+
+    /** (dx,dz) 相对城心方向上的城缘半径。 */
+    public static float rimToward(Site s, double dx, double dz) {
+        return rimAt(s, Math.atan2(dz, dx));
+    }
+
+    /**
+     * 官道（0.34.0）：1 格弧长中心线 + 平滑限坡路面高 targetY + 逐点标记。
+     * flags bit0=桥段。中心点间距 ~1 格，直接驱动栅格化与沿路装饰。
+     */
+    public record Road(float[] xs, float[] zs, int[] ys, byte[] flags) {
+        public int len() {
+            return xs.length;
+        }
+
+        public boolean bridge(int k) {
+            return (flags[k] & 1) != 0;
+        }
+    }
 
     public record CivPlan(List<Site> sites, List<Road> roads) {
         public static final CivPlan EMPTY = new CivPlan(List.of(), List.of());
@@ -43,6 +88,18 @@ public final class CivPlanner {
     /** 羽化裙宽（农田带外把地形揉回自然）。 */
     private static final int FEATHER = 18;
     private static final int STEP = 8;
+
+    /** 官道核心半宽（C_ROAD 标记 + 硬贴 targetY）。 */
+    public static final float ROAD_HALF = 2.0f;
+    /** 路肩外缘（smoothstep 收边半宽）。 */
+    private static final float SHOULDER = 4.8f;
+    /** 桥面高出水面（RoadWeaver bridgeDeckClearance）。 */
+    public static final int DECK_CLEAR = 2;
+    private static final int BRIDGE_MERGE_GAP = 8;
+    private static final int BRIDGE_MIN_LEN = 5;
+    private static final int BRIDGE_RAMP = 4;
+    /** 单座桥上限（格）；更长的水面 = 不修这条边。 */
+    private static final int BRIDGE_MAX_SPAN = 130;
 
     private CivPlanner() { }
 
@@ -63,6 +120,22 @@ public final class CivPlanner {
                 float y = hf.yAt(mapX1 + gx * STEP + STEP / 2.0, mapZ1 + gz * STEP + STEP / 2.0);
                 h[gz * W + gx] = y;
                 water[gz * W + gx] = y < sea + 0.5f;
+            }
+        }
+        // 河道格掩码（A* 渡河惩罚；河在 hf 里不是水，得单独标）
+        boolean[] riverCell = new boolean[W * H];
+        if (rivers != null && !rivers.isEmpty()) {
+            for (RiverPlanner.River r : rivers.rivers()) {
+                for (RiverPlanner.Node nd : r.nodes()) {
+                    int cr = Math.max(0, (int) Math.ceil(nd.halfW() / STEP));
+                    int gx = (int) ((nd.x() - mapX1) / STEP), gz = (int) ((nd.z() - mapZ1) / STEP);
+                    for (int dz = -cr; dz <= cr; dz++) {
+                        for (int dx = -cr; dx <= cr; dx++) {
+                            int nx = gx + dx, nz = gz + dz;
+                            if (nx >= 0 && nz >= 0 && nx < W && nz < H) riverCell[nz * W + nx] = true;
+                        }
+                    }
+                }
             }
         }
         // 水距变换（含河线；chebyshev，单位=格步）
@@ -171,7 +244,10 @@ public final class CivPlanner {
                     continue;
                 }
                 int pad = padOf(hf, wx, wz, radius);
-                sites.add(new Site(wx, wz, tier, radius, pad, new ArrayList<>()));
+                // rim 下限按级别：首都要装下王城区（0.72R），镇可以更"就地形"
+                double minFrac = tier >= 3 ? 0.72 : tier == 2 ? 0.62 : 0.5;
+                sites.add(new Site(wx, wz, tier, radius, pad,
+                        rimOf(hf, wx, wz, radius, pad, seed, minFrac), new ArrayList<>()));
                 placed++;
             }
             if (dbg) {
@@ -187,19 +263,55 @@ public final class CivPlanner {
         }
         if (sites.isEmpty()) return CivPlan.EMPTY;
 
-        // ---- 官道网：MST + 捷径，逐边 A* ----
+        // ---- 官道网：MST + 捷径，逐边 A* + RoadWeaver 后处理 ----
         List<Road> roads = new ArrayList<>();
         boolean[] roadMask = new boolean[W * H];
         if (sites.size() >= 2) {
+            WaterProbe probe = waterProbe(rivers, sea);
             List<int[]> edges = mstEdges(sites);
             addShortcuts(sites, edges);
             for (int[] e : edges) {
-                Road r = routeRoad(sites.get(e[0]), sites.get(e[1]), h, water, roadMask,
-                        W, H, mapX1, mapZ1, sea);
+                Road r = routeRoad(sites.get(e[0]), sites.get(e[1]), h, water, riverCell,
+                        roadMask, W, H, mapX1, mapZ1, sea, hf, probe);
                 if (r != null) roads.add(r);
             }
         }
         return new CivPlan(List.copyOf(sites), List.copyOf(roads));
+    }
+
+    /**
+     * 有机城缘（0.34.0）：低次谐波起伏（非圆但平滑闭合）+ 沿射线地形裁剪
+     * （出了与 pad 高差 ≤9 的可建带就停——城区只向平缓处伸展）+ 圆周平滑两遍。
+     * rim ∈ [minFrac·R, R]；首都下限高（要装下王城区），镇更"就地形"。
+     */
+    private static float[] rimOf(RiverPlanner.HeightField hf, int wx, int wz, int r0, int pad,
+                                 long seed, double minFrac) {
+        float[] rim = new float[RIM_N];
+        double p1 = hash01(seed ^ 0xA1F1L, wx, wz) * Math.PI * 2;
+        double p2 = hash01(seed ^ 0xB2E2L, wx, wz) * Math.PI * 2;
+        double p3 = hash01(seed ^ 0xC3D3L, wx, wz) * Math.PI * 2;
+        double floor = r0 * minFrac;
+        for (int k = 0; k < RIM_N; k++) {
+            double th = 2 * Math.PI * k / RIM_N;
+            double n = 0.30 * Math.sin(2 * th + p1) + 0.18 * Math.sin(3 * th + p2)
+                    + 0.08 * Math.sin(5 * th + p3);
+            double want = Math.min(r0, r0 * (0.86 + 0.34 * n));
+            double good = floor;
+            for (double rr = floor; rr <= want; rr += 6) {
+                float y = hf.yAt(wx + Math.cos(th) * rr, wz + Math.sin(th) * rr);
+                if (Math.abs(y - pad) > 9) break;
+                good = rr;
+            }
+            rim[k] = (float) Math.max(floor, Math.min(want, good));
+        }
+        for (int pass = 0; pass < 2; pass++) {
+            float[] s2 = new float[RIM_N];
+            for (int k = 0; k < RIM_N; k++) {
+                s2[k] = (rim[(k + RIM_N - 1) % RIM_N] + rim[k] * 2 + rim[(k + 1) % RIM_N]) / 4f;
+            }
+            rim = s2;
+        }
+        return rim;
     }
 
     /** 地块（含羽化）整体落进单一分片；失败返回 null。tileSpan≤0 只检查地图边界。 */
@@ -342,10 +454,57 @@ public final class CivPlanner {
         return Math.sqrt(dx * dx + dz * dz);
     }
 
-    // ---- 逐边 A* 落线 ----
+    // ---- 逐边 A* 落线 + RoadWeaver 后处理 ----
 
-    private static Road routeRoad(Site a, Site b, float[] h, boolean[] water, boolean[] roadMask,
-                                  int W, int H, int mapX1, int mapZ1, int sea) {
+    /** 规划期水位探针：返回 (x,z) 的水面 Y；-1 = 无水。 */
+    interface WaterProbe {
+        int levelAt(float x, float z, float hfY);
+    }
+
+    /** 湖 mask + 河节点空间哈希（24 格桶）合成探针。 */
+    private static WaterProbe waterProbe(RiverPlanner.RiverPlan rivers, int sea) {
+        List<RiverPlanner.Lake> lakes = rivers != null && !rivers.isEmpty()
+                ? rivers.lakes() : List.of();
+        Map<Long, List<RiverPlanner.Node>> buckets = new HashMap<>();
+        if (rivers != null && !rivers.isEmpty()) {
+            for (RiverPlanner.River r : rivers.rivers()) {
+                for (RiverPlanner.Node nd : r.nodes()) {
+                    int bx = (int) Math.floor(nd.x() / 24), bz = (int) Math.floor(nd.z() / 24);
+                    for (int dz = -1; dz <= 1; dz++) {
+                        for (int dx = -1; dx <= 1; dx++) {
+                            buckets.computeIfAbsent(((long) (bx + dx) << 32) ^ ((bz + dz) & 0xFFFFFFFFL),
+                                    k -> new ArrayList<>()).add(nd);
+                        }
+                    }
+                }
+            }
+        }
+        return (x, z, hfY) -> {
+            if (hfY < sea + 0.5f) return sea;
+            for (RiverPlanner.Lake lk : lakes) {
+                int gx = Math.floorDiv((int) x - lk.ox(), lk.cell());
+                int gz = Math.floorDiv((int) z - lk.oz(), lk.cell());
+                if (gx >= 0 && gz >= 0 && gx < lk.gw() && gz < lk.gh()
+                        && lk.mask().get(gz * lk.gw() + gx)) {
+                    return lk.level();
+                }
+            }
+            List<RiverPlanner.Node> near = buckets.get(((long) (int) Math.floor(x / 24) << 32)
+                    ^ ((int) Math.floor(z / 24) & 0xFFFFFFFFL));
+            if (near != null) {
+                for (RiverPlanner.Node nd : near) {
+                    double dx = nd.x() - x, dz = nd.z() - z;
+                    double r = nd.halfW() + 1.2;
+                    if (dx * dx + dz * dz <= r * r) return nd.wl();
+                }
+            }
+            return -1;
+        };
+    }
+
+    private static Road routeRoad(Site a, Site b, float[] h, boolean[] water, boolean[] riverCell,
+                                  boolean[] roadMask, int W, int H, int mapX1, int mapZ1,
+                                  int sea, RiverPlanner.HeightField hf, WaterProbe probe) {
         int sx = clampI((a.wx() - mapX1) / STEP, 1, W - 2);
         int sz = clampI((a.wz() - mapZ1) / STEP, 1, H - 2);
         int tx = clampI((b.wx() - mapX1) / STEP, 1, W - 2);
@@ -359,6 +518,9 @@ public final class CivPlanner {
         record QN(int i, float f) { }
         PriorityQueue<QN> open = new PriorityQueue<>((x, y) -> Float.compare(x.f, y.f));
         open.add(new QN(start, 0));
+        // 偏航基线（RoadWeaver deviation）：起终直线
+        float lineDx = tx - sx, lineDz = tz - sz;
+        float lineLen = (float) Math.max(1e-3, Math.hypot(lineDx, lineDz));
         int expand = 0, cap = W * H * 4;
         while (!open.isEmpty() && expand < cap) {
             QN cur = open.poll();
@@ -374,9 +536,24 @@ public final class CivPlanner {
                     int j = nz * W + nx;
                     float step = (dx != 0 && dz != 0) ? 1.41f : 1f;
                     float dh = Math.abs(h[j] - h[cur.i]) / STEP;   // 每格坡
+                    // RoadWeaver 移植：坡度平方 + 两级坡度硬阻断 + 地形破碎度 +
+                    // 偏航 + 近水缓冲 + 水深加罚；已有路负成本 → 干线涌现
                     float c = step * (1 + 26 * dh * dh)
-                            + (water[j] ? 42 : 0)
+                            + (dh > 0.55f ? 14 * dh : 0)
+                            + (dh > 0.85f ? 80 : 0)
+                            + stability(h, W, H, nx, nz) * 0.55f
                             - (roadMask[j] ? 0.42f * step : 0);
+                    if (water[j]) {
+                        c += 42 + Math.min(30, Math.max(0, (sea - h[j]) * 1.2f));
+                    } else if (riverCell[j]) {
+                        c += 10;                                   // 渡河点收窄（可修桥）
+                    } else if (nearWaterCell(water, riverCell, W, H, nx, nz)) {
+                        c += 2.2f;                                 // 离岸一格的缓冲带
+                    }
+                    // 偏航惩罚：到起终直线的垂距（格）
+                    float px = nx - sx, pz = nz - sz;
+                    float dev = Math.abs(px * lineDz - pz * lineDx) / lineLen;
+                    c += dev * 0.045f;
                     float ng = gScore[cur.i] + Math.max(0.05f, c);
                     if (ng < gScore[j]) {
                         gScore[j] = ng;
@@ -387,46 +564,229 @@ public final class CivPlanner {
             }
         }
         if (from[goal] < 0 && goal != start) return null;
-        // 回溯 + 标记 roadMask
+        // 回溯
         List<Integer> cells = new ArrayList<>();
         for (int i = goal; i >= 0; i = from[i]) {
             cells.add(i);
             if (i == start) break;
         }
         Collections.reverse(cells);
-        // 涉水预算：跨河/窄湖可以（板桥），跨大水域不修路（不出几百米浮桥）
+        // 涉水预算：跨河/窄湖可以（桥），跨大水域不修路
         int wet = 0;
         for (int i : cells) {
             if (water[i]) wet++;
         }
         if (wet > 20) return null;
         for (int i : cells) roadMask[i] = true;
-        // 折点（世界坐标）+ 平滑路面高：滑动平均窗 5，端点贴 pad
+
+        Road r = postProcess(cells, a, b, W, mapX1, mapZ1, sea, hf, probe);
+        if (r == null) return null;
+        int n = r.len();
+        if (n >= 3) {
+            a.gateDirs().add((float) Math.atan2(r.zs()[Math.min(6, n - 1)] - a.wz(),
+                    r.xs()[Math.min(6, n - 1)] - a.wx()));
+            b.gateDirs().add((float) Math.atan2(r.zs()[Math.max(0, n - 7)] - b.wz(),
+                    r.xs()[Math.max(0, n - 7)] - b.wx()));
+        }
+        return r;
+    }
+
+    /** 四邻高差破碎度（0..4，RoadWeaver stability）：邻格与本格高差 >2.5 计 1。 */
+    private static int stability(float[] h, int W, int H, int gx, int gz) {
+        int i = gz * W + gx, c = 0;
+        float y = h[i];
+        if (gx > 0 && Math.abs(h[i - 1] - y) > 2.5f) c++;
+        if (gx < W - 1 && Math.abs(h[i + 1] - y) > 2.5f) c++;
+        if (gz > 0 && Math.abs(h[i - W] - y) > 2.5f) c++;
+        if (gz < H - 1 && Math.abs(h[i + W] - y) > 2.5f) c++;
+        return c;
+    }
+
+    private static boolean nearWaterCell(boolean[] water, boolean[] river, int W, int H,
+                                         int gx, int gz) {
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                int nx = gx + dx, nz = gz + dz;
+                if (nx < 0 || nz < 0 || nx >= W || nz >= H) continue;
+                if (water[nz * W + nx] || river[nz * W + nx]) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * RoadWeaver 后处理流水线：8 格粗折线 → 共线简化 → 1:2:1 松弛 →
+     * Catmull-Rom 样条 → 1 格弧长中心线 → targetY（窗口±8 均值 + 桥区间恒高 +
+     * 引道渐变 + 双向限坡防振荡）→ 端点钉到两城 pad。
+     */
+    private static Road postProcess(List<Integer> cells, Site a, Site b, int W,
+                                    int mapX1, int mapZ1, int sea,
+                                    RiverPlanner.HeightField hf, WaterProbe probe) {
         int n = cells.size();
-        float[] xs = new float[n], zs = new float[n];
-        int[] ys = new int[n];
+        if (n < 2) return null;
+        float[] px = new float[n], pz = new float[n];
         for (int k = 0; k < n; k++) {
             int i = cells.get(k);
-            xs[k] = mapX1 + (i % W) * STEP + STEP / 2f;
-            zs[k] = mapZ1 + (i / W) * STEP + STEP / 2f;
+            px[k] = mapX1 + (i % W) * STEP + STEP / 2f;
+            pz[k] = mapZ1 + (i / W) * STEP + STEP / 2f;
         }
-        for (int k = 0; k < n; k++) {
+        // 端点换成城心精确坐标（主街/城门对得上）
+        px[0] = a.wx();
+        pz[0] = a.wz();
+        px[n - 1] = b.wx();
+        pz[n - 1] = b.wz();
+        // 1) 共线简化
+        List<float[]> pts = new ArrayList<>();
+        pts.add(new float[]{px[0], pz[0]});
+        for (int k = 1; k < n - 1; k++) {
+            float dx1 = px[k] - px[k - 1], dz1 = pz[k] - pz[k - 1];
+            float dx2 = px[k + 1] - px[k], dz2 = pz[k + 1] - pz[k];
+            if (Math.abs(dx1 * dz2 - dz1 * dx2) > 16) pts.add(new float[]{px[k], pz[k]});
+        }
+        pts.add(new float[]{px[n - 1], pz[n - 1]});
+        // 2) 1:2:1 松弛（首尾不动）
+        for (int k = 1; k < pts.size() - 1; k++) {
+            float[] p = pts.get(k), q = pts.get(k - 1), r = pts.get(k + 1);
+            p[0] = (q[0] + 2 * p[0] + r[0]) / 4;
+            p[1] = (q[1] + 2 * p[1] + r[1]) / 4;
+        }
+        // 3) Catmull-Rom 样条 + 1 格弧长重采样
+        List<float[]> centers = new ArrayList<>();
+        float[] last = null;
+        for (int k = 0; k < pts.size() - 1; k++) {
+            float[] p0 = pts.get(Math.max(0, k - 1));
+            float[] p1 = pts.get(k);
+            float[] p2 = pts.get(k + 1);
+            float[] p3 = pts.get(Math.min(pts.size() - 1, k + 2));
+            double segLen = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+            int steps = Math.max(1, (int) Math.ceil(segLen * 4));
+            for (int s2 = 0; s2 < steps; s2++) {
+                double t = s2 / (double) steps;
+                double t2 = t * t, t3 = t2 * t;
+                double f0 = -0.5 * t3 + t2 - 0.5 * t;
+                double f1 = 1.5 * t3 - 2.5 * t2 + 1;
+                double f2 = -1.5 * t3 + 2 * t2 + 0.5 * t;
+                double f3 = 0.5 * t3 - 0.5 * t2;
+                float x = (float) (p0[0] * f0 + p1[0] * f1 + p2[0] * f2 + p3[0] * f3);
+                float z = (float) (p0[1] * f0 + p1[1] * f1 + p2[1] * f2 + p3[1] * f3);
+                if (last == null || Math.hypot(x - last[0], z - last[1]) >= 1.0) {
+                    last = new float[]{x, z};
+                    centers.add(last);
+                }
+            }
+        }
+        centers.add(new float[]{pts.get(pts.size() - 1)[0], pts.get(pts.size() - 1)[1]});
+        int m = centers.size();
+        if (m < 5) return null;
+
+        // 4) 逐点地表高 + 水位
+        float[] hRaw = new float[m];
+        int[] wl = new int[m];
+        for (int k = 0; k < m; k++) {
+            float[] c = centers.get(k);
+            hRaw[k] = hf.yAt(c[0], c[1]);
+            wl[k] = probe.levelAt(c[0], c[1], hRaw[k]);
+        }
+        // 5) 桥区间：合并近邻（gap≤8）、丢短桥（<5，走路基填埋）、超长弃边
+        boolean[] bridge = new boolean[m];
+        int spanStart = -1, lastWet = -8;
+        List<int[]> spans = new ArrayList<>();
+        for (int k = 0; k < m; k++) {
+            if (wl[k] >= 0) {
+                if (spanStart < 0) spanStart = k;
+                else if (k - lastWet > BRIDGE_MERGE_GAP) {
+                    spans.add(new int[]{spanStart, lastWet});
+                    spanStart = k;
+                }
+                lastWet = k;
+            }
+        }
+        if (spanStart >= 0) spans.add(new int[]{spanStart, lastWet});
+        // 复检合并（跨 gap 的中段并回去）
+        List<int[]> merged = new ArrayList<>();
+        for (int[] sp : spans) {
+            if (!merged.isEmpty() && sp[0] - merged.get(merged.size() - 1)[1] <= BRIDGE_MERGE_GAP) {
+                merged.get(merged.size() - 1)[1] = sp[1];
+            } else {
+                merged.add(sp);
+            }
+        }
+        int[] deck = new int[merged.size()];
+        for (int si = 0; si < merged.size(); si++) {
+            int[] sp = merged.get(si);
+            int len = sp[1] - sp[0] + 1;
+            if (len > BRIDGE_MAX_SPAN) return null;      // 不修跨海大桥
+            int d = sea;
+            for (int k = sp[0]; k <= sp[1]; k++) d = Math.max(d, Math.max(0, wl[k]));
+            // 小溪短桥贴水（+1），正经桥留净空（+2）
+            deck[si] = d + (len < BRIDGE_MIN_LEN ? 1 : DECK_CLEAR);
+            int s0 = Math.max(0, sp[0] - 1), s1 = Math.min(m - 1, sp[1] + 1);
+            for (int k = s0; k <= s1; k++) bridge[k] = true;
+        }
+
+        // 6) targetY：非桥段窗口 ±8 均值；桥段恒 deck；引道 4 格 lerp；双向限坡
+        int[] ys = new int[m];
+        for (int k = 0; k < m; k++) {
             float sum = 0;
             int cnt = 0;
-            for (int m = Math.max(0, k - 2); m <= Math.min(n - 1, k + 2); m++) {
-                sum += h[cells.get(m)];
+            for (int j = Math.max(0, k - 8); j <= Math.min(m - 1, k + 8); j++) {
+                sum += hRaw[j];
                 cnt++;
             }
             ys[k] = Math.max(sea + 1, Math.round(sum / cnt));
         }
-        if (n >= 2) {
-            ys[0] = a.pad();
-            ys[n - 1] = b.pad();
-            // 记录进城方位角（gateDirs 挂到两端 Site）
-            a.gateDirs().add((float) Math.atan2(zs[1] - a.wz(), xs[1] - a.wx()));
-            b.gateDirs().add((float) Math.atan2(zs[n - 2] - b.wz(), xs[n - 2] - b.wx()));
+        for (int si = 0; si < merged.size(); si++) {
+            int[] sp = merged.get(si);
+            if (sp[0] < 0) continue;
+            int s0 = Math.max(0, sp[0] - 1), s1 = Math.min(m - 1, sp[1] + 1);
+            for (int k = s0; k <= s1; k++) ys[k] = deck[si];
+            for (int r2 = 1; r2 <= BRIDGE_RAMP; r2++) {   // 引道渐变
+                int kL = s0 - r2, kR = s1 + r2;
+                float f = 1 - r2 / (float) (BRIDGE_RAMP + 1);
+                if (kL >= 0 && !bridge[kL]) ys[kL] = Math.round(ys[kL] + (deck[si] - ys[kL]) * f);
+                if (kR < m && !bridge[kR]) ys[kR] = Math.round(ys[kR] + (deck[si] - ys[kR]) * f);
+            }
         }
-        return new Road(xs, zs, ys);
+        // 端点钉 pad（前/后 6 格渐变进城）
+        for (int k = 0; k <= Math.min(6, m - 1); k++) {
+            float f = 1 - k / 7f;
+            if (!bridge[k]) ys[k] = Math.round(ys[k] + (a.pad() - ys[k]) * f);
+        }
+        for (int k = Math.max(0, m - 7); k < m; k++) {
+            float f = 1 - (m - 1 - k) / 7f;
+            if (!bridge[k]) ys[k] = Math.round(ys[k] + (b.pad() - ys[k]) * f);
+        }
+        // 双向限坡（RoadWeaver maxSlopeStepPerTwoSegments=1：halfLow=0/halfHigh=1 防振荡）
+        for (int pass = 0; pass < 2; pass++) {
+            for (int k = 1; k < m; k++) {
+                if (bridge[k]) continue;
+                int hi = (pass == 0 ? ((k & 1) == 0 ? 0 : 1) : 1);
+                if (ys[k] > ys[k - 1] + hi) ys[k] = ys[k - 1] + hi;
+                if (ys[k] < ys[k - 1] - hi) ys[k] = ys[k - 1] - hi;
+                if (k >= 2 && !bridge[k - 1]) {
+                    if (ys[k] > ys[k - 2] + 1) ys[k] = ys[k - 2] + 1;
+                    if (ys[k] < ys[k - 2] - 1) ys[k] = ys[k - 2] - 1;
+                }
+            }
+            for (int k = m - 2; k >= 0; k--) {
+                if (bridge[k]) continue;
+                if (ys[k] > ys[k + 1] + 1) ys[k] = ys[k + 1] + 1;
+                if (ys[k] < ys[k + 1] - 1) ys[k] = ys[k + 1] - 1;
+                if (k + 2 < m && !bridge[k + 1]) {
+                    if (ys[k] > ys[k + 2] + 1) ys[k] = ys[k + 2] + 1;
+                    if (ys[k] < ys[k + 2] - 1) ys[k] = ys[k + 2] - 1;
+                }
+            }
+        }
+
+        float[] xs = new float[m], zs = new float[m];
+        byte[] flags = new byte[m];
+        for (int k = 0; k < m; k++) {
+            xs[k] = centers.get(k)[0];
+            zs[k] = centers.get(k)[1];
+            if (bridge[k]) flags[k] |= 1;
+        }
+        return new Road(xs, zs, ys, flags);
     }
 
     private static float heur(int i, int goal, int W) {
@@ -437,14 +797,15 @@ public final class CivPlanner {
     // ============================ 栅格化（扩展网格，世界坐标纯函数） ============================
 
     /**
-     * 把 civ 融进一片的扩展网格：城地块压平（城区+农田带全平，外羽化）、
-     * 官道走廊限深切填贴路面、跨水标桥。写 eCiv；改 ey。
-     * 必须在河流栅格化之后调用（读 eWater/eRiver 判桥）。
+     * 把 civ 融进一片的扩展网格：城地块按 rim 有机轮廓羽化压平（城区+农田带全平）、
+     * 官道按 1 格中心线投影插值贴 targetY（核心 ±ROAD_HALF 切填、路肩 smoothstep
+     * 收边偏填不挖）、跨水段标桥（地形不动）。写 eCiv；改 ey。
+     * 必须在河流栅格化之后调用（读 eWater/eRiver 判滨水带）。
      */
     public static void rasterize(CivPlan civ, int[] ey, boolean[] eWater, boolean[] eRiver,
                                  byte[] eCiv, int EW, int EH, int ox, int oz) {
         if (civ == null || civ.isEmpty()) return;
-        // ---- 地块 ----
+        // ---- 地块（rim 有机轮廓）----
         for (Site s : civ.sites()) {
             int R = s.radius() + FIELD_BAND;
             int R2 = R + FEATHER;
@@ -459,7 +820,8 @@ public final class CivPlanner {
                     double dx = ox + ex - s.wx(), dz = oz + ez - s.wz();
                     double d = Math.sqrt(dx * dx + dz * dz);
                     if (d > R2) continue;
-                    if (d <= R) {
+                    double plotR = rimAt(s, Math.atan2(dz, dx)) + FIELD_BAND;
+                    if (d <= plotR) {
                         if (nearWater(eWater, eRiver, EW, EH, ex, ez)) {
                             // 城内滨水带：不压平不占位（原生河岸绿带；墙/房自动让开）
                             ey[i] = (int) Math.round(ey[i] + (s.pad() - ey[i]) * 0.4);
@@ -467,54 +829,92 @@ public final class CivPlanner {
                             ey[i] = s.pad();
                             eCiv[i] = C_PLOT;
                         }
-                    } else {
-                        double t = (R2 - d) / FEATHER;
+                    } else if (d <= plotR + FEATHER) {
+                        double t = (plotR + FEATHER - d) / FEATHER;
                         t = t * t * (3 - 2 * t);
                         ey[i] = (int) Math.round(ey[i] + (s.pad() - ey[i]) * t);
                     }
                 }
             }
         }
-        // ---- 官道 ----
+        // ---- 官道（1 格中心线 + 投影插值 + smoothstep 路肩）----
+        float[] bestD = null;
+        float[] bestY = null;
+        boolean[] bestBridge = null;
         for (Road r : civ.roads()) {
             float[] xs = r.xs(), zs = r.zs();
             int[] ys = r.ys();
-            for (int k = 0; k + 1 < xs.length; k++) {
+            byte[] fl = r.flags();
+            int m = xs.length;
+            for (int k = 0; k + 1 < m; k++) {
                 float x0 = xs[k], z0 = zs[k], x1 = xs[k + 1], z1 = zs[k + 1];
                 if (Math.max(x0, x1) < ox - 6 || Math.min(x0, x1) >= ox + EW + 6
                         || Math.max(z0, z1) < oz - 6 || Math.min(z0, z1) >= oz + EH + 6) {
                     continue;
                 }
-                float len = (float) Math.hypot(x1 - x0, z1 - z0);
-                int steps = Math.max(1, (int) (len / 0.7f));
-                for (int st = 0; st <= steps; st++) {
-                    float t = st / (float) steps;
-                    float px = x0 + (x1 - x0) * t, pz = z0 + (z1 - z0) * t;
-                    int ty = Math.round(ys[k] + (ys[k + 1] - ys[k]) * t);
-                    for (int dz = -3; dz <= 3; dz++) {
-                        for (int dx = -3; dx <= 3; dx++) {
-                            int wx = Math.round(px) + dx, wz = Math.round(pz) + dz;
-                            int ex = wx - ox, ez = wz - oz;
-                            if (ex < 0 || ez < 0 || ex >= EW || ez >= EH) continue;
-                            double dd = Math.hypot(wx - px, wz - pz);
-                            if (dd > 3.4) continue;
-                            int i = ez * EW + ex;
-                            if (eCiv[i] == C_PLOT) continue;          // 城内街道另建
-                            if (eWater[i] || eRiver[i]) {
-                                if (dd <= 1.8) eCiv[i] = C_BRIDGE;    // 跨水：不动地形，后建桥
-                                continue;
-                            }
-                            if (dd <= 2.0) {
-                                int target = clampI(ty, ey[i] - 3, ey[i] + 3);
-                                ey[i] = target;
-                                if (eCiv[i] == C_NONE) eCiv[i] = C_ROAD;
-                            } else {
-                                double f = (3.4 - dd) / 1.4 * 0.5;
-                                int target = clampI(ty, ey[i] - 2, ey[i] + 2);
-                                ey[i] = (int) Math.round(ey[i] + (target - ey[i]) * f);
-                            }
+                if (bestD == null) {
+                    bestD = new float[EW * EH];
+                    java.util.Arrays.fill(bestD, Float.MAX_VALUE);
+                    bestY = new float[EW * EH];
+                    bestBridge = new boolean[EW * EH];
+                }
+                float segDx = x1 - x0, segDz = z1 - z0;
+                float segLen2 = Math.max(1e-4f, segDx * segDx + segDz * segDz);
+                boolean segBridge = (fl[k] & 1) != 0 || (fl[k + 1] & 1) != 0;
+                int wx0 = (int) Math.floor(Math.min(x0, x1) - SHOULDER);
+                int wx1 = (int) Math.ceil(Math.max(x0, x1) + SHOULDER);
+                int wz0 = (int) Math.floor(Math.min(z0, z1) - SHOULDER);
+                int wz1 = (int) Math.ceil(Math.max(z0, z1) + SHOULDER);
+                for (int wz = wz0; wz <= wz1; wz++) {
+                    int ez = wz - oz;
+                    if (ez < 0 || ez >= EH) continue;
+                    for (int wx = wx0; wx <= wx1; wx++) {
+                        int ex = wx - ox;
+                        if (ex < 0 || ex >= EW) continue;
+                        float t = ((wx - x0) * segDx + (wz - z0) * segDz) / segLen2;
+                        t = t < 0 ? 0 : Math.min(t, 1);
+                        float cx = x0 + segDx * t, cz = z0 + segDz * t;
+                        float dd = (float) Math.hypot(wx - cx, wz - cz);
+                        if (dd > SHOULDER) continue;
+                        int i = ez * EW + ex;
+                        if (dd < bestD[i]) {
+                            bestD[i] = dd;
+                            bestY[i] = ys[k] + (ys[k + 1] - ys[k]) * t;
+                            bestBridge[i] = segBridge;
                         }
                     }
+                }
+            }
+        }
+        if (bestD != null) {
+            for (int i = 0; i < EW * EH; i++) {
+                float dd = bestD[i];
+                if (dd == Float.MAX_VALUE) continue;
+                if (eCiv[i] == C_PLOT) continue;              // 城内街道另建
+                int ty = Math.round(bestY[i]);
+                if (eWater[i] || eRiver[i]) {
+                    if (dd <= ROAD_HALF) eCiv[i] = C_BRIDGE;  // 跨水：不动地形，后建桥
+                    continue;
+                }
+                if (bestBridge[i]) {
+                    // 桥端引道落在岸上时仍贴 targetY
+                    if (dd <= ROAD_HALF) {
+                        ey[i] = clampI(ty, ey[i] - 4, ey[i] + 4);
+                        if (eCiv[i] == C_NONE) eCiv[i] = C_ROAD;
+                    }
+                    continue;
+                }
+                if (dd <= ROAD_HALF) {
+                    ey[i] = clampI(ty, ey[i] - 4, ey[i] + 4);
+                    if (eCiv[i] == C_NONE) eCiv[i] = C_ROAD;
+                } else {
+                    // 路肩 smoothstep（RoadWeaver 路堤：偏填不挖——低处垫起，
+                    // 高处只轻削 2 格，路嵌进坡脚而不是剃平山脊）
+                    double t2 = (SHOULDER - dd) / (SHOULDER - ROAD_HALF);
+                    t2 = t2 * t2 * (3 - 2 * t2);
+                    int lo = ey[i] < ty ? ey[i] : Math.max(ey[i] - 2, ty);
+                    int target = ey[i] < ty ? ty : lo;
+                    ey[i] = (int) Math.round(ey[i] + (target - ey[i]) * t2);
                 }
             }
         }

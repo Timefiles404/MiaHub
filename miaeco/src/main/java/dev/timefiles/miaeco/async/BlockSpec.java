@@ -42,14 +42,22 @@ public final class BlockSpec {
     public final String raw;
     /** 原版战利品表 id（如 "chests/village/village_plains_house"）；容器方块写入后挂表。 */
     public final String loot;
+    /** 告示牌正面文字（≤4 行，null 行留空）；官道路牌用，写入后打蜡防改。 */
+    public final String[] signText;
 
     private BlockSpec(Material material, State state, Axis axis, Set<BlockFace> faces,
                       BlockFace facing, int aux, boolean waterlogged) {
-        this(material, state, axis, faces, facing, aux, waterlogged, null, null);
+        this(material, state, axis, faces, facing, aux, waterlogged, null, null, null);
     }
 
     private BlockSpec(Material material, State state, Axis axis, Set<BlockFace> faces,
                       BlockFace facing, int aux, boolean waterlogged, String raw, String loot) {
+        this(material, state, axis, faces, facing, aux, waterlogged, raw, loot, null);
+    }
+
+    private BlockSpec(Material material, State state, Axis axis, Set<BlockFace> faces,
+                      BlockFace facing, int aux, boolean waterlogged, String raw, String loot,
+                      String[] signText) {
         this.material = material;
         this.state = state;
         this.axis = axis;
@@ -59,6 +67,7 @@ public final class BlockSpec {
         this.waterlogged = waterlogged;
         this.raw = raw;
         this.loot = loot;
+        this.signText = signText;
     }
 
     public static BlockSpec of(Material m) { return new BlockSpec(m, State.NONE, null, null, null, 0, false); }
@@ -125,6 +134,11 @@ public final class BlockSpec {
     /** 带战利品表的容器（村庄箱子/木桶）：写入后挂原版 loot table。 */
     public static BlockSpec raw(Material m, String raw, String loot) {
         return new BlockSpec(m, State.RAW, null, null, null, 0, false, raw, loot);
+    }
+
+    /** 带正面文字的告示牌（官道路牌）：raw 定 blockstate，lines ≤4 行。 */
+    public static BlockSpec sign(Material m, String raw, String[] lines) {
+        return new BlockSpec(m, State.RAW, null, null, null, 0, false, raw, null, lines);
     }
 
     /** 本方块的含水（waterlogged）版本——玻璃板茎/浮水叶/垂滴叶茎/水中台阶等用。 */

@@ -73,9 +73,11 @@ public final class AtmosphereGenerator {
         }
 
         if (st.densityOf("river") > 0) river(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
-        if (st.densityOf("town") > 0) TownWorks.town(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
+        List<int[]> houses = st.densityOf("town") > 0
+                ? TownWorks.town(g, th, st, seed, treeBases, edits, claimed, pool, wetDist)
+                : List.of();
         if (st.densityOf("soil") > 0) soil(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
-        if (st.densityOf("paths") > 0) paths(g, th, st, seed, treeBases, edits, claimed, pool);
+        if (st.densityOf("paths") > 0) paths(g, th, st, seed, treeBases, edits, claimed, pool, houses);
         if (st.densityOf("water") > 0) water(g, th, st, seed, treeBases, edits, claimed, pool, wetDist);
         List<int[]> rockCells = new ArrayList<>();   // 岩石占位（供岩边微生境选点）
         if (st.densityOf("rocks") > 0) rocks(g, th, st, seed, treeBases, edits, claimed, rockCells);
@@ -1787,28 +1789,35 @@ public final class AtmosphereGenerator {
 
     // ============================ 小路（A* 成本寻路） ============================
 
+    /**
+     * 野径只属于人烟（0.34.0）：无房屋的区域一条小路都没有——不再有横穿荒野/爬上
+     * 山体的孤立小径。有房屋时从随机一户门前出发向区域边缘走 1~2 条,离屋 14 格起
+     * 渐隐、26 格截止（{@link #stampTrail} 的 fade 规则），陡坡格一律不铺。
+     */
     private static void paths(GroundSnapshot g, AtmosphereTheme th, AtmosphereSettings st,
                               long seed, List<int[]> treeBases, Map<Long, BlockEdit> edits,
-                              boolean[] claimed, boolean[] pool) {
+                              boolean[] claimed, boolean[] pool, List<int[]> houses) {
         double strength = th.pathStrength() * st.densityOf("paths");
         if (strength <= 0.01 || th.pathCore().length == 0) return;
+        if (houses == null || houses.isEmpty()) return;      // 无人烟即无小路
         long area = (long) g.width() * g.depth();
         int count = (int) Math.max(strength > 0.15 ? 1 : 0,
-                Math.min(5, Math.round(area / 8000.0 * strength)));
+                Math.min(2, Math.round(area / 14000.0 * strength)));
         Random rng = new Random(seed ^ S_PATH);
         long ns = seed ^ S_PATH ^ 0x99;
         for (int p = 0; p < count; p++) {
-            // 端点：随机对边
             int w = g.width(), d = g.depth();
+            int[] h0 = houses.get(rng.nextInt(houses.size()));
+            int sx = Math.max(1, Math.min(w - 2, h0[0]));
+            int sz = Math.max(1, Math.min(d - 2, h0[1]));
+            // 目标：随机一条区域边上的点（路在离屋 26 格处自然渐隐，不会真走到边）
             boolean alongX = rng.nextBoolean();
-            int sx, sz, tx, tz;
+            int tx, tz;
             if (alongX) {
-                sx = 0; tx = w - 1;
-                sz = (int) (d * (0.15 + 0.7 * rng.nextDouble()));
+                tx = sx < w / 2 ? w - 1 : 0;
                 tz = (int) (d * (0.15 + 0.7 * rng.nextDouble()));
             } else {
-                sz = 0; tz = d - 1;
-                sx = (int) (w * (0.15 + 0.7 * rng.nextDouble()));
+                tz = sz < d / 2 ? d - 1 : 0;
                 tx = (int) (w * (0.15 + 0.7 * rng.nextDouble()));
             }
             long wiggle = ns ^ (p * 0x77L);
@@ -1823,14 +1832,27 @@ public final class AtmosphereGenerator {
                 return c;
             });
             if (routed == null) continue;
-            stampTrail(g, th, rng, routed, treeBases, edits, claimed, pool);
+            stampTrail(g, th, rng, routed, treeBases, edits, claimed, pool, houses, true);
         }
     }
 
-    /** 沿寻路结果铺小径：混材质、零散断续、坡面楼梯坡道、踏石台阶。 */
+    /** 小径渐隐带：离最近房屋这么远开始变稀（格）。 */
+    private static final int TRAIL_FADE_START = 14;
+    /** 小径截止距离：离最近房屋超过此值一格不铺，小径到此为止（格）。 */
+    private static final int TRAIL_FADE_END = 26;
+
+    /**
+     * 沿寻路结果铺小径：混材质、零散断续、坡面楼梯坡道、踏石台阶。
+     * 0.34.0：局地陡坡（3×3 起伏 &gt;4）一律不铺（小路不爬山体陡面）；
+     * fade=true 时按离最近房屋的距离渐隐，超过 {@link #TRAIL_FADE_END} 直接收尾。
+     *
+     * @param houses 房屋中心（区域局部坐标），fade 用；可为 null
+     * @param fade   是否启用"远离人烟渐隐"
+     */
     static void stampTrail(GroundSnapshot g, AtmosphereTheme th, Random rng,
                            List<int[]> routed, List<int[]> treeBases,
-                           Map<Long, BlockEdit> edits, boolean[] claimed, boolean[] pool) {
+                           Map<Long, BlockEdit> edits, boolean[] claimed, boolean[] pool,
+                           List<int[]> houses, boolean fade) {
         Material accentFull = null, accentStair = null, accentSlab = null;
         if (th.pathAccent().length > 0) {
             Material acc = th.pathAccent()[rng.nextInt(th.pathAccent().length)];
@@ -1845,6 +1867,16 @@ public final class AtmosphereGenerator {
             int i = lz * g.width() + lx;
             if (!g.valid(lx, lz) || g.water(lx, lz) || pool[i] || claimed[i]) { hadPrev = false; continue; }
             if (nearTree(g, lx, lz, treeBases, -1)) { hadPrev = false; continue; }
+            if (localRelief(g, lx, lz) > 4) { hadPrev = false; continue; }   // 陡坡不铺
+            if (fade && houses != null && !houses.isEmpty()) {
+                double dh = distToHouses(houses, lx, lz);
+                if (dh > TRAIL_FADE_END) break;                              // 远离人烟：收尾
+                if (dh > TRAIL_FADE_START && rng.nextDouble()
+                        < (dh - TRAIL_FADE_START) / (double) (TRAIL_FADE_END - TRAIL_FADE_START)) {
+                    hadPrev = false;
+                    continue;                                                // 渐隐段越远越稀
+                }
+            }
             int wx = g.region().minX() + lx;
             int wz = g.region().minZ() + lz;
             int gy = g.groundY(lx, lz);
@@ -1909,6 +1941,32 @@ public final class AtmosphereGenerator {
         if (dz > 0) return BlockFace.SOUTH;
         if (dz < 0) return BlockFace.NORTH;
         return null;
+    }
+
+    /** 3×3 局地起伏（最高-最低地面 Y）；越界/无效格忽略。 */
+    static int localRelief(GroundSnapshot g, int lx, int lz) {
+        int lo = Integer.MAX_VALUE, hi = Integer.MIN_VALUE;
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                int x = lx + dx, z = lz + dz;
+                if (!g.inBounds(x, z) || !g.valid(x, z)) continue;
+                int y = g.groundY(x, z);
+                if (y < lo) lo = y;
+                if (y > hi) hi = y;
+            }
+        }
+        return hi == Integer.MIN_VALUE ? 0 : hi - lo;
+    }
+
+    /** 到最近房屋中心的欧氏距离（区域局部坐标）。 */
+    static double distToHouses(List<int[]> houses, int lx, int lz) {
+        double best = Double.MAX_VALUE;
+        for (int[] h : houses) {
+            double dx = h[0] - lx, dz = h[1] - lz;
+            double d2 = dx * dx + dz * dz;
+            if (d2 < best) best = d2;
+        }
+        return Math.sqrt(best);
     }
 
     // ============================ 积水 ============================
