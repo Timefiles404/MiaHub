@@ -220,34 +220,102 @@ public final class CityWorks {
         // ---- 广场 ----
         plaza(g, occ, side, off, cx, cz, hubX, hubZ, plazaH, tier, kit, pad, ox, oz, seed, rng, out);
 
-        // ---- 王城落块 ----
+        // ---- 王城落块（0.35.0 台地基座：抬 1 + 环阶）----
         if (royal != null) {
+            int podY = podium(g, occ, side, off, cx, cz, royalRect, pad, 1, kit, ox, oz, seed, out);
             stampPiece(royal, ox + cx - royal.meta.sx() / 2,
-                    pad, oz + royalRect[1], 0, kit.lootHouse(), out, true);
+                    podY, oz + royalRect[1], 0, kit.lootHouse(), out, true);
         }
 
-        // ---- 奇观落块 ----
+        // ---- 奇观落块（台地基座：抬 2 卫城式）----
         for (Object[] wo : wonders) {
             var piece = (CityPieces.Piece) wo[0];
             int[] rect = (int[]) wo[1];
-            stampPiece(piece, ox + rect[0], pad, oz + rect[1], 0, null, out, true);
+            int podY = podium(g, occ, side, off, cx, cz, rect, pad, 2, kit, ox, oz, seed, out);
+            stampPiece(piece, ox + rect[0], podY, oz + rect[1], 0, null, out, true);
         }
 
         // ---- 沿街房屋（0.34.0 交错密排：过道式间距） ----
         int houses = houses(g, occ, side, off, site, cx, cz, tier, kit, pad, ox, oz, rng, out);
 
-        // ---- 农田带 ----
-        int farms = farms(g, occ, side, off, site, cx, cz, tier, kit, pad, ox, oz, rng, out);
+        // ---- 鱼鳞梯田（0.35.0 整带铺作物） ----
+        int farms = fields(g, occ, side, off, site, cx, cz, kit, pad, ox, oz, seed, out);
 
         // ---- 路灯（主街两侧） ----
-        lamps(occ, side, off, cx, cz, mains, kit, pad, ox, oz, rng, out);
+        lamps(g, occ, side, off, cx, cz, mains, kit, pad, ox, oz, rng, out);
 
         String tname = tier >= 3 ? "首都" : tier == 2 ? "大城" : "城镇";
         return tname + "「" + nameOf(seed, site.wx(), site.wz()) + "」"
                 + (kit == DESERT ? "沙漠风" : kit == MEDIEVAL_SNOWY ? "雪原风"
                 : kit == MEDIEVAL_TAIGA ? "针叶风" : kit == GREEK ? "希腊白城" : "平原风")
                 + " 房屋×" + houses + (towers > 0 ? " 城墙塔×" + towers : "")
-                + (royal != null ? " 王城区" : "") + wonderTag + " 农田×" + farms;
+                + (royal != null ? " 王城区" : "") + wonderTag + " 梯田×" + farms;
+    }
+
+    /**
+     * 台地基座（0.35.0 台地化）：矩形取域内最高地 + lift 为台面，台身填石、
+     * 缘壁layer带，四周环阶（逐圈退台的台阶裙）——王城/神殿立在真正的台基上。
+     * 返回台面 Y。
+     */
+    private static int podium(Ground g, byte[] occ, int side, int off, int cx, int cz,
+                              int[] rect, int pad, int lift, Kit kit,
+                              int ox, int oz, long seed, List<BlockEdit> out) {
+        int hi = pad;
+        for (int z = rect[1]; z <= rect[3]; z++) {
+            for (int x = rect[0]; x <= rect[2]; x++) {
+                if (x < 0 || z < 0 || x >= g.w() || z >= g.h()) continue;
+                if (g.civ(x, z) != CivPlanner.C_PLOT) continue;
+                hi = Math.max(hi, g.y(x, z));
+            }
+        }
+        int podY = hi + lift;
+        for (int z = rect[1]; z <= rect[3]; z++) {
+            for (int x = rect[0]; x <= rect[2]; x++) {
+                if (x < 0 || z < 0 || x >= g.w() || z >= g.h()) continue;
+                int gy = g.y(x, z);
+                boolean edge = x == rect[0] || x == rect[2] || z == rect[1] || z == rect[3];
+                for (int y = gy + 1; y <= podY; y++) {
+                    double r = hash01(seed ^ (0x90D1L + y), ox + x, oz + z);
+                    Material m = edge
+                            ? (y == podY ? kit.wallBand() : r < 0.7 ? kit.wallCore() : kit.wallVary())
+                            : (r < 0.6 ? kit.wallCore() : kit.wallVary());
+                    out.add(new BlockEdit(ox + x, y, oz + z, BlockSpec.of(m)));
+                }
+            }
+        }
+        // 环阶裙：向外逐圈退一格高（台阶面朝内升）
+        for (int k = 1; k <= 4; k++) {
+            int stepY = podY - k;
+            int x0 = rect[0] - k, x1 = rect[2] + k, z0 = rect[1] - k, z1 = rect[3] + k;
+            for (int z = z0; z <= z1; z++) {
+                for (int x = x0; x <= x1; x++) {
+                    boolean ring = x == x0 || x == x1 || z == z0 || z == z1;
+                    if (!ring) continue;
+                    if (x < 0 || z < 0 || x >= g.w() || z >= g.h()) continue;
+                    if (g.civ(x, z) != CivPlanner.C_PLOT) continue;
+                    int gy = g.y(x, z);
+                    if (stepY <= gy) continue;                    // 已接地
+                    int oi = occIdx(side, off, cx, cz, x, z);
+                    if (oi >= 0 && occ[oi] == 0) occ[oi] = 4;     // 环阶占位（房不压阶）
+                    for (int y = gy + 1; y < stepY; y++) {
+                        out.add(new BlockEdit(ox + x, y, oz + z, BlockSpec.of(kit.wallVary())));
+                    }
+                    org.bukkit.block.BlockFace face = x == x0 ? org.bukkit.block.BlockFace.EAST
+                            : x == x1 ? org.bukkit.block.BlockFace.WEST
+                            : z == z0 ? org.bukkit.block.BlockFace.SOUTH
+                            : org.bukkit.block.BlockFace.NORTH;
+                    out.add(new BlockEdit(ox + x, stepY, oz + z,
+                            BlockSpec.stair(stairOf(kit.wallCore()), face, false)));
+                }
+            }
+        }
+        return podY;
+    }
+
+    private static Material stairOf(Material core) {
+        if (core == Material.QUARTZ_BRICKS) return Material.QUARTZ_STAIRS;
+        Material s = Material.matchMaterial(core.name().replace("_BRICKS", "_BRICK") + "_STAIRS");
+        return s != null ? s : Material.STONE_BRICK_STAIRS;
     }
 
     /** 聚落名：双音节哈希组合（进度/路牌用，不落方块）。 */
@@ -394,12 +462,17 @@ public final class CityWorks {
         if (g.civ(lx, lz) != CivPlanner.C_PLOT) return;
         occ[oi] = 1;
         Material m = RoadPaint.pick(kit.streets(), seed ^ 0x57E7L, ox + lx, oz + lz, wear);
-        out.add(new BlockEdit(ox + lx, pad, oz + lz, BlockSpec.of(m)));
+        // 0.35.0 台地化：街面贴所在台地地面（城内 ±3 缓台、农田带梯田皆可走）
+        out.add(new BlockEdit(ox + lx, g.y(lx, lz), oz + lz, BlockSpec.of(m)));
     }
 
     // ============================ 城墙 ============================
 
-    /** 沿 rim 有机轮廓走墙：厚 2、垛口、塔楼按弧长 ~30 格分布、城门带门柱塔。 */
+    /**
+     * 沿 rim 有机轮廓走墙（0.35.0 精细化）：厚 2、随台地起伏的墙基、外沿连续
+     * 胸墙 + 隔格垛齿、内沿步道沿口，塔楼按弧长 ~30 格分布（出挑檐口 + 垛顶 +
+     * 灯），城门发展成门楼——双柱塔 + 跨门石拱楣 + 楣上垛齿 + 悬灯 + 旗帜。
+     */
     private static int wall(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
                             int cx, int cz, int tier, Kit kit, int pad, int ox, int oz,
                             long seed, List<Float> gateDirs, List<BlockEdit> out) {
@@ -423,70 +496,148 @@ public final class CityWorks {
             int px = cx + (int) Math.round(Math.cos(th) * wallR);
             int pz = cz + (int) Math.round(Math.sin(th) * wallR);
             if (gate) continue;
-            for (int t = 0; t < 2; t++) {           // 厚 2：wallR 与 wallR-1
+            for (int t = 0; t < 2; t++) {           // 厚 2：外皮 wallR、内皮 wallR-1
                 int qx = cx + (int) Math.round(Math.cos(th) * (wallR - t));
                 int qz = cz + (int) Math.round(Math.sin(th) * (wallR - t));
-                wallColumn(g, occ, side, off, cx, cz, qx, qz, pad, hWall, t == 0 && (s & 1) == 0,
+                wallColumn(g, occ, side, off, cx, cz, qx, qz, hWall, t == 0, (s & 1) == 0,
                         kit, ox, oz, seed, out);
             }
             if (acc >= towerEvery) {
                 acc = 0;
-                tower(g, occ, side, off, cx, cz, px, pz, pad, hWall + 3, kit, ox, oz, seed, out);
+                tower(g, occ, side, off, cx, cz, px, pz, hWall + 3, kit, ox, oz, seed,
+                        false, out);
                 towers++;
             }
         }
-        // 城门框：两侧立柱加高 + 灯
+        // 门楼：两侧柱塔 + 跨门石楣（高 5..6）+ 楣上垛齿 + 楣下悬灯 + 旗
         for (float gd : gateDirs) {
             double wallR = CivPlanner.rimAt(site, gd) - 2;
+            int gy = wallBase(g, cx + (int) Math.round(Math.cos(gd) * wallR),
+                    cz + (int) Math.round(Math.sin(gd) * wallR), pad);
             for (int sgn = -1; sgn <= 1; sgn += 2) {
                 double th = gd + sgn * 5.2 / wallR;
                 int px = cx + (int) Math.round(Math.cos(th) * wallR);
                 int pz = cz + (int) Math.round(Math.sin(th) * wallR);
-                tower(g, occ, side, off, cx, cz, px, pz, pad, hWall + 2, kit, ox, oz, seed, out);
+                tower(g, occ, side, off, cx, cz, px, pz, hWall + 2, kit, ox, oz, seed,
+                        true, out);
+            }
+            // 跨门楣：沿门洞切向铺 2 厚石楣，上置垛齿，下挂灯笼
+            double txu = -Math.sin(gd), tzu = Math.cos(gd);
+            for (int o = -4; o <= 4; o++) {
+                for (int t = 0; t < 2; t++) {
+                    int bx = cx + (int) Math.round(Math.cos(gd) * (wallR - t) + txu * o);
+                    int bz = cz + (int) Math.round(Math.sin(gd) * (wallR - t) + tzu * o);
+                    if (bx < 0 || bz < 0 || bx >= g.w() || bz >= g.h()) continue;
+                    out.add(new BlockEdit(ox + bx, gy + 5, oz + bz, BlockSpec.of(kit.wallCore())));
+                    out.add(new BlockEdit(ox + bx, gy + 6, oz + bz,
+                            BlockSpec.of(o % 2 == 0 ? kit.wallBand() : kit.wallCore())));
+                    if (t == 0 && (o + 4) % 2 == 0) {
+                        out.add(new BlockEdit(ox + bx, gy + 7, oz + bz, BlockSpec.of(kit.wallCore())));
+                    }
+                    if (t == 0 && Math.abs(o) == 2) {
+                        out.add(new BlockEdit(ox + bx, gy + 4, oz + bz,
+                                BlockSpec.raw(Material.LANTERN, "minecraft:lantern[hanging=true]")));
+                    }
+                }
+            }
+            // 旗帜：楣顶中点一面（面向城外）
+            int fx = cx + (int) Math.round(Math.cos(gd) * wallR);
+            int fz = cz + (int) Math.round(Math.sin(gd) * wallR);
+            if (fx >= 0 && fz >= 0 && fx < g.w() && fz < g.h()) {
+                int rot = signRot(Math.cos(gd), Math.sin(gd));
+                out.add(new BlockEdit(ox + fx, gy + 7, oz + fz, BlockSpec.raw(bannerOf(kit),
+                        keyOf(bannerOf(kit)) + "[rotation=" + rot + "]")));
             }
         }
         return towers;
     }
 
+    /** 墙基（台地化）：所在格地面；异常（野格/深坑）回退 pad。 */
+    private static int wallBase(Ground g, int lx, int lz, int pad) {
+        if (lx < 0 || lz < 0 || lx >= g.w() || lz >= g.h()) return pad;
+        int y = g.y(lx, lz);
+        return Math.abs(y - pad) > 6 ? pad : y;
+    }
+
+    private static Material bannerOf(Kit kit) {
+        if (kit == DESERT) return Material.ORANGE_BANNER;
+        if (kit == MEDIEVAL_SNOWY) return Material.LIGHT_BLUE_BANNER;
+        if (kit == GREEK) return Material.WHITE_BANNER;
+        return Material.RED_BANNER;
+    }
+
+    /**
+     * 墙柱（0.35.0）：基座随台地地面；外皮=连续胸墙 +1、隔格垛齿 +2（真垛口），
+     * 内皮=步道沿口（顶面半砖沿）。
+     */
     private static void wallColumn(Ground g, byte[] occ, int side, int off, int cx, int cz,
-                                   int lx, int lz, int pad, int h, boolean crenel, Kit kit,
+                                   int lx, int lz, int h, boolean outer, boolean merlon, Kit kit,
                                    int ox, int oz, long seed, List<BlockEdit> out) {
         int oi = occIdx(side, off, cx, cz, lx, lz);
         if (oi < 0 || occ[oi] == 3) return;
         if (lx < 0 || lz < 0 || lx >= g.w() || lz >= g.h()) return;
         if (g.civ(lx, lz) != CivPlanner.C_PLOT) return;
         occ[oi] = 3;
+        int base = g.y(lx, lz);
         for (int y = 1; y <= h; y++) {
             double r = hash01(seed ^ (y * 0x9E5L), ox + lx, oz + lz);
             Material m = y % 4 == 0 ? kit.wallBand()
                     : r < 0.7 ? kit.wallCore() : kit.wallVary();
-            out.add(new BlockEdit(ox + lx, pad + y, oz + lz, BlockSpec.of(m)));
+            out.add(new BlockEdit(ox + lx, base + y, oz + lz, BlockSpec.of(m)));
         }
-        if (crenel) out.add(new BlockEdit(ox + lx, pad + h + 1, oz + lz, BlockSpec.of(kit.wallCore())));
+        if (outer) {
+            out.add(new BlockEdit(ox + lx, base + h + 1, oz + lz, BlockSpec.of(kit.wallCore())));
+            if (merlon) {
+                out.add(new BlockEdit(ox + lx, base + h + 2, oz + lz, BlockSpec.of(kit.wallCore())));
+            }
+        } else {
+            out.add(new BlockEdit(ox + lx, base + h + 1, oz + lz,
+                    BlockSpec.of(slabOf(kit.wallCore()))));
+        }
     }
 
+    private static Material slabOf(Material core) {
+        if (core == Material.QUARTZ_BRICKS) return Material.QUARTZ_SLAB;
+        Material s = Material.matchMaterial(core.name().replace("_BRICKS", "_BRICK") + "_SLAB");
+        return s != null ? s : Material.STONE_BRICK_SLAB;
+    }
+
+    /** 塔楼（0.35.0）：出挑檐（顶下一圈半砖挑出 1 格）+ 环垛 + 灯；基座取塔心地面。 */
     private static void tower(Ground g, byte[] occ, int side, int off, int cx, int cz,
-                              int lx, int lz, int pad, int h, Kit kit, int ox, int oz,
-                              long seed, List<BlockEdit> out) {
+                              int lx, int lz, int h, Kit kit, int ox, int oz,
+                              long seed, boolean gate, List<BlockEdit> out) {
+        int cyRef = g.y(clamp(lx, 0, g.w() - 1), clamp(lz, 0, g.h() - 1));
+        int base = wallBase(g, lx, lz, cyRef);
         for (int dz = -2; dz <= 2; dz++) {
             for (int dx = -2; dx <= 2; dx++) {
-                if (dx * dx + dz * dz > 5) continue;
+                int d2 = dx * dx + dz * dz;
                 int px = lx + dx, pz = lz + dz;
+                if (px < 0 || pz < 0 || px >= g.w() || pz >= g.h()) continue;
+                if (d2 > 5) {
+                    // 出挑檐：footprint 外一圈（d²∈(5,9]）顶下半砖挑台
+                    if (d2 <= 9 && g.civ(px, pz) == CivPlanner.C_PLOT) {
+                        out.add(new BlockEdit(ox + px, base + h, oz + pz,
+                                BlockSpec.of(slabOf(kit.wallCore()))));
+                    }
+                    continue;
+                }
                 int oi = occIdx(side, off, cx, cz, px, pz);
-                if (oi < 0 || px < 0 || pz < 0 || px >= g.w() || pz >= g.h()) continue;
-                if (g.civ(px, pz) != CivPlanner.C_PLOT) continue;
+                if (oi < 0 || g.civ(px, pz) != CivPlanner.C_PLOT) continue;
                 occ[oi] = 3;
-                boolean rim = dx * dx + dz * dz > 2;
+                boolean rim = d2 > 2;
                 for (int y = 1; y <= h; y++) {
                     double r = hash01(seed ^ (y * 0xA7L), ox + px, oz + pz);
                     Material m = r < 0.72 ? kit.wallCore() : kit.wallVary();
-                    out.add(new BlockEdit(ox + px, pad + y, oz + pz, BlockSpec.of(m)));
+                    out.add(new BlockEdit(ox + px, base + y, oz + pz, BlockSpec.of(m)));
                 }
-                if (rim) out.add(new BlockEdit(ox + px, pad + h + 1, oz + pz,
+                if (rim) out.add(new BlockEdit(ox + px, base + h + 1, oz + pz,
                         BlockSpec.of(kit.wallCore())));
             }
         }
-        out.add(new BlockEdit(ox + lx, pad + h + 1, oz + lz, BlockSpec.of(Material.LANTERN)));
+        out.add(new BlockEdit(ox + lx, base + h + 1, oz + lz, BlockSpec.of(Material.LANTERN)));
+        if (gate) {
+            out.add(new BlockEdit(ox + lx, base + h + 2, oz + lz, BlockSpec.of(kit.wallBand())));
+        }
     }
 
     // ============================ 广场 ============================
@@ -494,7 +645,7 @@ public final class CityWorks {
     private static void plaza(Ground g, byte[] occ, int side, int off, int cx, int cz,
                               int hubX, int hubZ, int ph, int tier, Kit kit, int pad,
                               int ox, int oz, long seed, Random rng, List<BlockEdit> out) {
-        // 铺装
+        // 铺装（贴地：广场核心台地即 pad）
         for (int dz = -ph; dz <= ph; dz++) {
             for (int dx = -ph; dx <= ph; dx++) {
                 int lx = hubX + dx, lz = hubZ + dz;
@@ -506,9 +657,11 @@ public final class CityWorks {
                 double r = hash01(seed ^ 0x91A2AL, ox + lx, oz + lz);
                 Material m = r < 0.5 ? kit.plazaA() : r < 0.8 ? kit.plazaB()
                         : kit.streets().hard()[0];
-                out.add(new BlockEdit(ox + lx, pad, oz + lz, BlockSpec.of(m)));
+                out.add(new BlockEdit(ox + lx, g.y(lx, lz), oz + lz, BlockSpec.of(m)));
             }
         }
+        int hubY = (hubX >= 0 && hubZ >= 0 && hubX < g.w() && hubZ < g.h())
+                ? g.y(hubX, hubZ) : pad;
         boolean centered = false;
         if (kit != DESERT && tier >= 2) {
             // 镇心件（喷泉/集会点）居中
@@ -518,7 +671,7 @@ public final class CityWorks {
                 var m = fit.get(rng.nextInt(fit.size()));
                 var piece = CityPieces.load(m);
                 if (piece != null) {
-                    stampPiece(piece, ox + hubX - m.sx() / 2, pad, oz + hubZ - m.sz() / 2,
+                    stampPiece(piece, ox + hubX - m.sx() / 2, hubY, oz + hubZ - m.sz() / 2,
                             rng.nextInt(4), kit.lootHouse(), out, false);
                     centered = true;
                 }
@@ -530,7 +683,7 @@ public final class CityWorks {
                 var m = fit.get(rng.nextInt(fit.size()));
                 var piece = CityPieces.load(m);
                 if (piece != null) {
-                    stampPiece(piece, ox + hubX - m.sx() / 2, pad + 1, oz + hubZ - m.sz() / 2,
+                    stampPiece(piece, ox + hubX - m.sx() / 2, hubY + 1, oz + hubZ - m.sz() / 2,
                             rng.nextInt(4), null, out, false);
                     centered = true;
                 }
@@ -541,13 +694,13 @@ public final class CityWorks {
             for (int dz = -1; dz <= 1; dz++) {
                 for (int dx = -1; dx <= 1; dx++) {
                     boolean c = dx == 0 && dz == 0;
-                    out.add(new BlockEdit(ox + hubX + dx, pad, oz + hubZ + dz,
+                    out.add(new BlockEdit(ox + hubX + dx, hubY, oz + hubZ + dz,
                             BlockSpec.of(c ? Material.WATER : Material.COBBLESTONE)));
                     if (dx != 0 && dz != 0) {
-                        out.add(new BlockEdit(ox + hubX + dx, pad + 1, oz + hubZ + dz,
+                        out.add(new BlockEdit(ox + hubX + dx, hubY + 1, oz + hubZ + dz,
                                 BlockSpec.of(Material.COBBLESTONE_WALL)));
                     }
-                    out.add(new BlockEdit(ox + hubX + dx, pad + 2, oz + hubZ + dz,
+                    out.add(new BlockEdit(ox + hubX + dx, hubY + 2, oz + hubZ + dz,
                             BlockSpec.of(Material.COBBLESTONE_SLAB)));
                 }
             }
@@ -639,7 +792,10 @@ public final class CityWorks {
         int bx0 = sx + nrm[0] * 2 + (nrm[0] > 0 ? 0 : nrm[0] < 0 ? -(rsx - 1) : -rsx / 2);
         int bz0 = sz + nrm[1] * 2 + (nrm[1] > 0 ? 0 : nrm[1] < 0 ? -(rsz - 1) : -rsz / 2);
         // 本体矩形必须干净（空地、非街、C_PLOT、rim 内）；与其他房屋允许贴排。
+        // 0.35.0 台地化：矩形须落在同一台地（高差 ≤1，取高位为基座——低 1 格
+        // 的列由件的地皮层自然补齐），跨 ≥2 格台阶的位置弃试。
         int wallMargin = tier >= 2 ? 4 : 2;
+        int yLo = Integer.MAX_VALUE, yHi = Integer.MIN_VALUE;
         for (int z = bz0; z < bz0 + rsz; z++) {
             for (int x = bx0; x < bx0 + rsx; x++) {
                 int oi = occIdx(side, off, cx, cz, x, z);
@@ -656,6 +812,13 @@ public final class CityWorks {
                     dbg[4]++;
                     return false;
                 }
+                int y = g.y(x, z);
+                yLo = Math.min(yLo, y);
+                yHi = Math.max(yHi, y);
+                if (yHi - yLo > 1) {
+                    dbg[5]++;
+                    return false;
+                }
             }
         }
         // 外 1 圈只避让墙/广场/王城（占位 3/4），房屋（2）与街（1）允许紧邻
@@ -668,7 +831,7 @@ public final class CityWorks {
                 }
             }
         }
-        stampPiece(piece, ox + bx0, pad, oz + bz0, rot, kit.lootHouse(), out,
+        stampPiece(piece, ox + bx0, yHi, oz + bz0, rot, kit.lootHouse(), out,
                 !"nbt".equals(m.format()));
         for (int z = bz0; z < bz0 + rsz; z++) {
             for (int x = bx0; x < bx0 + rsx; x++) {
@@ -678,8 +841,10 @@ public final class CityWorks {
         }
         // 门前小径接街
         int doorX = sx + nrm[0], doorZ = sz + nrm[1];
-        out.add(new BlockEdit(ox + doorX, pad, oz + doorZ,
-                BlockSpec.of(RoadPaint.pick(kit.streets(), 0x600DL, ox + doorX, oz + doorZ, 0.5))));
+        if (doorX >= 0 && doorZ >= 0 && doorX < g.w() && doorZ < g.h()) {
+            out.add(new BlockEdit(ox + doorX, g.y(doorX, doorZ), oz + doorZ,
+                    BlockSpec.of(RoadPaint.pick(kit.streets(), 0x600DL, ox + doorX, oz + doorZ, 0.5))));
+        }
         return true;
     }
 
@@ -690,8 +855,8 @@ public final class CityWorks {
      * schem（allLayers=true）全部非空气按原样落，基准 y 直接是地面。
      * 箱子/木桶挂 loot（可 null）。
      */
-    private static void stampPiece(CityPieces.Piece p, int wx0, int y0, int wz0, int rot,
-                                   String loot, List<BlockEdit> out, boolean allLayers) {
+    static void stampPiece(CityPieces.Piece p, int wx0, int y0, int wz0, int rot,
+                           String loot, List<BlockEdit> out, boolean allLayers) {
         var m = p.meta;
         for (int i = 0; i < p.pos.length; i++) {
             int packed = p.pos[i];
@@ -721,67 +886,135 @@ public final class CityWorks {
         }
     }
 
-    // ============================ 农田带 ============================
+    // ============================ 鱼鳞梯田（0.35.0） ============================
 
-    private static int farms(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
-                             int cx, int cz, int tier, Kit kit, int pad, int ox, int oz,
-                             Random rng, List<BlockEdit> out) {
-        int want = tier >= 3 ? 8 : tier == 2 ? 6 : 4;
-        int made = 0;
-        Material fence = kit.fence() == Material.SANDSTONE_WALL ? Material.SANDSTONE_WALL
-                : kit.fence();
-        for (int k = 0; k < want * 3 && made < want; k++) {
-            double th = rng.nextDouble() * Math.PI * 2;
-            double rimHere = CivPlanner.rimAt(site, th);
-            int fr = (int) (rimHere + 4 + rng.nextInt(Math.max(1, CivPlanner.FIELD_BAND - 14)));
-            int fx = cx + (int) (Math.cos(th) * fr);
-            int fz = cz + (int) (Math.sin(th) * fr);
-            int fw = 8 + rng.nextInt(5), fl = 6 + rng.nextInt(4);
-            boolean ok = true;
-            for (int z = fz - 1; z <= fz + fl && ok; z++) {
-                for (int x = fx - 1; x <= fx + fw; x++) {
-                    int oi = occIdx(side, off, cx, cz, x, z);
-                    if (oi < 0 || occ[oi] != 0 || x < 0 || z < 0 || x >= g.w() || z >= g.h()
-                            || g.civ(x, z) != CivPlanner.C_PLOT || g.y(x, z) != pad) {
-                        ok = false;
-                        break;
+    /**
+     * 农田带整带铺作物：斑块（{@link CivPlanner#patchOf}）= 一档作物或休耕，
+     * 跟随梯田层级大片连绵；斑界高差处砌石埂（1 格落差的鱼鳞田埂，散点矮墙牙）、
+     * 同高斑界沿平滑噪声铺**断续但成段相连**的木栏（不再是零散栏点）；
+     * 作物斑内留走沟/水眼，斑心偶立草人、休耕斑散干草垛。返回成田斑块数。
+     */
+    private static int fields(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
+                              int cx, int cz, Kit kit, int pad, int ox, int oz, long seed,
+                              List<BlockEdit> out) {
+        java.util.Set<Long> patches = new java.util.HashSet<>();
+        int R2 = site.radius() + CivPlanner.FIELD_BAND;
+        Material fence = kit.fence();
+        for (int lz = cz - R2; lz <= cz + R2; lz++) {
+            for (int lx = cx - R2; lx <= cx + R2; lx++) {
+                if (lx < 1 || lz < 1 || lx >= g.w() - 1 || lz >= g.h() - 1) continue;
+                double dx = lx - cx, dz = lz - cz;
+                double d = Math.sqrt(dx * dx + dz * dz);
+                double rimHere = CivPlanner.rimAt(site, Math.atan2(dz, dx));
+                if (d <= rimHere + 1 || d > rimHere + CivPlanner.FIELD_BAND) continue;
+                if (g.civ(lx, lz) != CivPlanner.C_PLOT) continue;      // 野格/水：田绕开
+                int oi = occIdx(side, off, cx, cz, lx, lz);
+                if (oi < 0 || occ[oi] != 0) continue;                  // 街/门楼已占
+                int wx = ox + lx, wz = oz + lz;
+                int[] p = CivPlanner.patchOf(site, wx, wz);
+                long pid = ((long) p[0] << 32) ^ (p[1] & 0xFFFFFFFFL);
+                int gy = g.y(lx, lz);
+                // 斑界：四邻更低 → 本格是石埂沿；同高异斑 → 木栏候选
+                boolean edgeHigh = false, edgeSame = false;
+                int[][] n4 = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+                for (int[] nn : n4) {
+                    int nx = lx + nn[0], nz = lz + nn[1];
+                    if (g.civ(nx, nz) != CivPlanner.C_PLOT) {
+                        edgeSame = true;                               // 野格/带缘
+                        continue;
+                    }
+                    int ny = g.y(nx, nz);
+                    if (ny < gy) {
+                        edgeHigh = true;
+                    } else if (ny == gy) {
+                        int[] np = CivPlanner.patchOf(site, ox + nx, oz + nz);
+                        if (np[0] != p[0] || np[1] != p[1]) edgeSame = true;
                     }
                 }
-            }
-            if (!ok) continue;
-            Material[] crops = {Material.WHEAT, Material.CARROTS, Material.POTATOES,
-                    Material.BEETROOTS};
-            String[] cropState = {"minecraft:wheat[age=%d]", "minecraft:carrots[age=%d]",
-                    "minecraft:potatoes[age=%d]", "minecraft:beetroots[age=3]"};
-            int ci = rng.nextInt(crops.length);
-            for (int z = fz; z < fz + fl; z++) {
-                for (int x = fx; x < fx + fw; x++) {
-                    int oi = occIdx(side, off, cx, cz, x, z);
-                    if (oi >= 0) occ[oi] = 2;
-                    boolean rim = x == fx || x == fx + fw - 1 || z == fz || z == fz + fl - 1;
-                    int wx = ox + x, wz = oz + z;
-                    if (rim) {
-                        out.add(new BlockEdit(wx, pad + 1, wz, BlockSpec.of(fence)));
-                    } else if ((x - fx) % 3 == 2) {
-                        out.add(new BlockEdit(wx, pad, wz, BlockSpec.of(Material.WATER)));
-                    } else {
-                        out.add(new BlockEdit(wx, pad, wz,
-                                BlockSpec.raw(Material.FARMLAND, "minecraft:farmland[moisture=7]")));
-                        int age = ci == 3 ? 3 : 4 + rng.nextInt(4);
-                        out.add(new BlockEdit(wx, pad + 1, wz,
-                                BlockSpec.raw(crops[ci], cropState[ci].formatted(age))));
+                occ[oi] = 2;
+                long ph = hash(seed ^ 0xF1E1D5L, p[0], p[1]);
+                double cropR = ((ph >>> 8) & 0xFFFF) / 65536.0;
+                if (edgeHigh) {
+                    // 石埂：梯级高侧一线石质包边 + 断续矮墙牙（挡土墙感）
+                    double r = hash01(seed ^ 0x57E9L, wx, wz);
+                    Material m = r < 0.5 ? Material.COBBLESTONE
+                            : r < 0.78 ? Material.MOSSY_COBBLESTONE : Material.STONE;
+                    out.add(new BlockEdit(wx, gy, wz, BlockSpec.of(m)));
+                    if (r > 0.62) {
+                        out.add(new BlockEdit(wx, gy + 1, wz,
+                                BlockSpec.of(Material.COBBLESTONE_WALL)));
+                    }
+                    continue;
+                }
+                if (edgeSame) {
+                    // 同高斑界：平滑噪声阈值 → 木栏成段相连、段间留豁（可通行）
+                    double fn = PlanOps.patch(seed ^ 0xFE9CE5L, wx, wz, 9.0);
+                    if (fn > 0.62) {
+                        out.add(new BlockEdit(wx, gy + 1, wz, BlockSpec.of(fence)));
+                        continue;
                     }
                 }
+                if (cropR < 0.12) {
+                    // 休耕斑：留草皮，散干草垛
+                    if (hash01(seed ^ 0x4A75L, wx, wz) < 0.022) {
+                        out.add(new BlockEdit(wx, gy + 1, wz, BlockSpec.of(Material.HAY_BLOCK)));
+                    }
+                    patches.add(pid);
+                    continue;
+                }
+                // 斑心草人（~1/5 的作物斑）
+                double[] pc = CivPlanner.patchCenterWorld(site, p[0], p[1]);
+                if (Math.abs(wx - pc[0]) < 0.6 && Math.abs(wz - pc[1]) < 0.6
+                        && ((ph >>> 40) & 15) < 3) {
+                    out.add(new BlockEdit(wx, gy + 1, wz, BlockSpec.of(fence)));
+                    out.add(new BlockEdit(wx, gy + 2, wz, BlockSpec.raw(Material.CARVED_PUMPKIN,
+                            "minecraft:carved_pumpkin[facing="
+                                    + (((ph >>> 44) & 1) == 0 ? "south" : "east") + "]")));
+                    patches.add(pid);
+                    continue;
+                }
+                // 田垄走沟（每 9 行一条，方向/相位随斑）与水眼
+                int rowPhase = (int) ((ph >>> 24) & 7);
+                int rowCoord = (((ph >>> 31) & 1) == 0) ? wx : wz;
+                if (Math.floorMod(rowCoord + rowPhase, 9) == 0) {
+                    out.add(new BlockEdit(wx, gy, wz, BlockSpec.of(Material.DIRT_PATH)));
+                    continue;
+                }
+                if (hash01(seed ^ 0xAA7E5L, wx, wz) < 0.028) {
+                    out.add(new BlockEdit(wx, gy, wz, BlockSpec.of(Material.WATER)));
+                    continue;
+                }
+                Material crop;
+                String st;
+                if (cropR < 0.68) {
+                    crop = Material.WHEAT;
+                    st = "minecraft:wheat[age=%d]";
+                } else if (cropR < 0.82) {
+                    crop = Material.CARROTS;
+                    st = "minecraft:carrots[age=%d]";
+                } else if (cropR < 0.93) {
+                    crop = Material.POTATOES;
+                    st = "minecraft:potatoes[age=%d]";
+                } else {
+                    crop = Material.BEETROOTS;
+                    st = "minecraft:beetroots[age=%d]";
+                }
+                out.add(new BlockEdit(wx, gy, wz,
+                        BlockSpec.raw(Material.FARMLAND, "minecraft:farmland[moisture=7]")));
+                int age = crop == Material.BEETROOTS ? 3
+                        : 4 + (int) (hash01(seed ^ 0xA6E1L, wx, wz) * 4);
+                out.add(new BlockEdit(wx, gy + 1, wz, BlockSpec.raw(crop, st.formatted(age))));
+                patches.add(pid);
             }
-            made++;
         }
-        return made;
+        return patches.size();
     }
 
     // ============================ 路灯（城内主街） ============================
 
-    private static void lamps(byte[] occ, int side, int off, int cx, int cz, List<int[]> mains,
-                              Kit kit, int pad, int ox, int oz, Random rng, List<BlockEdit> out) {
+    private static void lamps(Ground g, byte[] occ, int side, int off, int cx, int cz,
+                              List<int[]> mains, Kit kit, int pad, int ox, int oz, Random rng,
+                              List<BlockEdit> out) {
         int since = 0;
         for (int[] pStreet : mains) {
             since++;
@@ -792,10 +1025,12 @@ public final class CityWorks {
             int lz = pStreet[1] + (lx == pStreet[0] ? sgn : 0);
             int oi = occIdx(side, off, cx, cz, lx, lz);
             if (oi < 0 || occ[oi] != 0) continue;
+            if (lx < 0 || lz < 0 || lx >= g.w() || lz >= g.h()) continue;
             occ[oi] = 2;
-            out.add(new BlockEdit(ox + lx, pad + 1, oz + lz, BlockSpec.of(kit.lampBase())));
-            out.add(new BlockEdit(ox + lx, pad + 2, oz + lz, BlockSpec.of(kit.lampBase())));
-            out.add(new BlockEdit(ox + lx, pad + 3, oz + lz, BlockSpec.of(Material.LANTERN)));
+            int gy = g.y(lx, lz);
+            out.add(new BlockEdit(ox + lx, gy + 1, oz + lz, BlockSpec.of(kit.lampBase())));
+            out.add(new BlockEdit(ox + lx, gy + 2, oz + lz, BlockSpec.of(kit.lampBase())));
+            out.add(new BlockEdit(ox + lx, gy + 3, oz + lz, BlockSpec.of(Material.LANTERN)));
         }
     }
 
@@ -894,6 +1129,9 @@ public final class CityWorks {
             long rs = seed ^ (0x60AD51DEL + ri * 0x9E3779B97F4A7C15L);
             CivPlanner.Site sa = nearestSite(sites, xs[0], zs[0]);
             CivPlanner.Site sb = nearestSite(sites, xs[m - 1], zs[m - 1]);
+            // 0.35.0：通港官道——端点落在港口的，指路牌写"海港"
+            CivPlanner.Harbor hbA = harborAt(civ.harbors(), xs[0], zs[0]);
+            CivPlanner.Harbor hbB = harborAt(civ.harbors(), xs[m - 1], zs[m - 1]);
             // 指路牌位置：出城（rim+农田带）后的第一/最后一段（全局确定，与 tile 无关）
             int kSignA = -1, kSignB = -1;
             for (int k = 2; k < m - 2; k++) {
@@ -929,10 +1167,20 @@ public final class CityWorks {
 
                 boolean lampTick = k % 34 == 17;
                 boolean stoneTick = k % 220 == 110;
-                boolean signTick = (k == kSignA && sb != null) || (k == kSignB && sa != null);
+                boolean signTick = (k == kSignA && (sb != null || hbB != null))
+                        || (k == kSignB && (sa != null || hbA != null));
                 boolean campTick = m >= 420 && (k == m / 2
                         || (m >= 900 && (k == m / 3 || k == 2 * m / 3)));
-                if (!lampTick && !stoneTick && !signTick && !campTick) continue;
+                // 国界碑（0.35.0 腹地命名）：官道跨过两国 Voronoi 边界处立碑。
+                // 22 格窗口互不重叠，一次跨界恰好触发一次。
+                boolean borderTick = false;
+                CivPlanner.Site na = null, nb = null;
+                if (k % 22 == 11 && k >= 11 && k + 11 < m) {
+                    na = nationOf(sites, xs[k - 11], zs[k - 11]);
+                    nb = nationOf(sites, xs[k + 11], zs[k + 11]);
+                    borderTick = na != null && nb != null && na != nb;
+                }
+                if (!lampTick && !stoneTick && !signTick && !campTick && !borderTick) continue;
                 if (r.bridge(k)) continue;
 
                 int k2 = Math.min(m - 1, k + 2), k1 = Math.max(0, k - 2);
@@ -955,19 +1203,48 @@ public final class CityWorks {
                 if (Math.abs(gy - ys[k]) > 1) continue;            // 挂崖不摆
                 short biome = g.biome(lx, lz);
 
-                if (signTick) {
-                    // 指路牌：栅栏柱 ×2 + 顶部立牌，牌面朝路，写目的地与里程
-                    CivPlanner.Site dest = k == kSignA ? sb : sa;
-                    int distM = k == kSignA ? (m - k) : k;
+                if (borderTick) {
+                    // 国界碑：錾制石柱 + 立牌写两国之名（面向来路）
+                    out.add(new BlockEdit(wx, gy + 1, wz,
+                            BlockSpec.of(Material.CHISELED_STONE_BRICKS)));
+                    out.add(new BlockEdit(wx, gy + 2, wz, BlockSpec.of(Material.STONE_BRICKS)));
+                    int rot = signRot(-pxu * sideSgn, -pzu * sideSgn);
+                    out.add(new BlockEdit(wx, gy + 3, wz, BlockSpec.sign(Material.OAK_SIGN,
+                            keyOf(Material.OAK_SIGN) + "[rotation=" + rot + "]",
+                            new String[]{"⚑ 国 界",
+                                    "⇠ " + nameOf(seed, na.wx(), na.wz()) + "国",
+                                    "⇢ " + nameOf(seed, nb.wx(), nb.wz()) + "国", null})));
+                } else if (signTick) {
+                    // 指路牌：栅栏柱 ×2 + 顶部立牌，牌面朝路，写目的地与里程；
+                    // 城镇加"属国"行；通港路写海港名
+                    boolean toB = k == kSignA;
+                    CivPlanner.Site dest = toB ? sb : sa;
+                    CivPlanner.Harbor destHb = toB ? hbB : hbA;
+                    int distM = toB ? (m - k) : k;
                     Material fenceM = woodFence(biome);
                     out.add(new BlockEdit(wx, gy + 1, wz, BlockSpec.of(fenceM)));
                     out.add(new BlockEdit(wx, gy + 2, wz, BlockSpec.of(fenceM)));
                     int rot = signRot(-pxu * sideSgn, -pzu * sideSgn);
-                    String tname = dest.tier() >= 3 ? "首都" : dest.tier() == 2 ? "大城" : "城镇";
+                    String line1;
+                    String line3 = null;
+                    if (destHb != null) {
+                        CivPlanner.Site owner = destHb.site() >= 0 && destHb.site() < sites.size()
+                                ? sites.get(destHb.site()) : dest;
+                        line1 = "→ 海港 " + nameOf(seed, owner.wx(), owner.wz()) + "港";
+                        line3 = "航线通远岸";
+                    } else {
+                        String tname = dest.tier() >= 3 ? "首都" : dest.tier() == 2 ? "大城" : "城镇";
+                        line1 = "→ " + tname + " " + nameOf(seed, dest.wx(), dest.wz());
+                        if (dest.tier() < 2) {
+                            CivPlanner.Site nation = nationOf(sites, dest.wx(), dest.wz());
+                            if (nation != null) {
+                                line3 = "属 " + nameOf(seed, nation.wx(), nation.wz()) + "国";
+                            }
+                        }
+                    }
                     out.add(new BlockEdit(wx, gy + 3, wz, BlockSpec.sign(woodSign(biome),
                             keyOf(woodSign(biome)) + "[rotation=" + rot + "]",
-                            new String[]{"→ " + tname + " " + nameOf(seed, dest.wx(), dest.wz()),
-                                    distM + " 步", null, null})));
+                            new String[]{line1, distM + " 步", line3, null})));
                 } else if (stoneTick) {
                     // 里程碑：石柱 + 半砖帽，偶带灯
                     out.add(new BlockEdit(wx, gy + 1, wz, BlockSpec.of(Material.STONE_BRICKS)));
@@ -1069,12 +1346,12 @@ public final class CityWorks {
         return s != null ? s : Material.OAK_STAIRS;
     }
 
-    private static String keyOf(Material m) {
+    static String keyOf(Material m) {
         return "minecraft:" + m.name().toLowerCase(java.util.Locale.ROOT);
     }
 
     /** 立牌 rotation（0..15）：使牌面朝向 (dx,dz)。 */
-    private static int signRot(double dx, double dz) {
+    static int signRot(double dx, double dz) {
         double deg = Math.toDegrees(Math.atan2(-dx, dz));
         return Math.floorMod((int) Math.round(deg / 22.5), 16);
     }
@@ -1091,6 +1368,31 @@ public final class CityWorks {
             }
         }
         return best;
+    }
+
+    /** 国 = 最近的 tier≥2 聚落（Voronoi 腹地）；无城之地 = null。 */
+    static CivPlanner.Site nationOf(List<CivPlanner.Site> sites, float x, float z) {
+        CivPlanner.Site best = null;
+        double bd = Double.MAX_VALUE;
+        for (CivPlanner.Site s : sites) {
+            if (s.tier() < 2) continue;
+            double dx = s.wx() - x, dz = s.wz() - z;
+            double d = dx * dx + dz * dz;
+            if (d < bd) {
+                bd = d;
+                best = s;
+            }
+        }
+        return best;
+    }
+
+    /** (x,z) 14 格内的港口（通港官道端点识别）。 */
+    static CivPlanner.Harbor harborAt(List<CivPlanner.Harbor> harbors, float x, float z) {
+        for (CivPlanner.Harbor hb : harbors) {
+            double dx = hb.wx() - x, dz = hb.wz() - z;
+            if (dx * dx + dz * dz < 14 * 14) return hb;
+        }
+        return null;
     }
 
     /** 是否落在任一聚落的 rim+农田带（+extra）影响圈内。 */

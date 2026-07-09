@@ -26,7 +26,8 @@ public final class CityProbeTool {
         };
         var civ = CivPlanner.plan(hf, RiverPlanner.RiverPlan.EMPTY,
                 sea, mapX1, mapZ1, sX, sZ, 20260709L, 0);
-        System.out.println("sites=" + civ.sites().size() + " roads=" + civ.roads().size());
+        System.out.println("sites=" + civ.sites().size() + " roads=" + civ.roads().size()
+                + " harbors=" + civ.harbors().size() + " lanes=" + civ.lanes().size());
         var cap = civ.sites().get(0);
         System.out.println("cap R=" + cap.radius() + " pad=" + cap.pad()
                 + " gates=" + cap.gateDirs().size());
@@ -36,6 +37,28 @@ public final class CityProbeTool {
             mx = Math.max(mx, v);
         }
         System.out.println("rim min=" + mn + " max=" + mx);
+        // 台地/梯田层级探针：城内 ±3、农田带跟地形、带内应有 1~2 格斑界落差
+        int inMin = 999, inMax = -999, bandWild = 0, bandN = 0;
+        java.util.Set<Integer> lvls = new java.util.TreeSet<>();
+        for (int t = 0; t < 400; t++) {
+            double th = t * 0.9714, rr = (t % 20) / 20.0;
+            double rim = CivPlanner.rimAt(cap, th);
+            int ix = cap.wx() + (int) (Math.cos(th) * rim * rr * 0.95);
+            int iz = cap.wz() + (int) (Math.sin(th) * rim * rr * 0.95);
+            int lv = CivPlanner.fieldLevelAt(cap, ix, iz);
+            if (lv != Integer.MIN_VALUE) {
+                inMin = Math.min(inMin, lv - cap.pad());
+                inMax = Math.max(inMax, lv - cap.pad());
+            }
+            int bx = cap.wx() + (int) (Math.cos(th) * (rim + 4 + rr * (CivPlanner.FIELD_BAND - 8)));
+            int bz = cap.wz() + (int) (Math.sin(th) * (rim + 4 + rr * (CivPlanner.FIELD_BAND - 8)));
+            int bl = CivPlanner.fieldLevelAt(cap, bx, bz);
+            bandN++;
+            if (bl == Integer.MIN_VALUE) bandWild++;
+            else lvls.add(bl);
+        }
+        System.out.println("terrace in=[" + inMin + "," + inMax + "] band lvls="
+                + lvls.size() + " wild=" + bandWild + "/" + bandN);
         int win = cap.radius() + CivPlanner.FIELD_BAND + 40;
         int EW = 2 * win + 1, EH = 2 * win + 1;
         int ox = cap.wx() - win, oz = cap.wz() - win;

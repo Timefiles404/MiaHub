@@ -216,13 +216,30 @@ public final class TerraDumpTool {
             }
         }
         dev.timefiles.miaeco.terrain.CivPlanner.rasterize(civ, ey, eWater, eRiver, eCiv, EW, EH, ox, oz);
-        int plot = 0, road = 0, flatBad = 0;
+        // 0.35.0 台地化：城内 ±3 缓台（广场核心平 pad）、农田带梯田 ±14；
+        // 越界即为层级失控。另要求农田带出现 ≥3 档层级（鱼鳞梯田确实分层）。
+        int plot = 0, road = 0, terrBad = 0, coreBad = 0;
+        java.util.Set<Integer> bandLvls = new java.util.TreeSet<>();
         for (int ez = 0; ez < EH; ez++) {
             for (int ex = 0; ex < EW; ex++) {
                 int i = ez * EW + ex;
                 if (eCiv[i] == dev.timefiles.miaeco.terrain.CivPlanner.C_PLOT) {
                     plot++;
-                    if (ey[i] != cap.pad()) flatBad++;
+                    double dx = ox + ex - cap.wx(), dz = oz + ez - cap.wz();
+                    double d = Math.sqrt(dx * dx + dz * dz);
+                    double rimHere = dev.timefiles.miaeco.terrain.CivPlanner.rimAt(cap,
+                            Math.atan2(dz, dx));
+                    int dy = ey[i] - cap.pad();
+                    // 斑块中心与格子可差 ~15 格：rim 两侧 16 格模糊带只按宽限判
+                    if (d <= rimHere - 16) {
+                        if (Math.abs(dy) > 3) terrBad++;
+                        if (d <= rimHere * 0.45 && dy != 0) coreBad++;
+                    } else if (d > rimHere + 16) {
+                        if (Math.abs(dy) > 14) terrBad++;
+                        bandLvls.add(ey[i]);
+                    } else if (Math.abs(dy) > 14) {
+                        terrBad++;
+                    }
                 } else if (eCiv[i] == dev.timefiles.miaeco.terrain.CivPlanner.C_ROAD) {
                     road++;
                 }
@@ -232,8 +249,12 @@ public final class TerraDumpTool {
             System.out.println("CIV RASTER PLOT FAIL: " + plot);
             fail = true;
         }
-        if (flatBad > 0) {
-            System.out.println("CIV FLATTEN FAIL: " + flatBad + " 格未到 pad");
+        if (terrBad > 0 || coreBad > 0) {
+            System.out.println("CIV TERRACE FAIL: 越界 " + terrBad + " 核心不平 " + coreBad);
+            fail = true;
+        }
+        if (bandLvls.size() < 3) {
+            System.out.println("CIV FIELD TERRACE FAIL: 农田带仅 " + bandLvls.size() + " 档层级");
             fail = true;
         }
         // 建城：医式（biome=1）与沙漠首都（biome=5，走王城+城墙）各建一次
@@ -325,10 +346,73 @@ public final class TerraDumpTool {
             System.out.println("ROADSIDE EMPTY FAIL（应有路灯/路牌/里程碑）");
             fail = true;
         }
+        // 官道蓄意微弯（0.35.0）：平原长路的中心线对端点直线应有 ≥3 格的最大垂距
+        double maxDev = 0;
+        for (var r : civ.roads()) {
+            int mm = r.len();
+            if (mm < 220) continue;
+            float ax = r.xs()[0], az = r.zs()[0];
+            float bx2 = r.xs()[mm - 1], bz2 = r.zs()[mm - 1];
+            double ll = Math.max(1e-3, Math.hypot(bx2 - ax, bz2 - az));
+            for (int k = 20; k < mm - 20; k++) {
+                double dev = Math.abs((r.xs()[k] - ax) * (bz2 - az)
+                        - (r.zs()[k] - az) * (bx2 - ax)) / ll;
+                maxDev = Math.max(maxDev, dev);
+            }
+        }
+        if (maxDev < 3) {
+            System.out.println("ROAD MEANDER FAIL: 长路最大偏离仅 " + maxDev + " 格（应有蓄意微弯）");
+            fail = true;
+        }
+        // ---- 跨海（0.35.0）：双大陆 + 320 宽海峡 → 港口对 + 航线 + 船 ----
+        dev.timefiles.miaeco.terrain.RiverPlanner.HeightField hf2 = (wx, wz) -> {
+            double dCoast = Math.abs(wz) - 160;
+            if (dCoast < 0) return (float) (sea - 9);                  // 海峡
+            double y = 74 + 6 * Math.sin(wx / 290.0) * Math.cos(wz / 240.0)
+                    + 3 * Math.sin(wx / 84.0) * Math.sin(wz / 101.0);
+            if (dCoast < 90) y = sea + 1 + (y - sea - 1) * (dCoast / 90.0);  // 缓坡海岸带
+            return (float) y;
+        };
+        var civ3 = dev.timefiles.miaeco.terrain.CivPlanner.plan(hf2,
+                dev.timefiles.miaeco.terrain.RiverPlanner.RiverPlan.EMPTY,
+                sea, mapX1, mapZ1, sX, sZ, 20260709L, 0);
+        int shipEdits = 0, submerged = 0;
+        if (civ3.harbors().size() < 2 || civ3.lanes().isEmpty()) {
+            System.out.println("HARBOR PLAN FAIL: harbors=" + civ3.harbors().size()
+                    + " lanes=" + civ3.lanes().size() + "（双大陆应建港口对）");
+            fail = true;
+        } else {
+            var gSea = new dev.timefiles.miaeco.terrain.CityWorks.Ground() {
+                @Override public int w() { return sX; }
+                @Override public int h() { return sZ; }
+                @Override public int y(int lx, int lz) { return Math.round(hf2.yAt(mapX1 + lx, mapZ1 + lz)); }
+                @Override public boolean water(int lx, int lz) { return hf2.yAt(mapX1 + lx, mapZ1 + lz) < sea; }
+                @Override public byte civ(int lx, int lz) { return dev.timefiles.miaeco.terrain.CivPlanner.C_NONE; }
+                @Override public short biome(int lx, int lz) { return 1; }
+                @Override public int wlvl(int lx, int lz) { return sea; }
+            };
+            List<BlockEdit> marine = new ArrayList<>();
+            dev.timefiles.miaeco.terrain.HarborWorks.build(gSea, civ3, mapX1, mapZ1,
+                    20260709L, marine);
+            shipEdits = marine.size();
+            for (BlockEdit e : marine) {
+                if (e.y() <= sea) submerged++;
+            }
+            if (shipEdits < 800) {
+                System.out.println("HARBOR BUILD THIN FAIL: " + shipEdits + "（码头+船应有块）");
+                fail = true;
+            }
+            if (submerged < 40) {
+                System.out.println("SHIP DRAFT FAIL: 水线下仅 " + submerged + " 块（船应吃水）");
+                fail = true;
+            }
+        }
         System.out.println("civ: 聚落 " + civ.sites().size() + "（首都 " + caps + "）官道 "
                 + civ.roads().size() + " 条, 首都窗口 plot=" + plot + " road=" + road
                 + " bridge=" + bridge + " 桥点 " + bridgePts + " 桥块 " + bridgeEdits
-                + " 沿路饰 " + decoEdits + " OK");
+                + " 沿路饰 " + decoEdits + " 微弯 " + String.format("%.1f", maxDev)
+                + " 港 " + civ3.harbors().size() + "/航线 " + civ3.lanes().size()
+                + " 海块 " + shipEdits + "（水下 " + submerged + "） OK");
         return fail;
     }
 
@@ -421,6 +505,31 @@ public final class TerraDumpTool {
             System.out.println("RIVER SPRING FAIL（泉眼源头仅 " + springs + "）");
             fail = true;
         }
+        // 入海口纵向平滑（0.35.0）：入海河的河口水位必须钳到海面，且末段
+        // 坡降包络生效（不许在海岸线上留 1~3 格跌坎）
+        int estuaries = 0, badMouth = 0, badRamp = 0;
+        for (var r : mains) {
+            var ns = r.nodes();
+            var tip = ns.get(ns.size() - 1);
+            if (mid.yAt(tip.x(), tip.z()) >= sea + 0.5f) continue;     // 非入海河
+            estuaries++;
+            if (tip.wl() > sea) badMouth++;
+            double back = 0;
+            for (int i = ns.size() - 2; i >= 0 && back < 80; i--) {
+                back += Math.hypot(ns.get(i + 1).x() - ns.get(i).x(),
+                        ns.get(i + 1).z() - ns.get(i).z());
+                if (ns.get(i).wl() - sea > back * 0.09 + 1.5) {
+                    badRamp++;
+                    break;
+                }
+            }
+        }
+        if (estuaries > 0 && (badMouth > 0 || badRamp > 0)) {
+            System.out.println("RIVER ESTUARY FAIL: 入海河 " + estuaries
+                    + " 条中 口高于海 " + badMouth + "、末段坡降超包络 " + badRamp);
+            fail = true;
+        }
+        System.out.println("river estuary: 入海河 " + estuaries + " 条全部贴海");
         // 流速物理（0.24.0）：陡段（flow 高）的深宽比必须显著高于平缓段——窄深 vs 宽浅
         double flatAsp = 0, steepAsp = 0, flatW = 0, steepW = 0;
         int flatN = 0, steepN = 0;

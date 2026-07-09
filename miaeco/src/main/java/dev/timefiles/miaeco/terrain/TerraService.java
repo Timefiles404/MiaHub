@@ -793,7 +793,10 @@ public final class TerraService implements Listener {
                         }
                         progress.chat("文明规划：官道 " + civ.roads().size() + " 条"
                                 + (cap > 0 ? "、首都 " + cap : "")
-                                + (city > 0 ? "、大城 " + city : "") + "、城镇 " + town + "。");
+                                + (city > 0 ? "、大城 " + city : "") + "、城镇 " + town
+                                + (civ.harbors().isEmpty() ? ""
+                                : "、港口 " + civ.harbors().size() + "（航线 "
+                                        + civ.lanes().size() + "）") + "。");
                     }
                 } catch (Exception e) {
                     plugin.getLogger().log(Level.WARNING, "civ plan", e);
@@ -1711,6 +1714,8 @@ public final class TerraService implements Listener {
             List<BlockEdit> bridgeEdits = new ArrayList<>();
             CityWorks.bridges(g, civ, x1, z1, entry.seed, bridgeEdits);
             CityWorks.roadside(g, civ, x1, z1, entry.seed, bridgeEdits);
+            // 港口 + 海上航线船只（0.35.0：跨海不修桥，两岸码头 + 航线古船）
+            HarborWorks.build(g, civ, x1, z1, entry.seed, bridgeEdits);
             if (!bridgeEdits.isEmpty()) applyEditsSync(w, bridgeEdits);
             // 聚落（中心在本片内才建；规划期已保证地块整体落在单片）
             for (CivPlanner.Site site : civ.sites()) {

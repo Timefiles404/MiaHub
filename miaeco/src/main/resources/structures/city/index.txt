@@ -257,3 +257,13 @@ greek/landmarks/33.schem	schem	landmark	49	62	41
 greek/landmarks/62.schem	schem	landmark	38	106	41
 greek/landmarks/70.schem	schem	landmark	38	64	38
 greek/landmarks/71.schem	schem	landmark	38	65	38
+ships/s2.schem	schem	ship	45	52	74
+ships/s3.schem	schem	ship	52	47	75
+ships/s4.schem	schem	ship	40	56	92
+ships/s5.schem	schem	ship	20	35	56
+ships/s9.schem	schem	ship	37	53	77
+ships/s10.schem	schem	ship	16	25	32
+ships/s12.schem	schem	ship	15	27	30
+ships/s13.schem	schem	ship	28	42	61
+ships/s14.schem	schem	ship	18	49	62
+ships/s15.schem	schem	ship	19	49	64

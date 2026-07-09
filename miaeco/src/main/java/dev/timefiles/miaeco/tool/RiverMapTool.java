@@ -120,6 +120,14 @@ public final class RiverMapTool {
             System.out.printf("文明：聚落 %d [%s] 官道 %d 条，桥格 %d%n",
                     civ.sites().size(), sb.toString().trim(), civ.roads().size(),
                     countCiv(eCiv, dev.timefiles.miaeco.terrain.CivPlanner.C_BRIDGE));
+            for (var hb : civ.harbors()) {
+                System.out.printf("  港口 (%d,%d) 朝海(%.2f,%.2f) 属聚落#%d%n",
+                        hb.wx(), hb.wz(), hb.dx(), hb.dz(), hb.site());
+            }
+            for (var ln : civ.lanes()) {
+                System.out.printf("  航线 (%d,%d)->(%d,%d) 长 %.0f%n", ln.ax(), ln.az(),
+                        ln.bx(), ln.bz(), Math.hypot(ln.bx() - ln.ax(), ln.bz() - ln.az()));
+            }
         } else {
             System.out.println("文明：无（图太小或无适宜地）");
         }
@@ -180,6 +188,27 @@ public final class RiverMapTool {
                     rgb = 0x8A5A30;                              // 桥：跨水深棕
                 }
                 img.setRGB(x, z, rgb);
+            }
+        }
+        // 航线（虚线浅青）与港口（橙块）叠加
+        for (var ln : civ.lanes()) {
+            double dxL = ln.bx() - ln.ax(), dzL = ln.bz() - ln.az();
+            double lenL = Math.hypot(dxL, dzL);
+            for (double s = 0; s < lenL; s += 1) {
+                if (((int) (s / 6)) % 2 == 1) continue;            // 虚线
+                int px = (int) Math.round(ln.ax() + dxL / lenL * s) - x1;
+                int pz = (int) Math.round(ln.az() + dzL / lenL * s) - z1;
+                if (px >= 0 && pz >= 0 && px < size && pz < size) img.setRGB(px, pz, 0x9AE7EA);
+            }
+        }
+        for (var hb : civ.harbors()) {
+            for (int dz2 = -3; dz2 <= 3; dz2++) {
+                for (int dx2 = -3; dx2 <= 3; dx2++) {
+                    int px = hb.wx() + dx2 - x1, pz = hb.wz() + dz2 - z1;
+                    if (px >= 0 && pz >= 0 && px < size && pz < size) {
+                        img.setRGB(px, pz, 0xFF8C1A);
+                    }
+                }
             }
         }
         // 图边细框：open 模式地形直通图边（断崖切开）

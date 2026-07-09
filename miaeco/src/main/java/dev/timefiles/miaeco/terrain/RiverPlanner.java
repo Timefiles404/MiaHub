@@ -350,7 +350,7 @@ public final class RiverPlanner {
                 }
             }
             River r = buildRiver(path, G, cell, x1, z1, fill, accum, endLake, seed,
-                    rivers.size(), !ended || toSea, mid, parentWl, sea);
+                    rivers.size(), !ended || toSea, mid, parentWl, sea, toSea);
             if (r == null) {
                 unclaim(claimed, path, rivers.size());
                 continue;
@@ -390,7 +390,8 @@ public final class RiverPlanner {
     /** 单元路径 → 平滑蜿蜒的节点折线（宽深=汇水量，水位=填面单调→贴地精修，泉/潭/洲打标）。 */
     private static River buildRiver(List<Integer> path, int G, int cell, int x1, int z1,
                                     double[] fill, float[] accum, int endLake, long seed, int idx,
-                                    boolean extendEnd, HeightField mid, float parentWl, int sea) {
+                                    boolean extendEnd, HeightField mid, float parentWl, int sea,
+                                    boolean toSea) {
         int n = path.size();
         float[] xs = new float[n], zs = new float[n], hws = new float[n], wls = new float[n];
         for (int i = 0; i < n; i++) {
@@ -450,6 +451,19 @@ public final class RiverPlanner {
             lateralSnap(xs, zs, hws, mid);
             g = channelFloor(xs, zs, hws, mid);
             w = gradeProfile(g, hws, sea, endLake, parentWl);
+        }
+        // ---- 入海口纵向平滑（0.35.0）：入海河的河口水位钳到海面，且自河口向
+        // 上游施加坡降包络（~1 格/14 格）——水面渐次降到海，不再在海岸线上
+        // 留一道 1~3 格的跌坎/瀑口；三角洲汊流（wl=sea）也随之无缝衔接。
+        if (toSea) {
+            float allow = sea;
+            for (int i = w.length - 1; i >= 0; i--) {
+                if (w[i] > allow) w[i] = allow;
+                if (i > 0) {
+                    allow += (float) (Math.hypot(xs[i] - xs[i - 1], zs[i] - zs[i - 1]) * 0.07);
+                    if (allow > w[i] + 40) break;                 // 包络失效带，早退
+                }
+            }
         }
         // 水位取整 + 单调 + 流速物理（0.24.0）：局部坡度 → 流速 s01；
         // 陡段收窄加深（山涧深切下蚀），缓段展宽变浅（平原大河又宽又浅、堆积为主）
