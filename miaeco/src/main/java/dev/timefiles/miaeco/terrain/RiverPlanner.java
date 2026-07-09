@@ -566,6 +566,12 @@ public final class RiverPlanner {
             float ob = hws[i] + 2.5f;
             float bank = Math.min(mid.yAt(xs[i] + px * ob, zs[i] + pz * ob),
                     mid.yAt(xs[i] - px * ob, zs[i] - pz * ob));
+            // 0.32 远环探针：山肩/山鼻上的河，近环还在鼻梁上、几格外地形持续
+            // 下坠——水位再跟远环走低一步，河切进坡里而不是被窄堤抬成"伪山脊"
+            float of = hws[i] + 7f;
+            float bankFar = Math.min(mid.yAt(xs[i] + px * of, zs[i] + pz * of),
+                    mid.yAt(xs[i] - px * of, zs[i] - pz * of));
+            if (chan - bankFar > 5) bank = Math.min(bank, bankFar + 2);
             g[i] = chan - bank > 2 ? bank + 1 : chan;
         }
         return g;
@@ -877,7 +883,11 @@ public final class RiverPlanner {
                             continue;
                         }
                         int wlHere = Math.min(a.wl(), Math.round(a.wl() + (b.wl() - a.wl()) * t));
-                        if (d <= hw + FEATHER_MAX && wlHere > bankWl[idx]) bankWl[idx] = wlHere;
+                        // 0.32：岸带水位只认贴近河道的段（hw+3）。此前用 hw+FEATHER_MAX(14)，
+                        // 陡降河的上游高水位会横向"污染"下游河段两岸——被垫成一圈圈
+                        // 上游水位的同心平台（阶梯层纹石壁，水埋在缝里）。汇流处的
+                        // 越位兜水交给 containSweep。
+                        if (d <= hw + BANK_W && wlHere > bankWl[idx]) bankWl[idx] = wlHere;
                         float q = d / Math.max(0.8f, hw);
                         if (q < bestQ[idx]) {
                             bestQ[idx] = q;
@@ -970,7 +980,7 @@ public final class RiverPlanner {
                     float lift = wlB - orig;
                     float fw = lift <= 4
                             ? Math.max(4, Math.min(FEATHER_MAX, lift * 2.5f))
-                            : Math.max(3.5f, 11 - lift);
+                            : Math.max(2.5f, 9 - lift);   // 0.32 大抬升再收紧（伪山脊残余）
                     if (d <= hw + fw) {
                         double t = (d - hw) / fw;
                         double s = t * t * (3 - 2 * t);

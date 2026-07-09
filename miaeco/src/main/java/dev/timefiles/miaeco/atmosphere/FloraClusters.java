@@ -57,14 +57,15 @@ final class FloraClusters {
     static boolean[] plant(GroundSnapshot g, AtmosphereTheme th, double base, long ps,
                            List<int[]> treeBases, List<int[]> rockCells,
                            Map<Long, BlockEdit> edits, boolean[] claimed, boolean[] pool,
-                           int[] wetDist) {
+                           int[] wetDist, long zoneSeed, int sea) {
         int w = g.width(), d = g.depth();
         boolean[] florified = new boolean[w * d];
         if (base <= 0.005 || th.plants().isEmpty()) return florified;
         Random rng = new Random(ps);
         treeFootColonies(g, th, base, ps, rng, treeBases, edits, claimed, pool, wetDist, florified);
         rockRings(g, th, base, ps, rng, rockCells, treeBases, edits, claimed, pool, florified);
-        fieldColonies(g, th, base, ps, rng, treeBases, edits, claimed, pool, wetDist, florified);
+        fieldColonies(g, th, base, ps, rng, treeBases, edits, claimed, pool, wetDist, florified,
+                zoneSeed, sea);
         return florified;
     }
 
@@ -192,7 +193,8 @@ final class FloraClusters {
     private static void fieldColonies(GroundSnapshot g, AtmosphereTheme th, double base,
                                       long ps, Random rng, List<int[]> treeBases,
                                       Map<Long, BlockEdit> edits, boolean[] claimed,
-                                      boolean[] pool, int[] wetDist, boolean[] florified) {
+                                      boolean[] pool, int[] wetDist, boolean[] florified,
+                                      long zoneSeed, int sea) {
         long s = ps ^ 0xF1E1DL;
         int w = g.width(), d = g.depth();
         int stride = 9;
@@ -209,26 +211,29 @@ final class FloraClusters {
                 int wx = g.region().minX() + lx, wz = g.region().minZ() + lz;
                 double wet = AtmosphereGenerator.wetOf(wetDist, i);
                 boolean canopy = g.canopy(lx, lz);
-                // 生境分派：水畔 > 林荫 > 开阔地（树脚/岩边已单独处理）
+                // 生境分派：水畔 > 林荫 > 开阔地（树脚/岩边已单独处理）。
+                // 花境分区（0.32）只管开阔地花田——湿生/阴生花直通（fMode=-1）
                 double gate;
                 Set<String> kinds;
-                boolean flowers;
+                int fMode = -1;
                 if (wet > 0.45) {
                     gate = 0.52;
-                    kinds = WET_KINDS;
-                    flowers = true;    // 湿生花（兰花等）由 wetMin 门控自选
+                    kinds = WET_KINDS;     // 湿生花（兰花等）由 wetMin 门控自选
                 } else if (canopy) {
                     gate = 0.44;
-                    kinds = SHADE_KINDS;
-                    flowers = true;    // 阴生花（铃兰等）由 shade 门控自选
+                    kinds = SHADE_KINDS;   // 阴生花（铃兰等）由 shade 门控自选
                 } else {
                     gate = 0.55;
                     kinds = OPEN_KINDS;
-                    flowers = true;
+                    fMode = AtmosphereGenerator.flowerMode(zoneSeed, wx, wz,
+                            g.groundY(lx, lz), sea);
+                    if (fMode == 1 && !AtmosphereGenerator.canopyNear(g, lx, lz)) fMode = 0;
                 }
                 if (AtmosphereGenerator.hash01(s ^ 0x3L, wx, wz)
                         > gate * Math.min(1.7, 0.62 + base * 1.4)) continue;
-                AtmosphereTheme.PlantEntry e = pickFrom(th, rng, kinds, flowers, wet, canopy);
+                double fPick = AtmosphereGenerator.flowerPick(zoneSeed, wx, wz);
+                AtmosphereTheme.PlantEntry e = pickFrom(th, rng, kinds, true, wet, canopy,
+                        fMode, fPick);
                 if (e == null) continue;
                 // 林荫 12%：菌圈（fairy ring）
                 if (canopy && wet <= 0.45 && isMushroom(e)
@@ -237,6 +242,11 @@ final class FloraClusters {
                     continue;
                 }
                 int size = patchSize(e, rng);
+                // 花海群落更大成片；相邻锚点同子区=同种，天然连成大花毯
+                if (fMode == 2 && (e.kind().startsWith("flower:")
+                        || e.kind().startsWith("dflower:"))) {
+                    size = 11 + rng.nextInt(10);
+                }
                 double thin = patchThin(e);
                 growPatch(g, th, e, lx, lz, size, thin, s ^ 0x5L, treeBases, rng,
                         edits, claimed, pool, florified);
@@ -355,26 +365,35 @@ final class FloraClusters {
     private static AtmosphereTheme.PlantEntry pickFrom(AtmosphereTheme th, Random rng,
                                                        Set<String> kinds, boolean flowers,
                                                        double wet, boolean canopy) {
+        return pickFrom(th, rng, kinds, flowers, wet, canopy, -1, 0);
+    }
+
+    private static AtmosphereTheme.PlantEntry pickFrom(AtmosphereTheme th, Random rng,
+                                                       Set<String> kinds, boolean flowers,
+                                                       double wet, boolean canopy,
+                                                       int fMode, double fPick) {
         double total = 0;
         for (AtmosphereTheme.PlantEntry e : th.plants()) {
-            total += clusterWeight(e, kinds, flowers, wet, canopy);
+            total += clusterWeight(th, e, kinds, flowers, wet, canopy, fMode, fPick);
         }
         if (total <= 0) return null;
         double r = rng.nextDouble() * total;
         for (AtmosphereTheme.PlantEntry e : th.plants()) {
-            r -= clusterWeight(e, kinds, flowers, wet, canopy);
+            r -= clusterWeight(th, e, kinds, flowers, wet, canopy, fMode, fPick);
             if (r <= 0) return e;
         }
         return null;
     }
 
-    private static double clusterWeight(AtmosphereTheme.PlantEntry e, Set<String> kinds,
-                                        boolean flowers, double wet, boolean canopy) {
+    private static double clusterWeight(AtmosphereTheme th, AtmosphereTheme.PlantEntry e,
+                                        Set<String> kinds, boolean flowers, double wet,
+                                        boolean canopy, int fMode, double fPick) {
         String k = e.kind();
         boolean ok = kinds.contains(k)
                 || (flowers && (k.startsWith("flower:") || k.startsWith("dflower:")));
         if (!ok) return 0;
-        double base = AtmosphereGenerator.weightOf(e, wet, canopy);
+        double base = AtmosphereGenerator.weightOf(e, wet, canopy)
+                * AtmosphereGenerator.flowerFactor(th, e, fMode, fPick);
         // 群落抽选加权：花田是聚落化的招牌；菌窝是林荫的招牌（原始权重太小抽不中）
         if (k.startsWith("flower:") || k.startsWith("dflower:")) base *= 2.6;
         else if (isMushroomKind(k)) base *= 3.0;

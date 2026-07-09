@@ -2310,9 +2310,10 @@ public final class AtmosphereGenerator {
         double base = th.groundcover() * st.densityOf("groundcover");
         if (base <= 0.005 || th.plants().isEmpty()) return;
         long s = seed ^ S_PLANT;
+        int sea = st.seaLevel();
         // ① 聚落：微生境锚点（树脚/岩边/水畔/林荫/开阔地）长同种连通群落
         boolean[] florified = FloraClusters.plant(g, th, base, s ^ 0xC1057E5L,
-                treeBases, rockCells, edits, claimed, pool, wetDist);
+                treeBases, rockCells, edits, claimed, pool, wetDist, s, sea);
         // ② 背景散点：原逐格随机压到低配（聚与散共存），跳过群落格（含自疏孔隙）
         Random rng = new Random(s);
         for (int lz = 0; lz < g.depth(); lz++) {
@@ -2326,10 +2327,16 @@ public final class AtmosphereGenerator {
                 int wz = g.region().minZ() + lz;
                 double cluster = Math.pow(noise(s, wx, wz, 6.0), 1.6);
                 double p = Math.min(0.85, base * 0.55 * (0.35 + 1.5 * cluster));
+                // 花境分区（0.32）：无花区照常长草蕨；林缘区花打折且须毗邻树冠；
+                // 花海区密度上调、单种成片
+                int fMode = flowerMode(s, wx, wz, g.groundY(lx, lz), sea);
+                if (fMode == 1 && !canopyNear(g, lx, lz)) fMode = 0;
+                if (fMode == 2) p = Math.min(0.9, p * 1.7);
                 if (rng.nextDouble() > p) continue;
                 double wet = wetOf(wetDist, i);
                 boolean canopy = g.canopy(lx, lz);
-                AtmosphereTheme.PlantEntry e = pickPlant(th, rng, wet, canopy);
+                AtmosphereTheme.PlantEntry e = pickPlant(th, rng, wet, canopy,
+                        fMode, flowerPick(s, wx, wz));
                 if (e == null) continue;
                 emitPlant(g, e, lx, lz, wx, wz, rng, edits, claimed, pool);
             }
@@ -2337,18 +2344,69 @@ public final class AtmosphereGenerator {
     }
 
     private static AtmosphereTheme.PlantEntry pickPlant(AtmosphereTheme th, Random rng,
-                                                        double wet, boolean canopy) {
+                                                        double wet, boolean canopy,
+                                                        int fMode, double fPick) {
         double total = 0;
         for (AtmosphereTheme.PlantEntry e : th.plants()) {
-            total += weightOf(e, wet, canopy);
+            total += weightOf(e, wet, canopy) * flowerFactor(th, e, fMode, fPick);
         }
         if (total <= 0) return null;
         double r = rng.nextDouble() * total;
         for (AtmosphereTheme.PlantEntry e : th.plants()) {
-            r -= weightOf(e, wet, canopy);
+            r -= weightOf(e, wet, canopy) * flowerFactor(th, e, fMode, fPick);
             if (r <= 0) return e;
         }
         return null;
+    }
+
+    /**
+     * 花境分区（0.32）：~150 格低频噪声把草地切成三档花氛围。
+     * 0=无花（大多数草原）、1=林缘少量（还需毗邻树冠，权重打折）、2=花海
+     * （罕见，但一来就是一大片）。高海拔（海平面 +105 以上）恒无花。
+     */
+    static int flowerMode(long seed, int wx, int wz, int gy, int sea) {
+        if (gy > sea + 105) return 0;
+        double fz = noise(seed ^ 0xF10E5L, wx, wz, 150.0);
+        if (fz > 0.93) return 2;
+        if (fz > 0.60) return 1;
+        return 0;
+    }
+
+    /** 花海内的物种子区：26 格一片，同片同种（"每一种占据一片规律铺开"）。 */
+    static double flowerPick(long seed, int wx, int wz) {
+        return noise(seed ^ 0xF10E6L, wx, wz, 26.0);
+    }
+
+    /**
+     * 花境权重因子：非花恒 1；mode&lt;0 直通（湿生/阴生等生境花不受草地分区管）；
+     * 0=归零；1=×0.3；2=只放行子区选中的那一种（×4，成大片单种花毯）。
+     */
+    static double flowerFactor(AtmosphereTheme th, AtmosphereTheme.PlantEntry e,
+                               int mode, double pick) {
+        String k = e.kind();
+        if (!k.startsWith("flower:") && !k.startsWith("dflower:")) return 1;
+        if (mode < 0) return 1;
+        if (mode == 0) return 0;
+        if (mode == 1) return 0.3;
+        int n = 0, self = -1;
+        for (AtmosphereTheme.PlantEntry pe : th.plants()) {
+            String pk = pe.kind();
+            if (pk.startsWith("flower:") || pk.startsWith("dflower:")) {
+                if (pe == e) self = n;
+                n++;
+            }
+        }
+        if (n == 0) return 0;
+        int hit = Math.min(n - 1, (int) (pick * n));
+        return self == hit ? 4.0 : 0;
+    }
+
+    /** 本格或 ±4 十字探针内有树冠（林缘判定）。 */
+    static boolean canopyNear(GroundSnapshot g, int lx, int lz) {
+        if (g.canopy(lx, lz)) return true;
+        int w = g.width(), d = g.depth();
+        return g.canopy(Math.min(w - 1, lx + 4), lz) || g.canopy(Math.max(0, lx - 4), lz)
+                || g.canopy(lx, Math.min(d - 1, lz + 4)) || g.canopy(lx, Math.max(0, lz - 4));
     }
 
     static double weightOf(AtmosphereTheme.PlantEntry e, double wet, boolean canopy) {

@@ -1483,8 +1483,8 @@ public final class TerraService implements Listener {
                 if (gully) {
                     return new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
                 }
-                if (apron) {
-                    // 崖脚塌积裙：圆石/砾石堆积（0.31）
+                if (apron && !nearRiver(p, i)) {
+                    // 崖脚塌积裙：圆石/砾石堆积（0.31；0.32 河边不出——别成石岸线）
                     return PlanOps.patch(entry.seed ^ 0x7A17L, wx, wz, 12.0) < 0.5
                             ? new Material[]{Material.COBBLESTONE, Material.GRAVEL, Material.STONE}
                             : new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
@@ -1503,8 +1503,17 @@ public final class TerraService implements Listener {
                 return new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.STONE};
             }
             // 山麓带（sea+96 ~ 塌积线）：陡壁岩相、凹沟砾石道；持续陡草坡用大斑
-            // 混入石/砾/粗土（侧面成片可读，不再是漫山碎土点）；缓坡交回群系皮
+            // 混入石/砾/粗土（侧面成片可读，不再是漫山碎土点）；缓坡交回群系皮。
+            // 0.32：贴水（河谷两坡）一律土草系——山地河不再被石边线包围
             if (slope >= 5) {
+                if (nearRiver(p, i)) {
+                    double zone = PlanOps.patch(entry.seed ^ 0xB4A1L, wx, wz, 16.0);
+                    return zone < 0.16
+                            ? new Material[]{Material.STONE, Material.STONE, Material.STONE}
+                            : zone < 0.60
+                            ? new Material[]{Material.COARSE_DIRT, Material.DIRT, Material.STONE}
+                            : new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.STONE};
+                }
                 double zone = PlanOps.patch(entry.seed ^ 0x5A0CL, wx, wz, 30.0);
                 Material top = zone < 0.42 ? Material.STONE
                         : zone < 0.70 ? Material.ANDESITE : Material.TUFF;
@@ -1513,7 +1522,7 @@ public final class TerraService implements Listener {
             if (gully && slope >= 3) {
                 return new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
             }
-            if (apron && upDiff >= 7) {
+            if (apron && upDiff >= 7 && !nearRiver(p, i)) {
                 // 山麓崖脚塌积裙（要求更高的壁差，避免丘陵地随处出碎石）
                 return PlanOps.patch(entry.seed ^ 0x7A17L, wx, wz, 12.0) < 0.5
                         ? new Material[]{Material.COBBLESTONE, Material.GRAVEL, Material.STONE}
@@ -1521,6 +1530,11 @@ public final class TerraService implements Listener {
             }
             if (slope >= 3) {
                 double zone = PlanOps.patch(entry.seed ^ 0x6EAD1L, wx, wz, 24.0);
+                if (nearRiver(p, i)) {
+                    return zone < 0.40
+                            ? new Material[]{Material.COARSE_DIRT, Material.DIRT, Material.STONE}
+                            : new Material[]{Material.GRASS_BLOCK, Material.DIRT, Material.STONE};
+                }
                 if (zone < 0.20) return new Material[]{Material.STONE, Material.STONE, Material.STONE};
                 if (zone < 0.34) return new Material[]{Material.GRAVEL, Material.GRAVEL, Material.STONE};
                 if (zone < 0.52) return new Material[]{Material.COARSE_DIRT, Material.DIRT, Material.STONE};

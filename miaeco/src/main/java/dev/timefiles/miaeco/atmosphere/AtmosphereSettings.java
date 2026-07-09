@@ -17,6 +17,8 @@ public final class AtmosphereSettings {
     private String theme = "";
     private final Map<String, Double> density = new LinkedHashMap<>();
     private boolean applied;
+    /** 世界海平面（0.32 花境海拔门控用；运行时由 AtmosphereService 注入，不持久化）。 */
+    private transient int seaLevel = 63;
 
     public String theme() { return theme; }
     public void theme(String t) { this.theme = t == null ? "" : t; }
@@ -35,4 +37,7 @@ public final class AtmosphereSettings {
 
     public boolean applied() { return applied; }
     public void applied(boolean v) { this.applied = v; }
+
+    public int seaLevel() { return seaLevel; }
+    public void seaLevel(int v) { this.seaLevel = v; }
 }

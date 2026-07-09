@@ -42,11 +42,17 @@ public final class AtmosphereService {
     private final Plugin plugin;
     private final Executor executor;
     private final AsyncWorldEditor editor;
+    /** 世界名→海平面（EcoManager 注入 EcoWorlds 查询；花境海拔门控用）。 */
+    private java.util.function.ToIntFunction<World> seaLookup = w -> 63;
 
     public AtmosphereService(Plugin plugin, Executor executor, AsyncWorldEditor editor) {
         this.plugin = plugin;
         this.executor = executor;
         this.editor = editor;
+    }
+
+    public void seaLookup(java.util.function.ToIntFunction<World> f) {
+        this.seaLookup = f;
     }
 
     /** 生成/重铺氛围。msg 收进度与结果反馈（主线程回调）。 */
@@ -73,6 +79,7 @@ public final class AtmosphereService {
 
     private void doApply(Forest f, World w, AtmosphereTheme th, AtmosphereSettings st,
                          Consumer<String> msg, Runnable onDone) {
+        st.seaLevel(seaLookup.applyAsInt(w));
         GroundSnapshot snap = GroundSnapshot.capture(w, f.region(), f::inMask);
         List<int[]> bases = new ArrayList<>();
         for (TreeInstance t : f.trees()) {

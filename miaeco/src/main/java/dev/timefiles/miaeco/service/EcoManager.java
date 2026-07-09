@@ -89,6 +89,11 @@ public final class EcoManager {
         // ---- 大地形：多世界管理 + 扩散地形服务 ----
         this.ecoWorlds = new dev.timefiles.miaeco.world.EcoWorlds(plugin);
         ecoWorlds.loadAll();
+        // 花境海拔门控要知道所在世界的海平面（地图世界 sea 可为 0）
+        atmosphereService.seaLookup(w -> {
+            var e = ecoWorlds.entry(w.getName());
+            return e != null && e.map != null ? e.map.seaLevel() : 63;
+        });
         String tb = "terrain.";
         dev.timefiles.miaeco.terrain.TerrainConfig.init(
                 new java.io.File(plugin.getDataFolder(), "models").toPath(),
