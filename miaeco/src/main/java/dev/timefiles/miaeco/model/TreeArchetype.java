@@ -22,7 +22,7 @@ public final class TreeArchetype {
     public static final List<String> KNOWN = List.of(
             "oak", "spruce", "birch", "jungle", "acacia", "dark_oak", "mangrove",
             "willow", "palm", "banyan", "maple", "ginkgo", "cherry", "cypress",
-            "bush", "snowy_spruce");
+            "bush", "snowy_spruce", "baobab", "eucalyptus");
 
     public static void applyTo(TreeSpecies sp) {
         String id = sp.id().toLowerCase(Locale.ROOT);
@@ -198,6 +198,32 @@ public final class TreeArchetype {
                   .curtainChance(0.15).curtainMax(3)
                   .boulderChance(0.25).meadowChance(0.50)
                   .rootSpread(2).vines(false);
+            }
+            case "baobab" -> {
+                // 猴面包树：粗干宽冠的草原地标（模板树模式走 baobab 预制族；
+                // 算法生长退化为矮壮金合欢形）
+                materials(sp, Material.ACACIA_LOG, Material.ACACIA_LEAVES);
+                sp.form(TreeForm.ACACIA).canopyShape(CanopyShape.SPREADING)
+                  .maxHeight(16).canopyRadius(8).branchiness(0.5)
+                  .spacing(18).density(0.3)
+                  .trunkDrift(0.25)
+                  .boulderChance(0.20).meadowChance(0.30)
+                  .bareTrunkFraction(0.6).rootSpread(3).vines(false)
+                  .maxSlopeDegrees(18);
+            }
+            case "eucalyptus" -> {
+                // 桉树：高瘦疏冠（模板树模式走 eucalyptus 预制族；
+                // 算法生长退化为高白干阔叶）
+                sp.logMaterial(Material.BIRCH_LOG)
+                  .woodMaterial(Material.BIRCH_WOOD)
+                  .leafMaterial(Material.JUNGLE_LEAVES)
+                  .leafMaterial2(Material.OAK_LEAVES).leafMix2(0.2);
+                sp.form(TreeForm.BROADLEAF).canopyShape(CanopyShape.COLUMNAR)
+                  .maxHeight(26).canopyRadius(5).branchiness(0.4)
+                  .spacing(7)
+                  .trunkDrift(0.35).leaderChance(0.5)
+                  .boulderChance(0.15).meadowChance(0.35)
+                  .bareTrunkFraction(0.65).rootSpread(2).vines(false);
             }
             case "cypress" -> {
                 materials(sp, Material.OAK_LOG, Material.SPRUCE_LEAVES);

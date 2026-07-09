@@ -51,7 +51,7 @@ public final class TerraService implements Listener {
                            boolean autoEco, int ecoMinCells, int ecoCap, long maxEcoFootprint,
                            boolean caves, boolean cliffErosion, boolean geoFeatures,
                            int splitCells, int mapMaxSize, double riverDensity,
-                           boolean templateTrees) { }
+                           boolean templateTrees, boolean civilization) { }
 
     public Settings settings() { return st; }
 
@@ -240,6 +240,7 @@ public final class TerraService implements Listener {
         final boolean templateTrees;   // 只种树库模板树（跳过算法生长模拟）
         volatile String stageName = "准备";
         volatile RiverPlanner.RiverPlan rivers = RiverPlanner.RiverPlan.EMPTY;  // 全图水系（规划一次）
+        volatile CivPlanner.CivPlan civ = CivPlanner.CivPlan.EMPTY;             // 全图文明（聚落+官道）
         final int[] riverFit = new int[3];   // 贴地质量累计（深切>8 / 壅水>4 / 河道列；含裙边重复，仅诊断）
 
         Job(CommandSender sender, String world, EcoWorlds.Entry entry, Region sel, boolean withEco) {
@@ -411,8 +412,7 @@ public final class TerraService implements Listener {
         private void runMapTiled() throws Exception {
             final int APRON = 16;                    // 规划裙边：坡度/滩涂/海岸带跨片连续
             int sX = entry.map.size(), sZ = entry.map.sizeZ();
-            int p = mpb <= 15 ? 0 : Math.max(1, mpb / 30);
-            int tile = p == 0 || p == 1 ? 960 : p == 2 ? 768 : 480;   // 单片原生跨度 ≤~2000
+            int tile = tileSpan();                   // 单片原生跨度 ≤~2000
             int mapX1 = -sX / 2, mapZ1 = -sZ / 2;
             int nTx = Math.max(1, (int) Math.ceil(sX / (double) tile));
             int nTz = Math.max(1, (int) Math.ceil(sZ / (double) tile));
@@ -484,6 +484,7 @@ public final class TerraService implements Listener {
                         checkCancel();
                     }
                     if (withEco) runEco(plan, cx1, cz1, W, H);
+                    if (!civ.isEmpty()) runCiv(plan, cx1, cz1, W, H);
                     if (cx1 <= 0 && cx2 >= 0 && cz1 <= 0 && cz2 >= 0) {
                         maybeSetSpawn(cx1, cz1, W, H, plan);
                         removeStagingPlatform();
@@ -641,6 +642,9 @@ public final class TerraService implements Listener {
                 // 河畔湿地：宽缓大河两岸的低地重标记为沼泽（柳树/红树+浓水氛围接管）
                 PlanOps.riparian(eBio, eLand, EW, EH, x1 - apron, z1 - apron, entry.seed ^ 0x3E7L);
             }
+            // ---- 文明栅格化（0.33.0）：城地块压平 + 官道走廊贴路面 + 跨水标桥 ----
+            byte[] eCiv = new byte[EW * EH];
+            CivPlanner.rasterize(civ, ey, eWater, eRiver, eCiv, EW, EH, x1 - apron, z1 - apron);
             // ---- 水岸齐平：贴海的 sea+1 陆列压到 sea（-- 而非 -_）----
             PlanOps.flushShore(ey, eWater, eRiver, eShoal, EW, EH, sea);
             // ---- 坡度（4 邻，齐平/河道之后）----
@@ -681,6 +685,7 @@ public final class TerraService implements Listener {
                     p.slope[i] = eSlope[e];
                     p.wet[i] = eWet[e];
                     p.frac[i] = eFrac[e];
+                    p.civ[i] = eCiv[e];
                     short b = eBio[e];
                     p.beach[i] = b == EcoBiomes.BEACH || b == EcoBiomes.SNOWY_BEACH
                             || b == 92 || b == 93 || b == 94;
@@ -772,8 +777,36 @@ public final class TerraService implements Listener {
                 plugin.getLogger().log(Level.WARNING, "lowfreq mid field", e);
                 progress.chat("贴地采样不可用，本图退回 coarse 定线: " + rootMsg(e));
             }
-            return RiverPlanner.plan(mid != null ? mid : hf, mid, mapper.sea(), mapX1, mapZ1,
-                    sX, sZ, entry.seed ^ 0x51E77AL, st.riverDensity());
+            RiverPlanner.RiverPlan rp = RiverPlanner.plan(mid != null ? mid : hf, mid,
+                    mapper.sea(), mapX1, mapZ1, sX, sZ, entry.seed ^ 0x51E77AL, st.riverDensity());
+            // ---- 文明规划（0.33.0）：同一低频场上选聚落 + 官道网（跨片确定性）----
+            if (st.civilization()) {
+                try {
+                    civ = CivPlanner.plan(mid != null ? mid : hf, rp, mapper.sea(),
+                            mapX1, mapZ1, sX, sZ, entry.seed ^ 0xC117B4EL, tileSpan());
+                    if (!civ.isEmpty()) {
+                        int cap = 0, city = 0, town = 0;
+                        for (CivPlanner.Site s : civ.sites()) {
+                            if (s.tier() >= 3) cap++;
+                            else if (s.tier() == 2) city++;
+                            else town++;
+                        }
+                        progress.chat("文明规划：官道 " + civ.roads().size() + " 条"
+                                + (cap > 0 ? "、首都 " + cap : "")
+                                + (city > 0 ? "、大城 " + city : "") + "、城镇 " + town + "。");
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().log(Level.WARNING, "civ plan", e);
+                    progress.chat("文明规划失败（跳过城市）: " + rootMsg(e));
+                }
+            }
+            return rp;
+        }
+
+        /** 地图分片跨度（与 runMapTiled 同一公式；civ 聚落单片约束用）。 */
+        private int tileSpan() {
+            int p = mpb <= 15 ? 0 : Math.max(1, mpb / 30);
+            return p == 0 || p == 1 ? 960 : p == 2 ? 768 : 480;
         }
 
         /** 取地形数据：画布走 provider 标准路径（scale=2 上采样+噪声）；地图按比例尺取原生/池化。 */
@@ -1278,6 +1311,18 @@ public final class TerraService implements Listener {
         /** 顶皮决策：峰岩/雪块/沙漠/恶地/海岸带/水底/沼泽泥/常规草 + 交界散点混合。 */
         private Material[] skinFor(Plan p, int i, int wx, int wz) {
             short b = p.biome[i];
+            // 官道路面（0.33.0）：城外大道按群系配材质（城内街道由 CityWorks 铺）
+            if (p.civ[i] == CivPlanner.C_ROAD && !p.water[i]) {
+                double r = hash01(entry.seed ^ 0x60AD5L, wx, wz);
+                if (b == 5 || b == 26 || b == 90) {
+                    return new Material[]{r < 0.55 ? Material.SMOOTH_SANDSTONE
+                            : r < 0.85 ? Material.SANDSTONE : Material.CUT_SANDSTONE,
+                            Material.SANDSTONE, Material.STONE};
+                }
+                return new Material[]{r < 0.42 ? Material.DIRT_PATH
+                        : r < 0.72 ? Material.GRAVEL : Material.COBBLESTONE,
+                        Material.GRAVEL, Material.STONE};
+            }
             // 群系交界：按距离概率借邻群系的顶面块（只换最上一格，轻微咬合）
             if (p.mix[i] != 0 && !p.water[i]
                     && hash01(entry.seed ^ 0x51C0L, wx, wz) * 100 < (p.mixP[i] & 0xFF)) {
@@ -1649,6 +1694,50 @@ public final class TerraService implements Listener {
         }
 
         /**
+         * 文明落成（0.33.0）：本片核心区内的聚落逐座建城（城墙/街网/房屋/广场/王城/
+         * 农田带/路灯），官道跨水段铺板桥。地块在规划期已压平、生态已避让，
+         * 这里纯粹落块（Plan 数组 + 件库 + seed 的纯函数）。
+         */
+        private void runCiv(Plan p, int x1, int z1, int W, int H) {
+            CityWorks.Ground g = new CityWorks.Ground() {
+                @Override public int w() { return W; }
+                @Override public int h() { return H; }
+                @Override public int y(int lx, int lz) { return p.y[lz * W + lx]; }
+                @Override public boolean water(int lx, int lz) { return p.water[lz * W + lx]; }
+                @Override public byte civ(int lx, int lz) { return p.civ[lz * W + lx]; }
+                @Override public short biome(int lx, int lz) { return p.biome[lz * W + lx]; }
+                @Override public int wlvl(int lx, int lz) { return p.wlvl[lz * W + lx]; }
+            };
+            World w = Bukkit.getWorld(world);
+            if (w == null) return;
+            // 桥（本片官道跨水段）
+            List<BlockEdit> bridgeEdits = new ArrayList<>();
+            CityWorks.bridges(g, x1, z1, bridgeEdits);
+            if (!bridgeEdits.isEmpty()) applyEditsSync(w, bridgeEdits);
+            // 聚落（中心在本片内才建；规划期已保证地块整体落在单片）
+            for (CivPlanner.Site site : civ.sites()) {
+                if (site.wx() < x1 || site.wx() >= x1 + W
+                        || site.wz() < z1 || site.wz() >= z1 + H) {
+                    continue;
+                }
+                checkCancel();
+                stage((site.tier() >= 3 ? "筑首都" : site.tier() == 2 ? "筑城" : "筑镇")
+                        + " @ " + site.wx() + "," + site.wz());
+                try {
+                    List<BlockEdit> edits = new ArrayList<>();
+                    String summary = CityWorks.build(g, x1, z1, site, entry.seed, edits);
+                    if (!edits.isEmpty()) {
+                        applyEditsSync(w, edits);
+                        progress.chat("聚落 ✔ " + summary + "（" + human(edits.size()) + " 方块）");
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().log(Level.WARNING, "civ build", e);
+                    progress.chat("聚落建造失败（跳过）: " + rootMsg(e));
+                }
+            }
+        }
+
+        /**
          * 巨石与河心石散布（0.31，Terra boulder locator + Iris decorator 思路）：
          * 山坡巨石只落"缓坡窗口"（slope 1..3，不平不崖）且低频簇噪声圈内——成簇出现；
          * 椭球体 y 向压扁、逐块扰动，落座取足印最低地面（埋座防悬空）。
@@ -1671,6 +1760,13 @@ public final class TerraService implements Listener {
                     if (PlanOps.patch(bs ^ 0x13L, wx, wz, 34.0) < 0.62) continue;
                     short b = p.biome[i];
                     if (b == 5 || b == 26 || b == 92) continue;
+                    // 0.33.0：30% 换建筑师预制岩（Conquered 岩石库；雪面区配冰雪岩、
+                    // 稀树草原偶发白蚁丘），其余保持程序化椭球
+                    if (hash01(bs ^ 0x19L, wx, wz) < 0.30
+                            && rockPrefab(p, edits, W, x1, z1, lx, lz, bs)) {
+                        hill++;
+                        continue;
+                    }
                     double r = 1.5 + hash01(bs ^ 0x14L, wx, wz) * 2.3;
                     boulder(p, edits, W, H, x1, z1, lx, lz, r, bs, false);
                     hill++;
@@ -1693,6 +1789,50 @@ public final class TerraService implements Listener {
             if (w == null) return;
             applyEditsSync(w, edits);
             progress.chat("巨石点缀 ✔ 山坡×" + hill + " 河心×" + rapid);
+        }
+
+        /**
+         * 预制岩盖印：rock 族（Conquered 岩石库 + 白蚁丘），按群系过滤——雪面区只出
+         * 冰雪岩、白蚁丘只出稀树草原；宽 ≤15；足印最低地面下沉 1 格埋座。成功返回 true。
+         */
+        private boolean rockPrefab(Plan p, List<BlockEdit> edits, int W,
+                                   int x1, int z1, int cx, int cz, long bs) {
+            int i = cz * W + cx;
+            short b = p.biome[i];
+            boolean snowy = EcoBiomes.snowySurface(b);
+            var pool = dev.timefiles.miaeco.growth.StampLibrary.pool("rock", snowy);
+            if (pool.isEmpty()) pool = dev.timefiles.miaeco.growth.StampLibrary.pool("rock", null);
+            List<dev.timefiles.miaeco.growth.StampLibrary.Prefab> fit = new ArrayList<>();
+            for (var pf : pool) {
+                if (pf.canopyW() > 15) continue;
+                boolean termite = pf.species().contains("termite");
+                if (termite != (b == 17)) continue;      // 白蚁丘只在稀树草原，草原只出白蚁丘
+                if (!termite && snowy != pf.snowy()) continue;
+                fit.add(pf);
+            }
+            if (fit.isEmpty() && b == 17) {              // 草原无白蚁丘就退普通岩
+                for (var pf : pool) {
+                    if (pf.canopyW() <= 15 && !pf.species().contains("termite")) fit.add(pf);
+                }
+            }
+            if (fit.isEmpty()) return false;
+            int wx = x1 + cx, wz = z1 + cz;
+            var pf = fit.get((int) (hash01(bs ^ 0x1AL, wx, wz) * fit.size()));
+            int half = Math.max(1, pf.canopyW() / 2);
+            int base = Integer.MAX_VALUE;
+            for (int dz = -half; dz <= half; dz += Math.max(1, half)) {
+                for (int dx = -half; dx <= half; dx += Math.max(1, half)) {
+                    int j = (cz + dz) * W + cx + dx;
+                    if (j < 0 || j >= p.y.length) return false;
+                    base = Math.min(base, p.y[j]);
+                }
+            }
+            if (base == Integer.MAX_VALUE) return false;
+            int rot = (int) (hash01(bs ^ 0x1BL, wx, wz) * 4);
+            boolean mirror = hash01(bs ^ 0x1CL, wx, wz) < 0.5;
+            edits.addAll(dev.timefiles.miaeco.growth.StampLibrary.place(
+                    pf, wx, base - 1, wz, rot, mirror));
+            return true;
         }
 
         /** 单颗椭球巨石：足印最低地面为座（埋底防悬空），y 压扁 0.75，逐块扰动混材。 */
@@ -1730,7 +1870,7 @@ public final class TerraService implements Listener {
             }
         }
 
-        /** 区域 bbox 上的 SimpleEco 视图（读 Plan 数组，掩码感知）。 */
+        /** 区域 bbox 上的 SimpleEco 视图（读 Plan 数组，掩码+文明占位感知）。 */
         private SimpleEco.View planView(Plan p, int W, RegionSegmenter.EcoRegion r) {
             final int bx = r.minLX(), bz = r.minLZ();
             return new SimpleEco.View() {
@@ -1738,7 +1878,9 @@ public final class TerraService implements Listener {
                 @Override public int h() { return r.maxLZ() - r.minLZ() + 1; }
                 @Override public int y(int lx, int lz) { return p.y[(bz + lz) * W + bx + lx]; }
                 @Override public boolean water(int lx, int lz) { return p.water[(bz + lz) * W + bx + lx]; }
-                @Override public boolean ok(int lx, int lz) { return r.in(bx + lx, bz + lz); }
+                @Override public boolean ok(int lx, int lz) {
+                    return r.in(bx + lx, bz + lz) && p.civ[(bz + lz) * W + bx + lx] == 0;
+                }
                 @Override public int sea() { return mapper.sea(); }
             };
         }
@@ -1841,7 +1983,18 @@ public final class TerraService implements Listener {
                     continue;
                 }
                 Forest f = new Forest(fname, reg);
-                f.mask(r.mask(), r.maxLX() - r.minLX() + 1);
+                // 文明占位（城地块/官道/桥）从生态掩码里抠掉：树/氛围/村落自动避让
+                java.util.BitSet mask = (java.util.BitSet) r.mask().clone();
+                int mw = r.maxLX() - r.minLX() + 1;
+                int mh = r.maxLZ() - r.minLZ() + 1;
+                for (int mz = 0; mz < mh; mz++) {
+                    int rowP = (r.minLZ() + mz) * W + r.minLX();
+                    int rowM = mz * mw;
+                    for (int mx = 0; mx < mw; mx++) {
+                        if (p.civ[rowP + mx] != 0) mask.clear(rowM + mx);
+                    }
+                }
+                f.mask(mask, mw);
                 f.densityScale(Math.max(0.1, dens));
                 f.atmosphere().theme(theme);
                 for (Map.Entry<String, Double> fe : ecoDef.features().entrySet()) {
@@ -1929,19 +2082,38 @@ public final class TerraService implements Listener {
         }
 
         /**
-         * 模板树模式（0.28.0）：全部点位换成树库预制树——族按树种映射（枫/银杏不走
-         * 羊毛彩冠 special，成片会怪）、镜像×旋转 8 变体、85% 限高 ≤18 的常规体
-         * （高大者偶发作视觉锚点）；地标提升（promoteLandmarks）产出的保持不动。
-         * 预制树首次生长即整棵盖印，跳过元胞生长模拟——大图种树的算力大头没了。
+         * 模板树模式（0.28.0，0.33.0 林相分区重做）：全部点位换成树库预制树。
+         * 选件走 {@link dev.timefiles.miaeco.growth.ForestZoner}——高度带聚集（高树一片、
+         * 矮树一片）、海拔压高（树线渐变）、树种连片（68 格纯林斑块）、雪态分离
+         * （snowy_* 只出挂雪树）。宽冠（≥13）之间保持间距，拥挤时降档为同斑块矮树，
+         * 避免高带巨冠互相穿模。地标提升（promoteLandmarks）产出的保持不动。
          */
         private void stampAll(List<TreeInstance> planted) {
+            int sea = entry.map != null ? entry.map.seaLevel() : 63;
+            List<int[]> wide = new ArrayList<>();
             for (TreeInstance t : planted) {
                 if (t.isPrefab()) continue;
                 java.util.Random r = new java.util.Random(t.seed() ^ 0x7E3D1A7EL);
-                String fam = dev.timefiles.miaeco.growth.StampLibrary.familyForTemplate(t.speciesId());
-                var pf = dev.timefiles.miaeco.growth.StampLibrary.random(
-                        fam, r.nextDouble() < 0.85 ? 18 : 0, r);
+                var pf = dev.timefiles.miaeco.growth.ForestZoner.pick(
+                        t.speciesId(), entry.seed, t.x(), t.z(), t.y(), sea, r);
                 if (pf == null) continue;
+                if (pf.canopyW() >= 13) {
+                    boolean crowded = false;
+                    for (int[] w : wide) {
+                        double dx = w[0] - t.x(), dz = w[1] - t.z();
+                        double need = (w[2] + pf.canopyW()) * 0.42;
+                        if (dx * dx + dz * dz < need * need) {
+                            crowded = true;
+                            break;
+                        }
+                    }
+                    if (crowded) {
+                        var alt = dev.timefiles.miaeco.growth.ForestZoner.pickShort(
+                                t.speciesId(), entry.seed, t.x(), t.z(), r);
+                        if (alt != null) pf = alt;
+                    }
+                    if (pf.canopyW() >= 13) wide.add(new int[]{t.x(), t.z(), pf.canopyW()});
+                }
                 t.prefab(pf.id(), r.nextInt(4), r.nextBoolean());
                 t.stage(dev.timefiles.miaeco.model.GrowthStage.MATURE);
             }
@@ -2040,6 +2212,7 @@ public final class TerraService implements Listener {
         final byte[] mixP;       // 混合概率 %
         final byte[] wet;        // 河湖湿度场 0..96（0.31，流量播种+衰减传播；皮肤/绿洲用）
         final byte[] frac;       // 亚格高度 0..7（浮点高程小数×8；雪层平滑用）
+        final byte[] civ;        // 文明标记（CivPlanner.C_*：官道/桥/城地块；0.33.0）
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
         double oceanPct;
         long totalOps;
@@ -2062,6 +2235,7 @@ public final class TerraService implements Listener {
             mixP = new byte[w * h];
             wet = new byte[w * h];
             frac = new byte[w * h];
+            civ = new byte[w * h];
         }
     }
 

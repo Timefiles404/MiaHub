@@ -24,26 +24,28 @@ import java.util.Set;
 import java.util.zip.GZIPInputStream;
 
 /**
- * 树库预制树：从 treepark.schematic 采集的 969 棵建筑师设计树（0.29.0 全量入库，
- * 此前为 147 棵精选；jar 内资源 {@code treepark/stamps.json.gz}），可整棵盖印到世界——
- * 作为"地标树"与模板树模式的形态库，提供程序化生成达不到的手工级形态。
- * 惰性加载：首次访问解析一次（~69 万体素，数十 MB 堆，仅在用到时占用）。
+ * 树库预制树：treepark.schematic 的 969 棵建筑师树（{@code treepark/stamps.json.gz}）
+ * + 0.33.0 newpack 植物学树库（{@code treepark/stamps2.json.gz}，学名树种/雪态标注），
+ * 可整棵盖印到世界——作为"地标树"与模板树模式的形态库。
+ * 惰性加载：首次访问解析一次（数百万体素，数十 MB 堆，仅在用到时占用）。
  *
  * <p>token 语法与离线转换管线一致（wood:/log:/leaves:/planks:/fence:/slab:/
  * block:/pane:/plant:/dplant:/snow:/vine:/bone:/hay:/stair:/button:/axis:），
- * 解析失败的 token 计数忽略。
+ * log/wood 对 crimson/warped 自动回退 _STEM/_HYPHAE；解析失败的 token 忽略。
  * 加载惰性、线程安全（首次访问同步解析一次）。
  */
 public final class StampLibrary {
 
-    /** 一棵预制树（体素已解析为 BlockSpec）。 */
-    public record Prefab(String id, String family, int height, int canopyW,
-                         List<Cell> cells) {
+    /** 一棵预制树（体素已解析为 BlockSpec）。snowy=挂雪树（只应出现在雪区）。 */
+    public record Prefab(String id, String family, String species, boolean snowy,
+                         int height, int canopyW, List<Cell> cells) {
         public record Cell(int x, int y, int z, BlockSpec spec, boolean structural) { }
     }
 
     private static volatile Map<String, Prefab> prefabs;
     private static final Object LOCK = new Object();
+    /** (family|snowKey) → 按高度升序的池（惰性构建，与 prefabs 同期失效）。 */
+    private static final Map<String, List<Prefab>> POOLS = new java.util.concurrent.ConcurrentHashMap<>();
 
     private StampLibrary() { }
 
@@ -61,6 +63,44 @@ public final class StampLibrary {
         return p;
     }
 
+    /**
+     * 族池（按高度升序）：snowy 三态——TRUE 只要挂雪树、FALSE 只要净树、null 全部。
+     * 空池返回空表（调用方自行走回退链）。
+     */
+    public static List<Prefab> pool(String family, Boolean snowy) {
+        String key = family + '|' + (snowy == null ? 'a' : snowy ? 's' : 'c');
+        return POOLS.computeIfAbsent(key, k -> {
+            List<Prefab> out = new ArrayList<>();
+            for (Prefab p : all().values()) {
+                if (!p.family().equalsIgnoreCase(family)) continue;
+                if (snowy != null && p.snowy() != snowy) continue;
+                out.add(p);
+            }
+            out.sort(java.util.Comparator.comparingInt(Prefab::height));
+            return List.copyOf(out);
+        });
+    }
+
+    /**
+     * 高度分位切片 [lo..hi]（0..1，按池内排序位次），并裁掉 maxHeight 以上的巨树
+     * （巨树只走地标路径）。切片至少保 1 棵。
+     */
+    public static List<Prefab> heightSlice(List<Prefab> pool, double lo, double hi, int maxHeight) {
+        if (pool.isEmpty()) return pool;
+        List<Prefab> capped = pool;
+        if (maxHeight > 0) {
+            int n = 0;
+            while (n < pool.size() && pool.get(n).height() <= maxHeight) n++;
+            if (n == 0) n = 1;
+            capped = pool.subList(0, n);
+        }
+        int a = (int) Math.floor(capped.size() * lo);
+        int b = (int) Math.ceil(capped.size() * hi);
+        a = Math.max(0, Math.min(capped.size() - 1, a));
+        b = Math.max(a + 1, Math.min(capped.size(), b));
+        return capped.subList(a, b);
+    }
+
     public static Prefab get(String id) {
         return all().get(id.toLowerCase(Locale.ROOT));
     }
@@ -72,49 +112,83 @@ public final class StampLibrary {
     /**
      * 树种 → 树库预制族的映射（地标古树选池）；null = 该树种无匹配预制树，不出地标。
      * special 族是羊毛/混凝土彩冠的巨型秋树，正好配秋枫/银杏。
+     * 0.33.0：v2 库带来 acacia/willow/mangrove/banyan/palm/baobab/eucalyptus 真族——
+     * 这些树种的地标改用同族巨树（空池由调用侧回退链兜底）。
      */
     public static String familyFor(String speciesId) {
         return switch (speciesId) {
             case "oak", "dark_oak" -> "oak";
-            case "spruce", "snowy_spruce", "cypress" -> "spruce";
-            case "birch" -> "birch";
-            case "jungle", "banyan", "mangrove" -> "jungle";
+            case "spruce", "snowy_spruce", "cypress", "fir", "pine" -> "spruce";
+            case "birch", "aspen" -> "birch";
+            case "jungle" -> "jungle";
+            case "banyan" -> "banyan";
+            case "mangrove" -> "mangrove";
+            case "willow" -> "willow";
+            case "acacia" -> "acacia";
+            case "baobab" -> "baobab";
+            case "eucalyptus" -> "eucalyptus";
+            case "palm" -> "palm";
+            case "cherry" -> "cherry";
             case "maple", "ginkgo" -> "special";
+            default -> null;
+        };
+    }
+
+    /** 族回退链：v2 族空池时借形态最接近的族（最终 oak 必非空）。 */
+    public static String familyFallback(String family) {
+        return switch (family) {
+            case "banyan", "mangrove", "willow", "palm" -> "jungle";
+            case "baobab", "eucalyptus" -> "acacia";
+            case "acacia", "cherry", "special", "dead" -> "oak";
+            case "jungle", "birch", "spruce" -> "oak";
             default -> null;
         };
     }
 
     /** 随机挑一棵（可按 family 过滤，null 为全部）。 */
     public static Prefab random(String family, Random rng) {
-        return random(family, 0, rng);
+        return random(family, null, 0, rng);
     }
 
     /** 随机挑一棵（族过滤 + 高度上限，maxHeight ≤0 不限；过滤后空池退回不限高）。 */
     public static Prefab random(String family, int maxHeight, Random rng) {
-        List<Prefab> pool = new ArrayList<>();
-        for (Prefab p : all().values()) {
-            if (family != null && !p.family().equalsIgnoreCase(family)) continue;
-            if (maxHeight > 0 && p.height() > maxHeight) continue;
-            pool.add(p);
-        }
-        if (pool.isEmpty()) {
-            return maxHeight > 0 ? random(family, 0, rng) : null;
-        }
-        return pool.get(rng.nextInt(pool.size()));
+        return random(family, null, maxHeight, rng);
     }
 
     /**
-     * 模板树模式的族映射：所有树种都必须落到一个预制族（普通 {@link #familyFor}
-     * 返回 null 的借形态最接近的族）。maple/ginkgo 不走 special——羊毛彩冠巨树
-     * 仅作地标点缀，成片铺开会很怪。
+     * 随机挑一棵：族 + 雪态（null=不限）+ 高度上限（≤0 不限）。
+     * 空池顺序放宽：先放开高度，再放开雪态，最后走族回退链。
+     */
+    public static Prefab random(String family, Boolean snowy, int maxHeight, Random rng) {
+        String fam = family;
+        for (int hop = 0; hop < 4 && fam != null; hop++) {
+            List<Prefab> pool = family == null ? new ArrayList<>(all().values()) : pool(fam, snowy);
+            if (!pool.isEmpty()) {
+                List<Prefab> fit = new ArrayList<>();
+                for (Prefab p : pool) {
+                    if (maxHeight > 0 && p.height() > maxHeight) continue;
+                    fit.add(p);
+                }
+                if (fit.isEmpty()) fit = new ArrayList<>(pool);
+                return fit.get(rng.nextInt(fit.size()));
+            }
+            if (snowy != null) {
+                pool = pool(fam, null);
+                if (!pool.isEmpty()) return pool.get(rng.nextInt(pool.size()));
+            }
+            if (family == null) return null;
+            fam = familyFallback(fam);
+        }
+        return null;
+    }
+
+    /**
+     * 模板树模式的族映射：所有树种都必须落到一个预制族。maple/ginkgo 不走 special
+     * ——羊毛彩冠巨树仅作地标点缀，成片铺开会很怪。
      */
     public static String familyForTemplate(String speciesId) {
         return switch (speciesId) {
             case "maple", "ginkgo" -> "oak";
-            case "cherry" -> "birch";
-            case "palm", "banyan", "mangrove", "jungle" -> "jungle";
-            case "spruce", "snowy_spruce", "cypress", "fir", "pine" -> "spruce";
-            case "birch", "aspen" -> "birch";
             default -> {
                 String fam = familyFor(speciesId);
                 yield fam == null || fam.equals("special") ? "oak" : fam;
@@ -204,9 +278,14 @@ public final class StampLibrary {
 
     private static Map<String, Prefab> load() {
         Map<String, Prefab> out = new LinkedHashMap<>();
-        try (InputStream in = StampLibrary.class.getClassLoader()
-                .getResourceAsStream("treepark/stamps.json.gz")) {
-            if (in == null) return Collections.emptyMap();
+        loadFile("treepark/stamps.json.gz", out);
+        loadFile("treepark/stamps2.json.gz", out);
+        return Collections.unmodifiableMap(out);
+    }
+
+    private static void loadFile(String resource, Map<String, Prefab> out) {
+        try (InputStream in = StampLibrary.class.getClassLoader().getResourceAsStream(resource)) {
+            if (in == null) return;
             JsonObject root = JsonParser.parseReader(
                     new InputStreamReader(new GZIPInputStream(in), StandardCharsets.UTF_8))
                     .getAsJsonObject();
@@ -215,32 +294,39 @@ public final class StampLibrary {
                 JsonArray pal = t.getAsJsonArray("palette");
                 BlockSpec[] specs = new BlockSpec[pal.size()];
                 boolean[] structural = new boolean[pal.size()];
+                boolean[] snowTok = new boolean[pal.size()];
                 for (int i = 0; i < pal.size(); i++) {
                     String tok = pal.get(i).getAsString();
                     specs[i] = parseToken(tok);
                     structural[i] = tok.startsWith("wood:") || tok.startsWith("log:")
                             || tok.startsWith("planks:") || tok.startsWith("block:");
+                    snowTok[i] = tok.startsWith("snow:") || tok.equals("block:snow_block")
+                            || tok.equals("block:powder_snow");
                 }
                 JsonArray cellsArr = t.getAsJsonArray("cells");
                 List<Prefab.Cell> cells = new ArrayList<>(cellsArr.size());
+                int snowCells = 0;
                 for (var ce : cellsArr) {
                     JsonArray a = ce.getAsJsonArray();
                     int pi = a.get(0).getAsInt();
                     BlockSpec spec = specs[pi];
                     if (spec == null) continue;
+                    if (snowTok[pi]) snowCells++;
                     cells.add(new Prefab.Cell(a.get(1).getAsInt(), a.get(2).getAsInt(),
                             a.get(3).getAsInt(), spec, structural[pi]));
                 }
                 String id = t.get("id").getAsString().toLowerCase(Locale.ROOT);
-                out.put(id, new Prefab(id, t.get("family").getAsString(),
+                // v2 显式 snowy；v1 按雪体素数推断（treepark 里也混着挂雪杉）
+                boolean snowy = t.has("snowy") ? t.get("snowy").getAsBoolean() : snowCells >= 3;
+                String species = t.has("species") ? t.get("species").getAsString() : id;
+                out.put(id, new Prefab(id, t.get("family").getAsString(), species, snowy,
                         t.get("height").getAsInt(),
                         t.has("canopyW") ? t.get("canopyW").getAsInt() : 0,
                         List.copyOf(cells)));
             }
         } catch (Exception e) {
-            return Collections.emptyMap();
+            // 单库坏档不拖垮另一库
         }
-        return Collections.unmodifiableMap(out);
     }
 
     private static Material mat(String name) {
@@ -252,9 +338,14 @@ public final class StampLibrary {
         String[] p = tok.split(":");
         try {
             return switch (p[0]) {
-                case "wood" -> spec(mat(p[1] + "_WOOD"));
+                case "wood" -> {
+                    Material m = mat(p[1] + "_WOOD");
+                    if (m == null) m = mat(p[1] + "_HYPHAE");   // crimson/warped
+                    yield spec(m);
+                }
                 case "log" -> {
                     Material m = mat(p[1] + "_LOG");
+                    if (m == null) m = mat(p[1] + "_STEM");      // crimson/warped
                     yield m == null ? null : BlockSpec.log(m, switch (p[2]) {
                         case "x" -> Axis.X;
                         case "z" -> Axis.Z;

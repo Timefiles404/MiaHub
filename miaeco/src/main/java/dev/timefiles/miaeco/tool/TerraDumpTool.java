@@ -53,6 +53,8 @@ public final class TerraDumpTool {
         fail |= tileSeamRun();
         fail |= varietyRun();
         fail |= stampRun();
+        fail |= stamp2Run();
+        fail |= civRun();
         fail |= geoCaveRun();
         fail |= splitterRun();
         fail |= simpleEcoRun();
@@ -89,6 +91,190 @@ public final class TerraDumpTool {
         }
         System.out.println("stamps: " + ids.size() + " 棵, 抽检 24 棵盖印(旋转×镜像) "
                 + cells + " 体素 OK");
+        return fail;
+    }
+
+    /**
+     * 树库 v2（0.33.0）：stamps2 双库装载、雪态分池、林相分区选件的确定性与连片性。
+     */
+    private static boolean stamp2Run() {
+        boolean fail = false;
+        var all = dev.timefiles.miaeco.growth.StampLibrary.all();
+        if (all.size() < 2000) {
+            System.out.println("STAMP2 COUNT FAIL: " + all.size() + "（应 ≥2000，双库）");
+            fail = true;
+        }
+        String[] fams = {"acacia", "palm", "willow", "mangrove", "baobab", "eucalyptus",
+                "godtree", "rock", "cherry", "dead"};
+        StringBuilder famStat = new StringBuilder();
+        for (String f : fams) {
+            int n = dev.timefiles.miaeco.growth.StampLibrary.pool(f, null).size();
+            famStat.append(f).append('×').append(n).append(' ');
+            if (n == 0) {
+                System.out.println("STAMP2 FAMILY EMPTY FAIL: " + f);
+                fail = true;
+            }
+        }
+        int snowySpruce = dev.timefiles.miaeco.growth.StampLibrary.pool("spruce", true).size();
+        int cleanSpruce = dev.timefiles.miaeco.growth.StampLibrary.pool("spruce", false).size();
+        if (snowySpruce < 40 || cleanSpruce < 150) {
+            System.out.println("STAMP2 SNOW POOL FAIL: snowy=" + snowySpruce + " clean=" + cleanSpruce);
+            fail = true;
+        }
+        // 林相选件：确定性（同参数同结果）+ 雪态分离 + 同斑块连片（68 格 patch 内种类少）
+        var r1 = new java.util.Random(42);
+        var r2 = new java.util.Random(42);
+        var p1 = dev.timefiles.miaeco.growth.ForestZoner.pick("spruce", 7L, 1000, 1000, 80, 63, r1);
+        var p2 = dev.timefiles.miaeco.growth.ForestZoner.pick("spruce", 7L, 1000, 1000, 80, 63, r2);
+        if (p1 == null || p2 == null || !p1.id().equals(p2.id())) {
+            System.out.println("ZONER DETERMINISM FAIL");
+            fail = true;
+        }
+        var rs = new java.util.Random(9);
+        java.util.Set<String> patchIds = new java.util.HashSet<>();
+        boolean snowLeak = false;
+        int base = 68 * 74 + 4;                              // 对齐 68 格 patch 内部
+        for (int k = 0; k < 60; k++) {
+            int wx = base + rs.nextInt(56), wz = base + rs.nextInt(56);
+            var pf = dev.timefiles.miaeco.growth.ForestZoner.pick("snowy_spruce", 7L, wx, wz, 90, 63, rs);
+            if (pf == null) continue;
+            patchIds.add(pf.id());
+            if (!pf.snowy()) snowLeak = true;
+        }
+        if (snowLeak) {
+            System.out.println("ZONER SNOW LEAK FAIL（snowy_spruce 选到净树）");
+            fail = true;
+        }
+        // 2~3 锚 + 15% 野卡：单斑块种类应远小于全池
+        if (patchIds.size() > 14) {
+            System.out.println("ZONER PATCH COHERENCE FAIL: 单斑块 60 抽出 " + patchIds.size() + " 种");
+            fail = true;
+        }
+        System.out.println("stamps2: 总 " + all.size() + " 棵, " + famStat
+                + "| 雪杉 " + snowySpruce + "/净杉 " + cleanSpruce
+                + " | 斑块 60 抽 " + patchIds.size() + " 种 OK");
+        return fail;
+    }
+
+    /**
+     * 文明层（0.33.0）：合成高度场上 规划（选址/官道/桥标）→ 栅格化（压平/走廊）→
+     * 建城（医式镇 + 沙漠首都王城）全链冒烟，全程无模型依赖。
+     */
+    private static boolean civRun() {
+        boolean fail = false;
+        int sea = 63, sX = 2048, sZ = 2048, mapX1 = -1024, mapZ1 = -1024;
+        // 起伏平原 + 一条 sea-3 水带（横贯，测桥与近水选址）
+        dev.timefiles.miaeco.terrain.RiverPlanner.HeightField hf = (wx, wz) -> {
+            double y = 72 + 7 * Math.sin(wx / 310.0) * Math.cos(wz / 270.0)
+                    + 3 * Math.sin(wx / 90.0 + 1.7) * Math.sin(wz / 110.0);
+            if (wz > 260 && wz < 300) y = sea - 3;                     // 水道
+            return (float) y;
+        };
+        var civ = dev.timefiles.miaeco.terrain.CivPlanner.plan(hf,
+                dev.timefiles.miaeco.terrain.RiverPlanner.RiverPlan.EMPTY,
+                sea, mapX1, mapZ1, sX, sZ, 20260709L, 0);
+        if (civ.isEmpty()) {
+            System.out.println("CIV PLAN EMPTY FAIL（2048² 平原应出聚落）");
+            return true;
+        }
+        int caps = 0;
+        for (var s : civ.sites()) {
+            if (s.tier() >= 3) caps++;
+        }
+        if (caps != 1) {
+            System.out.println("CIV CAPITAL COUNT FAIL: " + caps);
+            fail = true;
+        }
+        if (civ.sites().size() >= 2 && civ.roads().isEmpty()) {
+            System.out.println("CIV ROADS EMPTY FAIL");
+            fail = true;
+        }
+        // 复规划确定性
+        var civ2 = dev.timefiles.miaeco.terrain.CivPlanner.plan(hf,
+                dev.timefiles.miaeco.terrain.RiverPlanner.RiverPlan.EMPTY,
+                sea, mapX1, mapZ1, sX, sZ, 20260709L, 0);
+        if (civ2.sites().size() != civ.sites().size()
+                || (!civ.sites().isEmpty() && civ2.sites().get(0).wx() != civ.sites().get(0).wx())) {
+            System.out.println("CIV DETERMINISM FAIL");
+            fail = true;
+        }
+        // 栅格化整图（当一片）：地块必须整平、官道有标记、水道上有桥格
+        int[] ey = new int[sX * sZ / 16];   // 太大——只栅格化首都周边窗口
+        var cap = civ.sites().get(0);
+        int win = cap.radius() + dev.timefiles.miaeco.terrain.CivPlanner.FIELD_BAND + 40;
+        int EW = 2 * win + 1, EH = 2 * win + 1;
+        int ox = cap.wx() - win, oz = cap.wz() - win;
+        ey = new int[EW * EH];
+        boolean[] eWater = new boolean[EW * EH];
+        boolean[] eRiver = new boolean[EW * EH];
+        byte[] eCiv = new byte[EW * EH];
+        for (int ez = 0; ez < EH; ez++) {
+            for (int ex = 0; ex < EW; ex++) {
+                float y = hf.yAt(ox + ex, oz + ez);
+                ey[ez * EW + ex] = Math.round(y);
+                eWater[ez * EW + ex] = y < sea;
+            }
+        }
+        dev.timefiles.miaeco.terrain.CivPlanner.rasterize(civ, ey, eWater, eRiver, eCiv, EW, EH, ox, oz);
+        int plot = 0, road = 0, flatBad = 0;
+        for (int ez = 0; ez < EH; ez++) {
+            for (int ex = 0; ex < EW; ex++) {
+                int i = ez * EW + ex;
+                if (eCiv[i] == dev.timefiles.miaeco.terrain.CivPlanner.C_PLOT) {
+                    plot++;
+                    if (ey[i] != cap.pad()) flatBad++;
+                } else if (eCiv[i] == dev.timefiles.miaeco.terrain.CivPlanner.C_ROAD) {
+                    road++;
+                }
+            }
+        }
+        if (plot < 10000) {
+            System.out.println("CIV RASTER PLOT FAIL: " + plot);
+            fail = true;
+        }
+        if (flatBad > 0) {
+            System.out.println("CIV FLATTEN FAIL: " + flatBad + " 格未到 pad");
+            fail = true;
+        }
+        // 建城：医式（biome=1）与沙漠首都（biome=5，走王城+城墙）各建一次
+        final int fEW = EW, fEH = EH;
+        final int[] fey = ey;
+        final boolean[] few = eWater;
+        final byte[] fciv = eCiv;
+        java.util.function.IntFunction<dev.timefiles.miaeco.terrain.CityWorks.Ground> mk = biome ->
+                new dev.timefiles.miaeco.terrain.CityWorks.Ground() {
+                    @Override public int w() { return fEW; }
+                    @Override public int h() { return fEH; }
+                    @Override public int y(int lx, int lz) { return fey[lz * fEW + lx]; }
+                    @Override public boolean water(int lx, int lz) { return few[lz * fEW + lx]; }
+                    @Override public byte civ(int lx, int lz) { return fciv[lz * fEW + lx]; }
+                    @Override public short biome(int lx, int lz) { return (short) biome; }
+                    @Override public int wlvl(int lx, int lz) { return sea; }
+                };
+        for (int biome : new int[]{1, 5}) {
+            List<BlockEdit> edits = new ArrayList<>();
+            try {
+                String sum = dev.timefiles.miaeco.terrain.CityWorks.build(
+                        mk.apply(biome), ox, oz, cap, 20260709L, edits);
+                if (edits.size() < 5000) {
+                    System.out.println("CITY BUILD THIN FAIL biome=" + biome + ": " + edits.size());
+                    fail = true;
+                }
+                System.out.println("civ city biome=" + biome + ": " + sum + " (" + edits.size() + " edits)");
+            } catch (Exception e) {
+                System.out.println("CITY BUILD EXC FAIL biome=" + biome + ": " + e);
+                e.printStackTrace(System.out);
+                fail = true;
+            }
+        }
+        // 桥：整幅水道窗口
+        int bridge = 0;
+        for (byte b : eCiv) {
+            if (b == dev.timefiles.miaeco.terrain.CivPlanner.C_BRIDGE) bridge++;
+        }
+        System.out.println("civ: 聚落 " + civ.sites().size() + "（首都 " + caps + "）官道 "
+                + civ.roads().size() + " 条, 首都窗口 plot=" + plot + " road=" + road
+                + " bridge=" + bridge + " OK");
         return fail;
     }
 

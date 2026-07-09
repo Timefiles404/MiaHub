@@ -105,6 +105,24 @@ public final class RiverMapTool {
         int[] fit = new int[3];
         RiverPlanner.rasterize(plan, ey, eWater, eRiver, eWl, eShoal, eLand, eFlow,
                 size, size, x1, z1, fit);
+        // ---- 文明层（0.33.0）：聚落+官道叠加（与 TerraService 同链）----
+        var civ = dev.timefiles.miaeco.terrain.CivPlanner.plan(
+                mid, plan, sea, x1, z1, size, size, seed ^ 0xC117B4EL, 0);
+        byte[] eCiv = new byte[N];
+        dev.timefiles.miaeco.terrain.CivPlanner.rasterize(
+                civ, ey, eWater, eRiver, eCiv, size, size, x1, z1);
+        if (!civ.isEmpty()) {
+            StringBuilder sb = new StringBuilder();
+            for (var s : civ.sites()) {
+                sb.append(s.tier() >= 3 ? "首都" : s.tier() == 2 ? "大城" : "镇")
+                        .append('(').append(s.wx()).append(',').append(s.wz()).append(") ");
+            }
+            System.out.printf("文明：聚落 %d [%s] 官道 %d 条，桥格 %d%n",
+                    civ.sites().size(), sb.toString().trim(), civ.roads().size(),
+                    countCiv(eCiv, dev.timefiles.miaeco.terrain.CivPlanner.C_BRIDGE));
+        } else {
+            System.out.println("文明：无（图太小或无适宜地）");
+        }
         PlanOps.flushShore(ey, eWater, eRiver, eShoal, size, size, sea);
         System.out.printf("贴地：残余深切>8 %d/%d(%.2f%%)，壅水>4 %d(%.2f%%)%n",
                 fit[0], fit[2], fit[2] > 0 ? 100.0 * fit[0] / fit[2] : 0,
@@ -151,6 +169,15 @@ public final class RiverMapTool {
                     double light = 1.0 + 0.055 * ((y - yE) + (y - yS));
                     light = Math.max(0.55, Math.min(1.25, light));
                     rgb = shade(rgb, light);
+                    // 文明叠加：官道深褐、城地块淡染
+                    if (eCiv[i] == dev.timefiles.miaeco.terrain.CivPlanner.C_ROAD) {
+                        rgb = 0x6B4A2A;
+                    } else if (eCiv[i] == dev.timefiles.miaeco.terrain.CivPlanner.C_PLOT) {
+                        rgb = lerp(rgb, 0xC8B49A, 0.5);
+                    }
+                }
+                if (eCiv[i] == dev.timefiles.miaeco.terrain.CivPlanner.C_BRIDGE) {
+                    rgb = 0x8A5A30;                              // 桥：跨水深棕
                 }
                 img.setRGB(x, z, rgb);
             }
@@ -222,6 +249,12 @@ public final class RiverMapTool {
     private static int count(boolean[] a) {
         int n = 0;
         for (boolean b : a) if (b) n++;
+        return n;
+    }
+
+    private static int countCiv(byte[] a, byte v) {
+        int n = 0;
+        for (byte b : a) if (b == v) n++;
         return n;
     }
 }

@@ -210,7 +210,9 @@ public final class PlacementService {
                 }
             }
             if (!far) continue;
-            StampLibrary.Prefab pf = StampLibrary.random(fam, r);
+            // 雪态跟随树种：snowy_* 只出挂雪巨树，其余只出净树（0.33.0）
+            StampLibrary.Prefab pf = StampLibrary.random(
+                    fam, t.speciesId().startsWith("snowy_"), 0, r);
             if (pf == null) continue;
             t.prefab(pf.id(), r.nextInt(4), r.nextBoolean());
             t.stage(GrowthStage.MATURE);        // 地标一出场就是成树

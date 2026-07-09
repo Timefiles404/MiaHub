@@ -73,3 +73,30 @@ taiga/taiga_temple_1.nbt 17 14 17
 taiga/taiga_tool_smith_1.nbt 11 12 12
 taiga/taiga_weaponsmith_1.nbt 7 12 12
 taiga/taiga_weaponsmith_2.nbt 13 15 12
+savanna/savanna_animal_pen_1.nbt
+savanna/savanna_animal_pen_2.nbt
+savanna/savanna_animal_pen_3.nbt
+savanna/savanna_armorer_1.nbt
+savanna/savanna_butchers_shop_1.nbt
+savanna/savanna_butchers_shop_2.nbt
+savanna/savanna_cartographer_1.nbt
+savanna/savanna_fisher_cottage_1.nbt
+savanna/savanna_fletcher_house_1.nbt
+savanna/savanna_mason_1.nbt
+savanna/savanna_medium_house_1.nbt
+savanna/savanna_medium_house_2.nbt
+savanna/savanna_shepherd_1.nbt
+savanna/savanna_small_house_1.nbt
+savanna/savanna_small_house_2.nbt
+savanna/savanna_small_house_3.nbt
+savanna/savanna_small_house_4.nbt
+savanna/savanna_small_house_5.nbt
+savanna/savanna_small_house_6.nbt
+savanna/savanna_small_house_7.nbt
+savanna/savanna_small_house_8.nbt
+savanna/savanna_tannery_1.nbt
+savanna/savanna_temple_1.nbt
+savanna/savanna_temple_2.nbt
+savanna/savanna_tool_smith_1.nbt
+savanna/savanna_weaponsmith_1.nbt
+savanna/savanna_weaponsmith_2.nbt

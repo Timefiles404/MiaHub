@@ -45,7 +45,9 @@ public final class EcoBiomes {
             e(6,   "swamp",        KIND_FOREST, "swamp",     new String[]{"willow:0.65", "mangrove:0.3"}, 0.9,
                     Map.of("water", 2.0)),
             // 稀树草原：零零散散的孤树 + SimpleEco 小池塘（0.21 重做，原 0.5+0.3 太密）
-            e(17,  "savanna",      KIND_FOREST, "savanna",   new String[]{"acacia:0.12"}, 0.35, Map.of()),
+            // 0.33.0 v2 树库：补猴面包孤树地标 + 桉树疏林（真 acacia/baobab/eucalyptus 族）
+            e(17,  "savanna",      KIND_FOREST, "savanna",
+                    new String[]{"acacia:0.12", "eucalyptus:0.05", "baobab:0.012"}, 0.35, Map.of()),
             // ---- 开阔地（只铺氛围）----
             e(1,   "plains",         KIND_OPEN, "temperate", new String[0], 1.0, Map.of()),
             e(29,  "meadow",         KIND_OPEN, "temperate", new String[]{"oak:0.05"}, 1.0,

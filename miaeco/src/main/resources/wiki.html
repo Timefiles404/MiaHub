@@ -55,7 +55,7 @@
 <tr><td><code>/miaeco terra gen [noeco]</code></td><td>在选区生成真实地形+自动群系+自动森林（noeco=只地形）</td></tr>
 <tr><td><code>/miaeco terra resume [地图世界]</code></td><td>地图分片断点续跑（取消/崩溃后从下一片接着生成）</td></tr>
 <tr><td><code>/miaeco terra scout | prefetch | status | cancel</code></td><td>陆地探测 / 预下载模型 / 任务状态 / 取消</td></tr>
-<tr><td><code>/miaeco geo gen &lt;类型&gt; [强度] [风格]</code></td><td>在选区散布地貌奇观：stone_forest 石林 / karst_towers 峰林 / hoodoos 蘑菇岩 / arch 岩拱 / monoliths 孤石 / hot_spring 温泉；风格 stone/karst/sand/red/ice</td></tr>
+<tr><td><code>/miaeco geo gen &lt;类型&gt; [强度] [风格]</code></td><td>在选区散布地貌奇观：stone_forest 石林 / karst_towers 峰林 / hoodoos 蘑菇岩 / arch 岩拱 / monoliths 孤石 / hot_spring 温泉 / god_tree 神树；风格 stone/karst/sand/red/ice</td></tr>
 <tr><td><code>/miaeco geo types | undo</code></td><td>列出类型 / 撤销最近一次地貌</td></tr>
 <tr><td><code>/miaeco hub</code></td><td>进入 MiaEco 大厅：每个世界一块 20×20 <b>积雪沙盘</b>（雪高=地形，1 层雪=1/8 格精度；蓝玻璃=水面；最高/最低点悬浮标注；生成中的世界随分片实时"长出来"）</td></tr>
 <tr><td><code>/miaeco hub new &lt;名&gt; [size=N|AxB] [preview=12~48] [scale=…] [sea=…] [edge=…] [yscale=…] [variety=…] [trees=template|auto]</code></td><td>开草稿沙盘：size 可写 <code>1000x500</code>；默认 sea=0 yscale=2 variety=2；trees=template 只种树库模板树；全参数操作台可再调</td></tr>
@@ -64,8 +64,15 @@
 <tr><td><code>/miaeco hub confirm &lt;名&gt;</code></td><td>送入生产：读回雪面修形差量（1 层雪 ≈ 45 米）作为草图混入扩散地形，创建世界并开始生成</td></tr>
 <tr><td><code>/miaeco hub tp &lt;名&gt; | cancel &lt;名&gt;</code></td><td>传送到沙盘 / 丢弃草稿</td></tr>
 <tr><td><code>/miaeco clear &lt;森林&gt;</code></td><td>清除该森林所有树方块</td></tr>
-<tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（969 棵建筑师设计树，0.29.0 全量入库）</td></tr>
+<tr><td><code>/miaeco test stamp &lt;id|random|族名&gt;</code></td><td>盖印一棵树库预制树（treepark 969 + 植物学树库 1234 = 2203 棵，0.33.0 双库）</td></tr>
 </table>
+
+<h2>0.33.0 植物学树库 · 林相分区 · 文明层（聚落+官道+城市）</h2>
+<p><b>① 模板树库 v2（969 → 2203 棵）：</b>解析 newpack 植物学树包 2074 个文件（Sponge/MCEdit/BO2/结构 NBT 四格式，内容签名去重），精选 <b>1234 棵</b>入库（gz 2.2MB，惰性加载）：oak 300 / spruce 329 / palm 110 / acacia 100 / eucalyptus 70 / jungle 50 / birch 46 / dead 51 / baobab 44 / willow 36 / mangrove 26 / banyan 12 / cherry 29（羊毛粉冠已重映射为现代樱花叶）等——<b>金合欢/桉树/椰树/猴面包/垂柳/红树/榕树首次有了真族</b>（此前借形）。<b>雪树短缺离线合成解决</b>：64 棵净云杉按"暴露顶面盖雪层"生成挂雪变体。稀树草原树种表补 <code>baobab</code>（孤树地标）与 <code>eucalyptus</code>（疏林）。</p>
+<p><b>② 林相分区（高矮不再穿插）：</b>模板树选件从逐棵独立随机改为<b>确定性场组织</b>——<b>高度带</b>（~170 格噪声分矮/中/高三带，高树成片、矮树成片、带间宽过渡）；<b>海拔压高</b>（海平面+60 起向矮带压缩，树线渐变）；<b>树种连片</b>（68 格斑块锚定 2~3 个具体预制，85% 从锚选 → 纯林斑块，15% 野卡保多样）；<b>雪态分离</b>（snowy_* 树种只出挂雪树，其余只出净树——雪树不再乱窜暖林）；宽冠（≥13）互斥间距，拥挤自动降档矮树。地标古树同步雪态过滤。</p>
+<p><b>③ 神树奇观 + 预制巨石 + 预制椰树：</b>GodTreePack 百格级巨树（最大 134×143×高 148，14 棵含挂雪雪松）作为<b>新地貌奇观 god_tree</b>——温带/针叶/雪林/雨林大区小概率一棵，坡地自动补根桩；巨石点缀 30% 换用建筑师<b>预制岩</b>（Conquered 岩石库 28 颗：雪原配冰雪岩、稀树草原偶发白蚁丘）；沙滩椰林的簇主树 40% 换<b>预制椰树</b>（110 棵椰族，程序小椰照旧作陪衬）。</p>
+<p><b>④ 文明层（地图世界 ≥1024，config <code>terrain.civilization</code>）：</b>与水文同模式的<b>全图规划、跨片确定性</b>——<b>选址</b>：8 格适宜度场（平坦+近水带+海拔带+边距），依水择址分级放 <b>首都（≥1500²）/大城/城镇</b>（镇环绕大城成卫星群；每聚落整体落单片）——都城<b>跨河湖而建</b>：城心保净，中带允许河湖穿城（滨水原生绿带、城墙水门、街道跨河板桥）；<b>官道网</b>：聚落 MST 全连通 + 绕远捷径，逐边 A*（坡度²+涉水惩罚+<b>已有路负成本</b>→自然涌现干线），路面沿线平滑、按群系铺装（土径/砾石/圆石，沙漠砂岩），<b>跨水自动板桥</b>；<b>建城</b>（GDMC 冠军式全局规划）：地块整体压平→环+放射+网格街网→<b>沿街房屋门朝街</b>（中世纪三皮肤 104 件 / 巴比伦沙漠 89 件）→广场（镇心件/水井/方尖碑）→<b>城墙塔楼城门</b>（大城/首都）→<b>王城区</b>（沙漠首都放巴比伦整体街区件 165×142）→城外农田带+路灯。<b>生态自动避让</b>：城区/官道格从树木/氛围/简单生态掩码中抠除。聚落自动起名（如"临川""沙关"）。</p>
+<p><b>⑤ 村庄扩皮肤：</b>稀树草原村庄件库入库（27 件，金合欢栅栏/草原战利品表）；桥梁/道具件（市集摊 24 件）随城市件库入包。<b>hub 控制台</b>新增文明层开关。</p>
 
 <h2>0.32.0 山地河终修 · 花境分区</h2>
 <p><b>① 阶梯层纹石壁（根治）：</b>陡降河此前的"一圈圈石头平台、水埋在缝里"，根因是岸带水位取<b>羽化半径 14 格内所有河段的最大值</b>——上游高水位横向"污染"下游河段两岸，被垫成同心台地。现在岸带水位只认贴近河道（≤hw+3）的段，汇流处的越位兜水交给围护扫描——下坡河两岸回归自然坡面。</p>

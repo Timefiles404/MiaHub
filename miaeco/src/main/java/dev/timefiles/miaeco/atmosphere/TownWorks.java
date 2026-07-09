@@ -65,7 +65,17 @@ public final class TownWorks {
         return switch (th.id()) {
             case "taiga" -> "taiga";
             case "snowy" -> "snowy";
+            case "savanna" -> "savanna";   // 0.33.0：村庄小改动件库的稀树草原皮肤
             default -> "plains";
+        };
+    }
+
+    /** 村落木件（栅栏/灯柱）用材：稀树草原金合欢、针叶/雪原云杉、其余橡木。 */
+    private static Material fenceOf(AtmosphereTheme th) {
+        return switch (biomeOf(th)) {
+            case "savanna" -> Material.ACACIA_FENCE;
+            case "taiga", "snowy" -> Material.SPRUCE_FENCE;
+            default -> Material.OAK_FENCE;
         };
     }
 
@@ -165,7 +175,7 @@ public final class TownWorks {
 
         // 6) 小路：各户门前 → 村心；村心（或独户门前）→ 区域边缘（接外界）；沿途灯柱
         long ns = seed ^ AtmosphereGenerator.S_TOWN ^ 0x77L;
-        Material fence = biomeOf(th).equals("plains") ? Material.OAK_FENCE : Material.SPRUCE_FENCE;
+        Material fence = fenceOf(th);
         int exitLx = houses.get(0).doorEndLx(), exitLz = houses.get(0).doorEndLz();
         if (houses.size() > 1) {
             for (Housed h : houses) {
@@ -425,8 +435,7 @@ public final class TownWorks {
                     && !g.water(fx, fz) && !claimed[fz * w + fx] && !treeBlk[fz * w + fx]
                     && Math.abs(g.groundY(fx, fz) - padY) <= 1) {
                 int fy = g.groundY(fx, fz);
-                Material fence = biomeOf(th).equals("plains")
-                        ? Material.OAK_FENCE : Material.SPRUCE_FENCE;
+                Material fence = fenceOf(th);
                 AtmosphereGenerator.put(edits, g.region().minX() + fx, fy + 1,
                         g.region().minZ() + fz, BlockSpec.of(fence));
                 AtmosphereGenerator.put(edits, g.region().minX() + fx, fy + 2,
@@ -459,6 +468,7 @@ public final class TownWorks {
         return switch (biome) {
             case "taiga" -> "chests/village/village_taiga_house";
             case "snowy" -> "chests/village/village_snowy_house";
+            case "savanna" -> "chests/village/village_savanna_house";
             default -> "chests/village/village_plains_house";
         };
     }
@@ -631,7 +641,7 @@ public final class TownWorks {
                                  int rx, int rz, int rw, int rl, Housed h,
                                  Map<Long, BlockEdit> edits, boolean[] claimed) {
         int w = g.width();
-        Material fence = biomeOf(th).equals("plains") ? Material.OAK_FENCE : Material.SPRUCE_FENCE;
+        Material fence = fenceOf(th);
         String[] crops = {"minecraft:wheat[age=%d]", "minecraft:carrots[age=%d]",
                 "minecraft:potatoes[age=%d]", "minecraft:beetroots[age=3]"};
         Material[] cropMat = {Material.WHEAT, Material.CARROTS, Material.POTATOES, Material.BEETROOTS};
@@ -792,7 +802,7 @@ public final class TownWorks {
             }
         }
         // 对角灯柱（格子已被广场占位，直接铺设）
-        Material fence = biomeOf(th).equals("plains") ? Material.OAK_FENCE : Material.SPRUCE_FENCE;
+        Material fence = fenceOf(th);
         for (int[] c : new int[][]{{bx - 3, bz - 3}, {bx + 3, bz + 3}}) {
             int wx = g.region().minX() + c[0], wz = g.region().minZ() + c[1];
             AtmosphereGenerator.put(edits, wx, pad + 1, wz, BlockSpec.of(fence));

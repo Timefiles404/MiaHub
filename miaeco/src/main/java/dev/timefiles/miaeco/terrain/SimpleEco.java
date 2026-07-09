@@ -181,7 +181,21 @@ public final class SimpleEco {
                     int pz = lz + (int) Math.round(Math.sin(ang) * dist);
                     if (px < 3 || pz < 3 || px >= v.w() - 3 || pz >= v.h() - 3) continue;
                     if (!v.ok(px, pz) || v.water(px, pz)) continue;
-                    palm(out, v, ox, oz, px, pz, mix(cs, px, pz));
+                    // 0.33.0：簇主树 40% 换建筑师预制椰树（v2 palm 族，限高 22 防巨椰霸滩）
+                    long ps = mix(cs, px, pz);
+                    if (k == 0 && hash01(ps, 7, 7) < 0.4) {
+                        var pool = dev.timefiles.miaeco.growth.StampLibrary.pool("palm", false);
+                        if (!pool.isEmpty()) {
+                            var fit = dev.timefiles.miaeco.growth.StampLibrary
+                                    .heightSlice(pool, 0.0, 0.8, 22);
+                            var pf = fit.get((int) Math.floorMod(ps >>> 13, fit.size()));
+                            out.addAll(dev.timefiles.miaeco.growth.StampLibrary.place(
+                                    pf, ox + px, v.y(px, pz) + 1, oz + pz,
+                                    (int) (ps & 3), (ps & 4) != 0));
+                            continue;
+                        }
+                    }
+                    palm(out, v, ox, oz, px, pz, ps);
                 }
             }
         }

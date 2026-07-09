@@ -50,7 +50,7 @@ public final class GeoFeatures {
     // 0.25.0：stone_forest（石林）暂时下线——柱簇观感僵硬，待按真实石林参考
     // 精细化采样后回归（生成代码保留，仅撤出命令入口与 terra 自动散布）
     public static final List<String> TYPES = List.of(
-            "karst_towers", "hoodoos", "arch", "monoliths", "hot_spring");
+            "karst_towers", "hoodoos", "arch", "monoliths", "hot_spring", "god_tree");
 
     private GeoFeatures() { }
 
@@ -66,6 +66,7 @@ public final class GeoFeatures {
             case "arch" -> "天然岩拱";
             case "monoliths" -> "孤石阵";
             case "hot_spring" -> "温泉钙华";
+            case "god_tree" -> "神树";
             default -> type;
         };
     }
@@ -86,7 +87,7 @@ public final class GeoFeatures {
     /** 该群系是否可能带地貌（geo 分割用，含 KIND_NONE 的裸峰/冰峰）。 */
     public static boolean geoBiome(int id) {
         return id == 35 || id == 33 || id == 26 || id == 5 || id == 19 || id == 17
-                || id == 31 || id == 8 || id == 23;
+                || id == 31 || id == 8 || id == 23 || id == 15 || id == 16;
     }
 
     /** rh=区域哈希 0..1——让同群系“有的区有、有的区没有”，避免奇观满地跑。 */
@@ -101,8 +102,13 @@ public final class GeoFeatures {
                     : new BiomeGeo("monoliths", 0.8, STONE);                          // 风袭丘陵：岩拱/孤石
             case 17 -> rh < 0.30 ? new BiomeGeo("monoliths", 0.4, STONE) : null;      // 稀树草原孤石
             case 31 -> rh < 0.35 ? new BiomeGeo("hot_spring", 0.6, STONE) : null;     // 林间坡地温泉
-            case 8 -> rh < 0.10 ? new BiomeGeo("karst_towers", 0.8, KARST) : null;    // 温带林：桂林峰林
-            case 23 -> rh < 0.35 ? new BiomeGeo("karst_towers", 0.5, KARST) : null;   // 雨林喀斯特
+            // 神树（0.33.0，GodTreePack 百格级巨树）：森林系区域小概率出一棵世界级奇观
+            case 8 -> rh < 0.10 ? new BiomeGeo("karst_towers", 0.8, KARST)
+                    : rh > 0.94 ? new BiomeGeo("god_tree", 1.0, STONE) : null;        // 温带林：峰林/神树
+            case 23 -> rh < 0.35 ? new BiomeGeo("karst_towers", 0.5, KARST)
+                    : rh > 0.92 ? new BiomeGeo("god_tree", 1.0, STONE) : null;        // 雨林喀斯特/神树
+            case 15 -> rh > 0.94 ? new BiomeGeo("god_tree", 1.0, STONE) : null;       // 针叶林神树
+            case 16 -> rh > 0.95 ? new BiomeGeo("god_tree", 1.0, ICE) : null;         // 雪林神树（挂雪）
             default -> null;
         };
     }
@@ -133,6 +139,7 @@ public final class GeoFeatures {
             case "arch" -> { cell = 96; baseP = 0.5; margin = 16; flatR = 6; flatTol = 9; cap = 3; }
             case "monoliths" -> { cell = 40; baseP = 0.38; margin = 5; flatR = 3; flatTol = 6; cap = 40; }
             case "hot_spring" -> { cell = 80; baseP = 0.55; margin = 10; flatR = 5; flatTol = 6; cap = 3; }
+            case "god_tree" -> { cell = 180; baseP = 0.8; margin = 52; flatR = 9; flatTol = 9; cap = 1; }
             default -> { return edits; }
         }
         int n = 0;
@@ -153,6 +160,7 @@ public final class GeoFeatures {
                     case "arch" -> arch(edits, s, ox, oz, lx, lz, fs, st, maxY);
                     case "monoliths" -> monoliths(edits, s, ox, oz, lx, lz, fs, st, maxY);
                     case "hot_spring" -> hotSpring(edits, s, ox, oz, lx, lz, fs);
+                    case "god_tree" -> godTree(edits, s, ox, oz, lx, lz, fs, st == ICE, maxY);
                 }
                 if (edits.size() > before) {
                     n++;
@@ -421,6 +429,55 @@ public final class GeoFeatures {
     }
 
     /** 温泉钙华：主池（钙华围沿+水+池心岩浆块冒泡）+ 1~2 阶下游小池 + 白华裙带。 */
+    /**
+     * 神树（0.33.0）：GodTreePack 百格级巨树整棵盖印——每个森林大区最多一棵的世界奇观。
+     * 底层沉入地表 1 格；最底层结构柱向下补 3 格根桩（坡地不悬空，RTF placeBase 思路）。
+     * snowy=true 优先挂雪变体（雪林），无则退净树。
+     */
+    private static void godTree(List<BlockEdit> edits, Surface s, int ox, int oz,
+                                int lx, int lz, long fs, boolean snowy, int maxY) {
+        var pool = dev.timefiles.miaeco.growth.StampLibrary.pool("godtree", snowy ? Boolean.TRUE : null);
+        if (pool.isEmpty()) pool = dev.timefiles.miaeco.growth.StampLibrary.pool("godtree", null);
+        if (pool.isEmpty()) return;
+        var pf = pool.get((int) Math.floorMod(fs >>> 17, pool.size()));
+        int y = s.y(lx, lz);
+        if (y + pf.height() > maxY) {
+            // 高度预算不够：挑池里最矮的一棵再试，仍超则放弃
+            var shortest = pool.get(0);
+            for (var p : pool) {
+                if (p.height() < shortest.height()) shortest = p;
+            }
+            if (y + shortest.height() > maxY) return;
+            pf = shortest;
+        }
+        int rot = (int) (fs & 3);
+        boolean mirror = (fs & 4) != 0;
+        List<BlockEdit> stamp = dev.timefiles.miaeco.growth.StampLibrary.place(
+                pf, ox + lx, y, oz + lz, rot, mirror);
+        // 每柱最低结构格 ≤1 层时向下补 3 格根桩
+        Map<Long, int[]> lowest = new java.util.HashMap<>();
+        for (BlockEdit e : stamp) {
+            long key = ((long) e.x() << 32) ^ (e.z() & 0xffffffffL);
+            int[] cur = lowest.get(key);
+            if (cur == null || e.y() < cur[0]) {
+                lowest.put(key, new int[]{e.y(), 0});
+            }
+        }
+        edits.addAll(stamp);
+        for (BlockEdit e : stamp) {
+            long key = ((long) e.x() << 32) ^ (e.z() & 0xffffffffL);
+            int[] cur = lowest.get(key);
+            if (cur != null && e.y() == cur[0] && e.y() <= y + 1
+                    && e.spec().material != null && e.spec().material.isSolid()
+                    && e.spec().state != BlockSpec.State.SNOW_LAYERS) {
+                for (int d = 1; d <= 3; d++) {
+                    edits.add(new BlockEdit(e.x(), e.y() - d, e.z(), e.spec()));
+                }
+                lowest.remove(key);
+            }
+        }
+    }
+
     private static void hotSpring(List<BlockEdit> edits, Surface s, int ox, int oz,
                                   int lx, int lz, long seed) {
         int g = s.y(lx, lz);

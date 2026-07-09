@@ -561,6 +561,8 @@ public final class HubConsole implements Listener {
                         + cfg.getInt("terrain.map-max-size", 10240) + "²",
                 ChatColor.GRAY + "点击循环 5120 → 10240 → 20480",
                 ChatColor.GRAY + "world create / hub new 的 size 上限"));
+        m.inv.setItem(20, toggleItem(Material.BELL, "文明层（聚落+官道）",
+                cfg.getBoolean("terrain.civilization", true)));
         m.inv.setItem(15, item(Material.BOOK, ChatColor.AQUA + "只读参数（启动期定死）",
                 ChatColor.GRAY + "推理设备 device=" + cfg.getString("terrain.device", "cpu"),
                 ChatColor.GRAY + "原生比例 scale=" + cfg.getInt("terrain.scale", 2),
@@ -601,6 +603,11 @@ public final class HubConsole implements Listener {
             }
             case 14 -> {
                 cfg.set("terrain.template-trees", !cfg.getBoolean("terrain.template-trees", false));
+                eco.reloadTerraSettings();
+                drawConfig(m);
+            }
+            case 20 -> {
+                cfg.set("terrain.civilization", !cfg.getBoolean("terrain.civilization", true));
                 eco.reloadTerraSettings();
                 drawConfig(m);
             }

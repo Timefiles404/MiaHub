@@ -88,6 +88,8 @@ tasks.register<JavaExec>("riverMap") {
     systemProperty("miaeco.yscale", (findProperty("miaeco.yscale") ?: "2.0").toString())
     systemProperty("miaeco.variety", (findProperty("miaeco.variety") ?: "2.0").toString())
     systemProperty("miaeco.sea", (findProperty("miaeco.sea") ?: "0").toString())
+    // -Pmiaeco.civDebug=1 输出文明选址淘汰计数（stderr）
+    systemProperty("miaeco.civDebug", (findProperty("miaeco.civDebug") ?: "false").toString())
     args(layout.buildDirectory.dir("rivermap").get().asFile.absolutePath)
 }
 
