@@ -21,6 +21,19 @@ public final class HarborWorks {
     /** 栈桥长（格，全局常量——长度不得依赖分片外的水深）。 */
     private static final int PIER_LEN = 22;
 
+    /**
+     * 链条（0.35.1 热修）：1.21.11 起 CHAIN 改名 IRON_CHAIN（铜链更新连带），
+     * 老 1.21.x 服务器只有 CHAIN——直接引用枚举字段会在旧服 NoSuchFieldError，
+     * 必须运行时按名解析（版本敏感的 Material 一律走 matchMaterial）。
+     */
+    private static final Material CHAIN_MAT = resolveChain();
+
+    private static Material resolveChain() {
+        Material m = Material.matchMaterial("IRON_CHAIN");
+        if (m == null) m = Material.matchMaterial("CHAIN");
+        return m != null ? m : Material.SPRUCE_FENCE;
+    }
+
     private HarborWorks() { }
 
     public static void build(CityWorks.Ground g, CivPlanner.CivPlan civ, int ox, int oz,
@@ -92,8 +105,9 @@ public final class HarborWorks {
                 out.add(new BlockEdit(axp, deck + 4, azp,
                         BlockSpec.raw(pile, CityWorks.keyOf(pile) + "[axis=" + axis + "]")));
                 if (a == 2) {
-                    out.add(new BlockEdit(axp, deck + 3, azp,
-                            BlockSpec.raw(Material.IRON_CHAIN, "minecraft:iron_chain[axis=y]")));
+                    out.add(new BlockEdit(axp, deck + 3, azp, BlockSpec.raw(CHAIN_MAT,
+                            CityWorks.keyOf(CHAIN_MAT) + (CHAIN_MAT == Material.SPRUCE_FENCE
+                                    ? "" : "[axis=y]"))));
                     out.add(new BlockEdit(axp, deck + 2, azp, BlockSpec.raw(Material.BARREL,
                             "minecraft:barrel[facing=up]", "chests/shipwreck_supply")));
                 }
