@@ -457,6 +457,12 @@ public final class TerraService implements Listener {
                         continue;
                     }
                     checkCancel();
+                    // 续跑护栏（0.35.2）：这一片没有完成标记但可能已经跑过一半
+                    // （生态成功、后续阶段失败/取消）——先清掉上次留下的孤儿森林
+                    // （记录+树方块+氛围回滚），否则重跑会双份注册、氛围换名换布局
+                    // 后旧房旧径残留
+                    cleanOrphanForests(cx1, cz1, cx2, cz2);
+                    checkCancel();
                     int W = cx2 - cx1 + 1, H = cz2 - cz1 + 1;
                     String tag = total > 1 ? "片 " + idx + "/" + total + " · " : "";
                     stage(tag + "扩散推理（" + W + "×" + H + "，比例尺 " + mpb + "m/格）");
@@ -1711,11 +1717,29 @@ public final class TerraService implements Listener {
             World w = Bukkit.getWorld(world);
             if (w == null) return;
             // 桥（本片官道跨水段：石桥面/栏杆/桥墩）+ 沿路装饰（路灯/里程碑/指路牌/驿站）
+            // 0.35.2 稳定性：三个装饰建造器逐个隔离——单个建造器出错（如 0.35.0
+            // 的 IRON_CHAIN 枚举缺失）只损失本片该类装饰并留日志，不再打断整个
+            // 生成任务（分片会正常标记完成；官道/城市主体不受影响）
             List<BlockEdit> bridgeEdits = new ArrayList<>();
-            CityWorks.bridges(g, civ, x1, z1, entry.seed, bridgeEdits);
-            CityWorks.roadside(g, civ, x1, z1, entry.seed, bridgeEdits);
+            try {
+                CityWorks.bridges(g, civ, x1, z1, entry.seed, bridgeEdits);
+            } catch (Throwable t) {
+                plugin.getLogger().log(Level.WARNING, "civ bridges", t);
+                progress.chat("桥梁装饰本片失败（已跳过）: " + rootMsg(t));
+            }
+            try {
+                CityWorks.roadside(g, civ, x1, z1, entry.seed, bridgeEdits);
+            } catch (Throwable t) {
+                plugin.getLogger().log(Level.WARNING, "civ roadside", t);
+                progress.chat("沿路装饰本片失败（已跳过）: " + rootMsg(t));
+            }
             // 港口 + 海上航线船只（0.35.0：跨海不修桥，两岸码头 + 航线古船）
-            HarborWorks.build(g, civ, x1, z1, entry.seed, bridgeEdits);
+            try {
+                HarborWorks.build(g, civ, x1, z1, entry.seed, bridgeEdits);
+            } catch (Throwable t) {
+                plugin.getLogger().log(Level.WARNING, "civ harbor", t);
+                progress.chat("港口/航线本片失败（已跳过）: " + rootMsg(t));
+            }
             if (!bridgeEdits.isEmpty()) applyEditsSync(w, bridgeEdits);
             // 聚落（中心在本片内才建；规划期已保证地块整体落在单片）
             for (CivPlanner.Site site : civ.sites()) {
@@ -2075,6 +2099,84 @@ public final class TerraService implements Listener {
             }
             eco.store().saveAll(eco.forests());
             progress.chat("生态完成：新建 " + n + " 片森林（forest list 可见，可继续 advance 演替/调参重铺）。");
+        }
+
+        /**
+         * 续跑护栏（0.35.2）：重建未完成分片前，把上次失败/取消留在该片里的
+         * "孤儿森林"整套抹掉——氛围方块（undo 回滚，散屋/小路/篝火全复原）、
+         * 树方块（生长模型逐树清除）、树实例与 forests.yml 记录。
+         * 判定 = 森林 region 的 XZ 完整落在本分片内（分片互不重叠、生态区按片
+         * 建立，邻片/他世界森林绝不误伤）。逐森林 try-catch：单片清理失败只损
+         * 失该片的整洁度，不阻断续跑本身。
+         */
+        private void cleanOrphanForests(int cx1, int cz1, int cx2, int cz2) {
+            List<Forest> orphans = new ArrayList<>();
+            for (Forest f : eco.forests().values()) {
+                Region r = f.region();
+                if (!world.equals(r.world())) continue;
+                if (r.minX() >= cx1 && r.maxX() <= cx2
+                        && r.minZ() >= cz1 && r.maxZ() <= cz2) {
+                    orphans.add(f);
+                }
+            }
+            if (orphans.isEmpty()) return;
+            World w = Bukkit.getWorld(world);
+            progress.chat("续跑护栏：清理未完成分片残留的 " + orphans.size()
+                    + " 片孤儿森林（氛围回滚+清树+除档）…");
+            for (Forest f : orphans) {
+                try {
+                    if (w != null) {
+                        waitOp(done -> Bukkit.getScheduler().runTask(plugin, () -> {
+                            try {
+                                terraAtmo.clear(f, w, cnt -> done.run());
+                            } catch (Throwable t) {
+                                plugin.getLogger().log(Level.WARNING, "orphan atmo clear", t);
+                                done.run();
+                            }
+                        }));
+                        if (!f.trees().isEmpty()) {
+                            waitOp(done -> Bukkit.getScheduler().runTask(plugin, () -> {
+                                try {
+                                    terraGrowth.clear(f, w, new ArrayList<>(f.trees()),
+                                            cnt -> done.run());
+                                } catch (Throwable t) {
+                                    plugin.getLogger().log(Level.WARNING, "orphan tree clear", t);
+                                    done.run();
+                                }
+                            }));
+                        }
+                    }
+                    f.clearTrees();
+                } catch (Exception e) {
+                    plugin.getLogger().log(Level.WARNING, "orphan forest " + f.name(), e);
+                }
+                eco.forests().remove(f.name());
+            }
+            eco.store().saveAll(eco.forests());
+            progress.chat("续跑护栏 ✔ 已移除 " + orphans.size() + " 片孤儿森林，本片将全新重建。");
+        }
+
+        /** 工作线程同步等待一个回调式操作（兜底 10 分钟；取消感知）。 */
+        private void waitOp(java.util.function.Consumer<Runnable> op) {
+            Object lock = new Object();
+            boolean[] done = {false};
+            op.accept(() -> {
+                synchronized (lock) {
+                    done[0] = true;
+                    lock.notifyAll();
+                }
+            });
+            synchronized (lock) {
+                long deadline = System.currentTimeMillis() + 10 * 60_000L;
+                while (!done[0] && System.currentTimeMillis() < deadline && !cancelled.get()) {
+                    try {
+                        lock.wait(1000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
         }
 
         /** 单区域：instant 种树 → 生长写入 → 氛围铺设。同步等待（工作线程）。 */
