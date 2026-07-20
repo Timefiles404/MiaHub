@@ -34,7 +34,38 @@ MiaEco 是 MiaHub monorepo（`Timefiles404/MiaHub`）里的一个 Paper 1.21.x /
 
 ## 版本历程（每版核心）
 
-- **0.38.0（本版）** 分区城第二条路（用户："不重写也不渐进，开第二条路，可视化
+- **0.39.0（本版）** 生成提速：多核吃满 + 分片流水线 + decoder 批量（用户："CPU
+  只用到 12% 还有冗余，能不能强化多核并把一部分计算交给 GPU？4k 图一个多小时
+  太久"）。审计结论（subagent 报告在会话 tasks）：推理全部串行在单条
+  terrain-diffusion-inference 线程上、分片与条带严格"算完等铺完再算下一块"，
+  12% ≈ 1~2 核——三层手术：
+  - **分片流水线重叠**（墙钟最大头）：专用预取线程把"下一片"的 fetchTerrain
+    提前跑（管线访问仍归口单推理线程，天然线程安全；预取只是把同一纯函数
+    提前，逐位一致）——本片铺设/生态期间 GPU 不再干等，整图墙钟从
+    Σ(推理+铺设) 逼近 max(推理, 铺设)。取到即用、失败自动本线程直取、
+    取消时残余预取只是暖缓存（续跑更快）。
+  - **条带双缓冲 + 行并行**：applyStrips 改 submit/await 票据——主线程按
+    blocks-per-tick 放块时，工作线程并行装配下一条带；buildStrip 16 行
+    并行（每行独立列表按序拼接，产出顺序逐位一致）。
+  - **推理线程 CPU 段全面并行**（"喂 GPU 的手"从 1 只变 N 只）：
+    LaplacianUtils（bilinearResize/高斯模糊两趟/decode/气温回归窗）、
+    GaussianNoisePatch（瓦片间并行，瓦片内 RNG 保序）、computeElev 解包+
+    平方还原、computeClimate 双线性、FloatTensor.addFrom（单次调用 dst
+    不重叠，≥32k 格并行）、fetchPooled 池化、buildPlanMap 高度/坡度场、
+    —全部逐格纯函数按行并行，与串行结果逐位一致（tileSeamRun 断言背书）。
+  - **decoder 批量推理**（把更多活交给 GPU 的正确姿势）：与 base 模型对齐
+    改 getOrCreateBatched(batch=4)——大图里 decoder 是窗口数最多的推理阶段，
+    一次前向吃 4 窗，kernel 启动与 CPU-GPU 空转大减；批内 CPU 前后处理
+    （解归一化/最近邻上采样/噪声/加权窗）也按窗并行。
+    **注意**：批量前向的浮点低位可能与逐窗版有别——0.38 及更早开建、尚未
+    跑完的地图跨版本续跑可能在片界出现细微高差接缝（与跨设备续跑同一性质），
+    建议未完成的图直接 regen；已完成的图不受影响。
+  - 实测（RTX 5070 Ti 笔记本）：512² 冷启动推理 31.1→28.2s、warm 9.9→8.5s、
+    池化 640² 11.7→10.9s；2048 riverMap 端到端 规划 278→232s。真正的大头
+    （分片重叠+双缓冲）离线工具测不出——它们只在 runMapTiled 生效，服务器
+    4k 图预计 30~45% 墙钟降幅；CPU 占用可看到从 1~2 核抬到多核。
+    铺设仍受 blocks-per-tick 限速保 TPS——空服可在控制台把铺设速率拉到 80k。
+- **0.38.0** 分区城第二条路（用户："不重写也不渐进，开第二条路，可视化
   菜单里能选类型——两种都保留，用多了就知道哪种好"）：
   - **WardWorks（terrain/ 新档）**：watabou《Medieval Fantasy City Generator》
     管线的栅格化实现，与 0.37 巷网城并列——①螺旋撒点 a=√i·2.4（中心密边缘疏，

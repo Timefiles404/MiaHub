@@ -66,7 +66,10 @@ public class FloatTensor {
             iterStrides[d] = iterStrides[d + 1] * count[d + 1];
         }
 
-        for (int flat = 0; flat < total; flat++) {
+        // 0.39.0：单次调用内 dst 下标互不重复（矩形区域一一映射）——大区域并行加；
+        // 浮点加法逐格独立，与串行逐位一致。跨调用的重叠混合仍由调用方串行保证。
+        final int totalF = total;
+        java.util.function.IntConsumer cell = flat -> {
             int dstFlat = 0, srcFlat = 0;
             for (int d = 0; d < n; d++) {
                 int idx = (flat / iterStrides[d]) % count[d];
@@ -74,6 +77,11 @@ public class FloatTensor {
                 srcFlat += (srcRegion[d][0] + idx) * src.strides[d];
             }
             data[dstFlat] += src.data[srcFlat];
+        };
+        if (totalF >= 1 << 15) {
+            java.util.stream.IntStream.range(0, totalF).parallel().forEach(cell);
+        } else {
+            for (int flat = 0; flat < totalF; flat++) cell.accept(flat);
         }
     }
 

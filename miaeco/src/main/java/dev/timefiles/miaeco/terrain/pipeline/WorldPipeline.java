@@ -395,51 +395,65 @@ public final class WorldPipeline implements AutoCloseable {
         float[] ww = linearWeightWindow(S);
         float t = (float) Math.atan(EDMScheduler.SIGMA_MAX / SIGMA_DATA);
 
-        return tileStore.getOrCreate("init_residual_map", new Integer[]{2, null, null},
-                (wi, args) -> decoderTile(wi, args.get(0), t, ww),
-                outWin, new InfiniteTensor[]{latents}, new TensorWindow[]{inpWin}, cacheLimitBytes);
+        // 0.39.0：decoder 与 base 一致改批量推理（batch=4）——一次前向吃 4 窗，
+        // 大图 decoder 是窗口数最多的阶段，批量显著减少 kernel 启动与 CPU-GPU 空转
+        return tileStore.getOrCreateBatched("init_residual_map", new Integer[]{2, null, null},
+                (wis, args) -> decoderBatch(wis, args.get(0), t, ww),
+                outWin, new InfiniteTensor[]{latents}, new TensorWindow[]{inpWin},
+                cacheLimitBytes, 4);
     }
 
-    private FloatTensor decoderTile(int[] wi, FloatTensor latentSlice, float t, float[] ww) {
+    private List<FloatTensor> decoderBatch(List<int[]> wis, List<FloatTensor> latentSlices,
+                                           float t, float[] ww) {
         int S = DECODER_TILE_SIZE, ST = DECODER_TILE_STRIDE, lc = LATENT_COMPRESSION;
         int Slc = S / lc;
-        int i1 = wi[1] * ST, j1 = wi[2] * ST;
+        int batch = wis.size();
         float cosT = (float) Math.cos(t), sinT = (float) Math.sin(t);
+        float[] modelIn = new float[batch * 5 * S * S];
+        float[][] xTArr = new float[batch][];
+        // 逐窗 CPU 预处理并行（解归一化/上采样/噪声——窗间独立、写域不重叠）
+        java.util.stream.IntStream.range(0, batch).parallel().forEach(b -> {
+            int[] wi = wis.get(b);
+            int i1 = wi[1] * ST, j1 = wi[2] * ST;
+            FloatTensor latentSlice = latentSlices.get(b);
+            float[] latFlat = new float[4 * Slc * Slc];
+            for (int ch = 0; ch < 4; ch++)
+                for (int px = 0; px < Slc * Slc; px++) {
+                    float w = latentSlice.data[5 * Slc * Slc + px];
+                    latFlat[ch * Slc * Slc + px] =
+                            (w > 1e-6f) ? latentSlice.data[ch * Slc * Slc + px] / w : 0f;
+                }
+            float[] upsampled = nearestUpsample(latFlat, 4, Slc, Slc, S, S);
+            float[] noise = flatten3D(GaussianNoisePatch.generate(seed + 5819, i1, j1, S, S, 1, S, S));
+            float[] xT = new float[S * S];
+            for (int k = 0; k < S * S; k++) xT[k] = sinT * noise[k] * SIGMA_DATA;  // sample=0
+            xTArr[b] = xT;
+            int base = b * 5 * S * S;
+            for (int k = 0; k < S * S; k++) modelIn[base + k] = xT[k] / SIGMA_DATA;
+            System.arraycopy(upsampled, 0, modelIn, base + S * S, 4 * S * S);
+        });
+        String chunkList = wis.stream().map(w -> "(" + w[1] + "," + w[2] + ")")
+                .collect(Collectors.joining(", "));
+        LOG.debug("Decoder model called for {} chunks: {}", batch, chunkList);
+        float[] noiseLabels = new float[batch];
+        java.util.Arrays.fill(noiseLabels, t);
+        float[] rawPred = decoderModel.runModel(
+                modelIn, new long[]{batch, 5, S, S}, noiseLabels, null, null);
 
-        // Unnormalize latents channels 0..3 (4 channels)
-        float[] latFlat = new float[4 * Slc * Slc];
-        for (int ch = 0; ch < 4; ch++)
-            for (int px = 0; px < Slc * Slc; px++) {
-                float w = latentSlice.data[5 * Slc * Slc + px];
-                latFlat[ch * Slc * Slc + px] = (w > 1e-6f) ? latentSlice.data[ch * Slc * Slc + px] / w : 0f;
+        FloatTensor[] results = new FloatTensor[batch];
+        java.util.stream.IntStream.range(0, batch).parallel().forEach(b -> {
+            float[] xT = xTArr[b];
+            FloatTensor result = new FloatTensor(new int[]{2, S, S});
+            int base = b * S * S;
+            for (int k = 0; k < S * S; k++) {
+                float pred = -rawPred[base + k];  // decoder model output is negated
+                float ns = (cosT * xT[k] - sinT * SIGMA_DATA * pred) / SIGMA_DATA;
+                result.data[k] = ns * ww[k];
             }
-
-        // Nearest-neighbor upsample (4, Slc, Slc) → (4, S, S)
-        float[] upsampled = nearestUpsample(latFlat, 4, Slc, Slc, S, S);
-
-        // One flow-matching step (sample starts at zero)
-        float[] noise = flatten3D(GaussianNoisePatch.generate(seed + 5819, i1, j1, S, S, 1, S, S));
-        float[] xT = new float[S * S];
-        for (int k = 0; k < S * S; k++) xT[k] = sinT * noise[k] * SIGMA_DATA;  // sample=0
-
-        // model_in = concat([xT/sigma_data (1,S,S), upsampled (4,S,S)]) → (5,S,S)
-        float[] modelIn = new float[5 * S * S];
-        for (int k = 0; k < S * S; k++) modelIn[k] = xT[k] / SIGMA_DATA;
-        System.arraycopy(upsampled, 0, modelIn, S * S, 4 * S * S);
-
-        LOG.debug("Decoder model called for chunk ({}, {}) tile pixels [{}, {}]-[{}, {}]", wi[1], wi[2], i1, j1, i1 + S, j1 + S);
-        float[] rawPred = decoderModel.runModel(modelIn, new long[]{1, 5, S, S}, new float[]{t}, null, null);
-
-        // sample = cos(t)*xT - sin(t)*sigma_data*(-rawPred); then / sigma_data
-        float[] newSample = new float[S * S];
-        for (int k = 0; k < S * S; k++) {
-            float pred = -rawPred[k];  // decoder model output is negated
-            newSample[k] = (cosT * xT[k] - sinT * SIGMA_DATA * pred) / SIGMA_DATA;
-        }
-        FloatTensor result = new FloatTensor(new int[]{2, S, S});
-        for (int px = 0; px < S * S; px++) result.data[px] = newSample[px] * ww[px];
-        System.arraycopy(ww, 0, result.data, S * S, S * S);
-        return result;
+            System.arraycopy(ww, 0, result.data, S * S, S * S);
+            results[b] = result;
+        });
+        return java.util.Arrays.asList(results);
     }
 
     // =========================================================================
@@ -515,38 +529,41 @@ public final class WorldPipeline implements AutoCloseable {
         int pj2 = -Math.floorDiv(-(j2 + padHr), lc) * lc;
         int pH = pi2 - pi1, pW = pj2 - pj1;
 
-        // Residual slice (2, pH, pW)
+        // Residual slice (2, pH, pW)——0.39.0：解包/平方还原按行并行（逐格纯函数）
         FloatTensor resSlice = residual.getSlice(new int[]{0, pi1, pj1}, new int[]{2, pi2, pj2});
         float[][] residualP = new float[pH][pW];
-        for (int r = 0; r < pH; r++)
+        java.util.stream.IntStream.range(0, pH).parallel().forEach(r -> {
             for (int c = 0; c < pW; c++) {
                 float w = resSlice.data[pH * pW + r * pW + c];
                 float v = (w > 1e-6f) ? resSlice.data[r * pW + c] / w : 0f;
                 residualP[r][c] = v * RESIDUAL_STD + RESIDUAL_MEAN;
             }
+        });
 
         // Latent slice (6, lH, lW)
         int lH = pH / lc, lW = pW / lc;
         FloatTensor latSlice = latents.getSlice(
                 new int[]{0, pi1 / lc, pj1 / lc}, new int[]{6, pi2 / lc, pj2 / lc});
         float[][] lowfreqP = new float[lH][lW];
-        for (int r = 0; r < lH; r++)
+        java.util.stream.IntStream.range(0, lH).parallel().forEach(r -> {
             for (int c = 0; c < lW; c++) {
                 float w = latSlice.data[5 * lH * lW + r * lW + c];
                 float v = (w > 1e-6f) ? latSlice.data[4 * lH * lW + r * lW + c] / w : 0f;
                 lowfreqP[r][c] = v * LOWFREQ_STD + LOWFREQ_MEAN;
             }
+        });
 
         float[][] newLowres = LaplacianUtils.laplacianDenoise(residualP, lowfreqP, sigma);
         float[][] elevP = LaplacianUtils.laplacianDecode(residualP, newLowres);
 
         int oi = i1 - pi1, oj = j1 - pj1, H = i2 - i1, W = j2 - j1;
         float[] flat = new float[H * W];
-        for (int r = 0; r < H; r++)
+        java.util.stream.IntStream.range(0, H).parallel().forEach(r -> {
             for (int c = 0; c < W; c++) {
                 float es = elevP[oi + r][oj + c];
                 flat[r * W + c] = (float) (Math.signum(es) * es * es);
             }
+        });
         return flat;
     }
 
@@ -600,9 +617,9 @@ public final class WorldPipeline implements AutoCloseable {
             centralCoarse[ch] = cropArray(full, cenPad, cenPad, cenH, cenW);
         }
 
-        // Bilinear upsample to native resolution
+        // Bilinear upsample to native resolution——0.39.0：按行并行（逐格纯函数）
         float[] climate = new float[5 * H * W];
-        for (int r = 0; r < H; r++) {
+        java.util.stream.IntStream.range(0, H).parallel().forEach(r -> {
             // fractional index into lbt/centralCoarse arrays (matches Python's u = (ii+0.5)/S - ci1 + 0.5)
             float gridY    = (i1 + r + 0.5f) / S - ci1 + 0.5f;
             float cenGridY = gridY;
@@ -620,7 +637,7 @@ public final class WorldPipeline implements AutoCloseable {
                 climate[3 * H * W + r * W + c] = bilinearSample2D(centralCoarse[5], cenH, cenW, cenGridY, cenGridX);
                 climate[4 * H * W + r * W + c] = beta;
             }
-        }
+        });
         return climate;
     }
 

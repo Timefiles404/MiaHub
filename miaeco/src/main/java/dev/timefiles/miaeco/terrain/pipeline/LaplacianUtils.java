@@ -19,9 +19,10 @@ public final class LaplacianUtils {
         int H = residual.length, W = residual[0].length;
         float[][] lowresUp = bilinearResize(lowres, H, W);
         float[][] result = new float[H][W];
-        for (int r = 0; r < H; r++)
+        java.util.stream.IntStream.range(0, H).parallel().forEach(r -> {
             for (int c = 0; c < W; c++)
                 result[r][c] = residual[r][c] + lowresUp[r][c];
+        });
         return result;
     }
 
@@ -50,11 +51,11 @@ public final class LaplacianUtils {
         return newLowres;
     }
 
-    /** Bilinear resize (align_corners=False, as in PyTorch). */
+    /** Bilinear resize (align_corners=False, as in PyTorch)。0.39.0：按行并行（逐格纯函数）。 */
     public static float[][] bilinearResize(float[][] src, int dstH, int dstW) {
         int srcH = src.length, srcW = src[0].length;
         float[][] dst = new float[dstH][dstW];
-        for (int r = 0; r < dstH; r++) {
+        java.util.stream.IntStream.range(0, dstH).parallel().forEach(r -> {
             float srcR = ((r + 0.5f) * srcH / dstH) - 0.5f;
             int r0 = (int) Math.floor(srcR);
             int r1 = r0 + 1;
@@ -73,7 +74,7 @@ public final class LaplacianUtils {
                         + wr * (1 - wc) * src[r1][c0]
                         + wr * wc * src[r1][c1];
             }
-        }
+        });
         return dst;
     }
 
@@ -131,7 +132,7 @@ public final class LaplacianUtils {
         return new float[][]{k};
     }
 
-    /** Separable Gaussian blur with reflect padding. */
+    /** Separable Gaussian blur with reflect padding。0.39.0：两趟均按行并行（逐格纯函数）。 */
     public static float[][] separableGaussianBlur(float[][] src, float[][] kernel1D) {
         float[] k = kernel1D[0];
         int ks = k.length;
@@ -140,7 +141,7 @@ public final class LaplacianUtils {
 
         // Horizontal pass
         float[][] tmp = new float[H][W];
-        for (int r = 0; r < H; r++) {
+        java.util.stream.IntStream.range(0, H).parallel().forEach(r -> {
             for (int c = 0; c < W; c++) {
                 float sum = 0;
                 for (int ki = 0; ki < ks; ki++) {
@@ -149,11 +150,11 @@ public final class LaplacianUtils {
                 }
                 tmp[r][c] = sum;
             }
-        }
+        });
 
         // Vertical pass
         float[][] result = new float[H][W];
-        for (int r = 0; r < H; r++) {
+        java.util.stream.IntStream.range(0, H).parallel().forEach(r -> {
             for (int c = 0; c < W; c++) {
                 float sum = 0;
                 for (int ki = 0; ki < ks; ki++) {
@@ -162,7 +163,7 @@ public final class LaplacianUtils {
                 }
                 result[r][c] = sum;
             }
-        }
+        });
         return result;
     }
 
@@ -185,7 +186,7 @@ public final class LaplacianUtils {
         float betaMin = -0.012f, betaMax = 0.0f;
         float eps = 1e-6f;
 
-        for (int r = 0; r < outH; r++) {
+        java.util.stream.IntStream.range(0, outH).parallel().forEach(r -> {
             for (int c = 0; c < outW; c++) {
                 // Compute windowed weighted averages (weight = land mask = e > 0)
                 double muT = 0, muE = 0, muE2 = 0, muET = 0, sumW = 0;
@@ -213,7 +214,7 @@ public final class LaplacianUtils {
                 result[0][r][c] = (float) (Tc - beta * ec);
                 result[1][r][c] = (float) beta;
             }
-        }
+        });
         return result;
     }
 }

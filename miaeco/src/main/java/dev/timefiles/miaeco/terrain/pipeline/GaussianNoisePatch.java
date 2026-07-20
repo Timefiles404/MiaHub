@@ -31,34 +31,36 @@ public final class GaussianNoisePatch {
         int tx0 = Math.floorDiv(x0, tileW);
         int tx1 = Math.floorDiv(x0 + w - 1, tileW);
 
-        for (int ty = ty0; ty <= ty1; ty++) {
+        // 0.39.0：瓦片间并行——每瓦片独立种子的顺序 RNG（瓦片内保序），
+        // 输出区域互不重叠，结果与串行逐位一致
+        int nTy = ty1 - ty0 + 1, nTx = tx1 - tx0 + 1;
+        java.util.stream.IntStream.range(0, nTy * nTx).parallel().forEach(ti -> {
+            int ty = ty0 + ti / nTx, tx = tx0 + ti % nTx;
             int tileY0 = ty * tileH;
-            for (int tx = tx0; tx <= tx1; tx++) {
-                int tileX0 = tx * tileW;
+            int tileX0 = tx * tileW;
 
-                int oy0 = Math.max(y0, tileY0);
-                int oy1 = Math.min(y0 + h, tileY0 + tileH);
-                int ox0 = Math.max(x0, tileX0);
-                int ox1 = Math.min(x0 + w, tileX0 + tileW);
+            int oy0 = Math.max(y0, tileY0);
+            int oy1 = Math.min(y0 + h, tileY0 + tileH);
+            int ox0 = Math.max(x0, tileX0);
+            int ox1 = Math.min(x0 + w, tileX0 + tileW);
 
-                long seed = PortableRng.tileSeed(baseSeed, ty, tx);
-                int tileLen = channels * tileH * tileW;
-                float[] tileFlat = new float[tileLen];
-                PortableRng.fillStandardNormal(seed, tileFlat, 0, tileLen);
+            long seed = PortableRng.tileSeed(baseSeed, ty, tx);
+            int tileLen = channels * tileH * tileW;
+            float[] tileFlat = new float[tileLen];
+            PortableRng.fillStandardNormal(seed, tileFlat, 0, tileLen);
 
-                for (int c = 0; c < channels; c++) {
-                    for (int py = oy0; py < oy1; py++) {
-                        int outY = py - y0;
-                        int tilePy = py - tileY0;
-                        for (int px = ox0; px < ox1; px++) {
-                            int outX = px - x0;
-                            int tilePx = px - tileX0;
-                            out[c][outY][outX] = tileFlat[c * (tileH * tileW) + tilePy * tileW + tilePx];
-                        }
+            for (int c = 0; c < channels; c++) {
+                for (int py = oy0; py < oy1; py++) {
+                    int outY = py - y0;
+                    int tilePy = py - tileY0;
+                    for (int px = ox0; px < ox1; px++) {
+                        int outX = px - x0;
+                        int tilePx = px - tileX0;
+                        out[c][outY][outX] = tileFlat[c * (tileH * tileW) + tilePy * tileW + tilePx];
                     }
                 }
             }
-        }
+        });
         return out;
     }
 

@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 
@@ -264,6 +265,13 @@ public final class TerraService implements Listener {
             this.progress = new TerraProgress(plugin, sender, world == null ? "" : world);
         }
 
+        /** 下一片推理预取的专用线程（0.39.0）：不占共享工作池，任务收尾时关闭。 */
+        private final ExecutorService prefetchExec = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "miaeco-terra-prefetch");
+            t.setDaemon(true);
+            return t;
+        });
+
         /** open 模式的山体增幅：高地渐进 +35%（低地几乎不动）——增强山体生成欲望。 */
         private float boost(float m) {
             if (!openEdge || m <= 0) return m;
@@ -404,6 +412,7 @@ public final class TerraService implements Listener {
                 fail("地形生成失败: " + rootMsg(t), t);
             } finally {
                 ModelAssetManager.setDownloadListener(null);
+                prefetchExec.shutdownNow();
                 job = null;
             }
         }
@@ -445,60 +454,98 @@ public final class TerraService implements Listener {
             long t0 = System.currentTimeMillis();
             if (total > 1) progress.chat("地图 " + sX + "×" + sZ + " 分为 " + total + " 片流水推进"
                     + (already.isEmpty() ? "" : "（检测到已完成分片，续跑）") + "。");
+            // ---- 分片流水线（0.39.0 提速）：预取线程把"下一片"的推理提前跑起来，
+            // 与本片的 规划/铺设/生态/文明 并行——GPU/推理线程不再在铺设期间干等，
+            // 整图墙钟 ≈ max(推理总时, 铺设+生态总时) 而不是两者之和。
+            // 预取只是把同一纯函数计算提前（张量窗口进缓存，取回逐位一致）。
+            record TileRect(int cx1, int cz1, int cx2, int cz2) { }
+            List<TileRect> pending = new ArrayList<>();
             for (int tz = 0; tz < nTz; tz++) {
                 for (int tx = 0; tx < nTx; tx++) {
-                    idx++;
                     int cx1 = mapX1 + (int) ((long) sX * tx / nTx);
                     int cx2 = mapX1 + (int) ((long) sX * (tx + 1) / nTx) - 1;
                     int cz1 = mapZ1 + (int) ((long) sZ * tz / nTz);
                     int cz2 = mapZ1 + (int) ((long) sZ * (tz + 1) / nTz) - 1;
-                    if (coveredBy(already, cx1, cz1, cx2, cz2)) {
-                        skipped++;
-                        continue;
-                    }
-                    checkCancel();
-                    // 续跑护栏（0.35.2）：这一片没有完成标记但可能已经跑过一半
-                    // （生态成功、后续阶段失败/取消）——先清掉上次留下的孤儿森林
-                    // （记录+树方块+氛围回滚），否则重跑会双份注册、氛围换名换布局
-                    // 后旧房旧径残留
-                    cleanOrphanForests(cx1, cz1, cx2, cz2);
-                    checkCancel();
-                    int W = cx2 - cx1 + 1, H = cz2 - cz1 + 1;
-                    String tag = total > 1 ? "片 " + idx + "/" + total + " · " : "";
-                    stage(tag + "扩散推理（" + W + "×" + H + "，比例尺 " + mpb + "m/格）");
-                    long w0 = LocalTerrainProvider.windowCount();
-                    Thread poller = startInferencePoller(w0,
-                            estimateWindowsFor(W + 2 * APRON, H + 2 * APRON));
-                    LocalTerrainProvider.HeightmapData data;
-                    long tInf = System.currentTimeMillis();
-                    try {
-                        data = fetchTerrain(cx1 - APRON, cz1 - APRON, W + 2 * APRON, H + 2 * APRON);
-                    } finally {
-                        poller.interrupt();
-                    }
-                    progress.update(1.0, (System.currentTimeMillis() - tInf) / 1000 + "s · "
-                            + (LocalTerrainProvider.windowCount() - w0) + " 窗口");
-                    checkCancel();
-                    Plan plan = buildPlanMap(data, cx1, cz1, W, H, APRON, mapX1, mapZ1, sX, sZ);
-                    checkCancel();
-                    stage(tag + "地形铺设（约 " + human(plan.totalOps) + " 处）");
-                    applyStrips(plan, cx1, cz1, W, H);
-                    checkCancel();
-                    runBoulders(plan, cx1, cz1, W, H);
-                    if (st.geoFeatures()) {
-                        runGeo(plan, cx1, cz1, W, H);
-                        checkCancel();
-                    }
-                    if (withEco) runEco(plan, cx1, cz1, W, H);
-                    if (!civ.isEmpty()) runCiv(plan, cx1, cz1, W, H);
-                    if (cx1 <= 0 && cx2 >= 0 && cz1 <= 0 && cz2 >= 0) {
-                        maybeSetSpawn(cx1, cz1, W, H, plan);
-                        removeStagingPlatform();
-                    }
-                    worlds.addPatch(world, new EcoWorlds.Patch(cx1, cz1, cx2, cz2));
-                    notifyPatch();
+                    pending.add(new TileRect(cx1, cz1, cx2, cz2));
                 }
             }
+            java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<
+                    LocalTerrainProvider.HeightmapData>> prefetch =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            long[] prefetchKey = {Long.MIN_VALUE};
+            for (int ti = 0; ti < pending.size(); ti++) {
+                TileRect tr = pending.get(ti);
+                idx++;
+                int cx1 = tr.cx1(), cz1 = tr.cz1(), cx2 = tr.cx2(), cz2 = tr.cz2();
+                if (coveredBy(already, cx1, cz1, cx2, cz2)) {
+                    skipped++;
+                    continue;
+                }
+                checkCancel();
+                // 续跑护栏（0.35.2）：这一片没有完成标记但可能已经跑过一半
+                // （生态成功、后续阶段失败/取消）——先清掉上次留下的孤儿森林
+                // （记录+树方块+氛围回滚），否则重跑会双份注册、氛围换名换布局
+                // 后旧房旧径残留
+                cleanOrphanForests(cx1, cz1, cx2, cz2);
+                checkCancel();
+                int W = cx2 - cx1 + 1, H = cz2 - cz1 + 1;
+                String tag = total > 1 ? "片 " + idx + "/" + total + " · " : "";
+                stage(tag + "扩散推理（" + W + "×" + H + "，比例尺 " + mpb + "m/格）");
+                long w0 = LocalTerrainProvider.windowCount();
+                Thread poller = startInferencePoller(w0,
+                        estimateWindowsFor(W + 2 * APRON, H + 2 * APRON));
+                LocalTerrainProvider.HeightmapData data;
+                long tInf = System.currentTimeMillis();
+                try {
+                    var pf = prefetch.getAndSet(null);
+                    if (pf != null && prefetchKey[0] == tileKey(cx1, cz1)) {
+                        data = pf.get();                          // 预取命中：秒回
+                    } else {
+                        if (pf != null) pf.cancel(false);
+                        data = fetchTerrain(cx1 - APRON, cz1 - APRON,
+                                W + 2 * APRON, H + 2 * APRON);
+                    }
+                } catch (java.util.concurrent.ExecutionException e) {
+                    // 预取失败不致命：本线程直取一次
+                    plugin.getLogger().log(Level.WARNING, "tile prefetch", e);
+                    data = fetchTerrain(cx1 - APRON, cz1 - APRON, W + 2 * APRON, H + 2 * APRON);
+                } finally {
+                    poller.interrupt();
+                }
+                progress.update(1.0, (System.currentTimeMillis() - tInf) / 1000 + "s · "
+                        + (LocalTerrainProvider.windowCount() - w0) + " 窗口");
+                checkCancel();
+                // ---- 预取下一片（找到下一个未完成的片；专用线程，不占共享工作池）----
+                for (int tj = ti + 1; tj < pending.size(); tj++) {
+                    TileRect nx = pending.get(tj);
+                    if (coveredBy(already, nx.cx1(), nx.cz1(), nx.cx2(), nx.cz2())) continue;
+                    int nW = nx.cx2() - nx.cx1() + 1, nH = nx.cz2() - nx.cz1() + 1;
+                    prefetchKey[0] = tileKey(nx.cx1(), nx.cz1());
+                    prefetch.set(prefetchExec.submit(() -> fetchTerrain(nx.cx1() - APRON,
+                            nx.cz1() - APRON, nW + 2 * APRON, nH + 2 * APRON)));
+                    break;
+                }
+                Plan plan = buildPlanMap(data, cx1, cz1, W, H, APRON, mapX1, mapZ1, sX, sZ);
+                checkCancel();
+                stage(tag + "地形铺设（约 " + human(plan.totalOps) + " 处）");
+                applyStrips(plan, cx1, cz1, W, H);
+                checkCancel();
+                runBoulders(plan, cx1, cz1, W, H);
+                if (st.geoFeatures()) {
+                    runGeo(plan, cx1, cz1, W, H);
+                    checkCancel();
+                }
+                if (withEco) runEco(plan, cx1, cz1, W, H);
+                if (!civ.isEmpty()) runCiv(plan, cx1, cz1, W, H);
+                if (cx1 <= 0 && cx2 >= 0 && cz1 <= 0 && cz2 >= 0) {
+                    maybeSetSpawn(cx1, cz1, W, H, plan);
+                    removeStagingPlatform();
+                }
+                worlds.addPatch(world, new EcoWorlds.Patch(cx1, cz1, cx2, cz2));
+                notifyPatch();
+            }
+            var leftover = prefetch.getAndSet(null);
+            if (leftover != null) leftover.cancel(false);
             long mins = (System.currentTimeMillis() - t0) / 60_000L;
             String fit = riverFit[2] > 0
                     ? String.format("，河道贴地：残余深切 %.1f‰/壅水 %.1f‰",
@@ -602,7 +649,8 @@ public final class TerraService implements Listener {
             boolean[] eOcean = new boolean[EW * EH];
             short[] eBio = new short[EW * EH];
             byte[] eFrac = new byte[EW * EH];
-            for (int ez = 0; ez < EH; ez++) {
+            // 0.39.0：逐格纯函数，按行并行（写入互不重叠，结果与串行逐位一致）
+            java.util.stream.IntStream.range(0, EH).parallel().forEach(ez -> {
                 for (int ex = 0; ex < EW; ex++) {
                     int gx = x1 - apron + ex, gz = z1 - apron + ez;
                     int d = Math.min(Math.min(gx - mapX1, gz - mapZ1),
@@ -628,7 +676,7 @@ public final class TerraService implements Listener {
                     // 平原节奏：大平原按大尺度噪声翻出小林班/疏林/草甸（纯世界坐标函数）
                     eBio[i] = PlanOps.rhythm(b, gx, gz, entry.seed ^ 0x4174L);
                 }
-            }
+            });
             // ---- 全图水系栅格化：湖/扇/洲/泉/河道一次写入，改写 ey、标水位/浅滩/地貌 ----
             boolean[] eRiver = new boolean[EW * EH];
             boolean[] eShoal = new boolean[EW * EH];
@@ -653,16 +701,16 @@ public final class TerraService implements Listener {
             CivPlanner.rasterize(civ, ey, eWater, eRiver, eCiv, EW, EH, x1 - apron, z1 - apron);
             // ---- 水岸齐平：贴海的 sea+1 陆列压到 sea（-- 而非 -_）----
             PlanOps.flushShore(ey, eWater, eRiver, eShoal, EW, EH, sea);
-            // ---- 坡度（4 邻，齐平/河道之后）----
+            // ---- 坡度（4 邻，齐平/河道之后；只读 ey 按行并行）----
             byte[] eSlope = new byte[EW * EH];
-            for (int ez = 1; ez < EH - 1; ez++) {
+            java.util.stream.IntStream.range(1, EH - 1).parallel().forEach(ez -> {
                 for (int ex = 1; ex < EW - 1; ex++) {
                     int e = ez * EW + ex, y = ey[e];
                     int sl = Math.max(Math.max(Math.abs(ey[e - 1] - y), Math.abs(ey[e + 1] - y)),
                             Math.max(Math.abs(ey[e - EW] - y), Math.abs(ey[e + EW] - y)));
                     eSlope[e] = (byte) Math.min(127, sl);
                 }
-            }
+            });
             // ---- 海岸带群系：红树/砾石滩/滨海草甸/海岸崖/椰林沙滩，森林退出海岸 ----
             int[] coast = PlanOps.coastDistance(eWater, eOcean, EW, EH, PlanOps.COAST_BAND);
             PlanOps.coastal(eBio, coast, ey, eSlope, EW, EH, sea,
@@ -854,6 +902,10 @@ public final class TerraService implements Listener {
                 }
             }
             return rp;
+        }
+
+        private static long tileKey(int cx1, int cz1) {
+            return ((long) cx1 << 32) ^ (cz1 & 0xFFFFFFFFL);
         }
 
         /** 地图分片跨度（与 runMapTiled 同一公式；civ 聚落单片约束用）。 */
@@ -1131,21 +1183,59 @@ public final class TerraService implements Listener {
             World w = Bukkit.getWorld(world);
             if (w == null) throw new IllegalStateException("世界未加载: " + world);
             long[] opsDone = {0};
+            // 双缓冲（0.39.0）：上一条带在主线程按 tick 预算放块时，本线程并行
+            // 构建下一条带——条带装配（皮肤/层理/洞穴逐列计算）不再占用墙钟
+            StripTicket prev = null;
             for (int zs = 0; zs < H; zs += 16) {
                 checkCancel();
                 int rows = Math.min(16, H - zs);
                 List<BlockEdit> edits = new ArrayList<>(rows * W * 24);
                 List<int[]> biomeOps = new ArrayList<>(rows * W / 4);
                 buildStrip(p, x1, z1, W, H, zs, rows, edits, biomeOps);
-                applyStripSync(w, x1, z1 + zs, W, rows, edits, biomeOps, opsDone, p.totalOps);
+                if (prev != null) prev.await();
+                prev = submitStrip(w, x1, z1 + zs, W, rows, edits, biomeOps, opsDone, p.totalOps);
+            }
+            if (prev != null) prev.await();
+        }
+
+        /**
+         * 单条带的方块+biome 计划（工作线程，纯计算）。
+         * 0.39.0：16 行并行装配（每行独立列表按序拼接——产出顺序与串行逐位一致；
+         * 逐列只读 Plan + 纯哈希噪声，天然线程安全）。
+         */
+        private void buildStrip(Plan p, int x1, int z1, int W, int H, int zs, int rows,
+                                List<BlockEdit> edits, List<int[]> biomeOps) {
+            List<List<BlockEdit>> rowEdits = new ArrayList<>(rows);
+            List<List<int[]>> rowBiomes = new ArrayList<>(rows);
+            for (int dz = 0; dz < rows; dz++) {
+                rowEdits.add(new ArrayList<>(W * 26));
+                rowBiomes.add(new ArrayList<>(W / 4 + 4));
+            }
+            java.util.stream.IntStream.range(0, rows).parallel().forEach(dz ->
+                    buildRow(p, x1, z1, W, H, zs + dz, rowEdits.get(dz), rowBiomes.get(dz)));
+            for (int dz = 0; dz < rows; dz++) {
+                edits.addAll(rowEdits.get(dz));
+                biomeOps.addAll(rowBiomes.get(dz));
+            }
+            // biome 四分格列（x/z 对齐到 4 的倍数；采样格 clamp 回选区）——条带级一次
+            int zq0 = Math.floorDiv(z1 + zs + 3, 4) * 4;
+            for (int wzq = zq0; wzq <= z1 + zs + rows - 1; wzq += 4) {
+                int z = Math.min(H - 1, Math.max(0, wzq - z1 + 1));
+                int xq0 = Math.floorDiv(x1 + 3, 4) * 4;
+                for (int wxq = xq0; wxq <= x1 + W - 1; wxq += 4) {
+                    int x = Math.min(W - 1, Math.max(0, wxq - x1 + 1));
+                    int i = z * W + x;
+                    int y = p.y[i];
+                    int lo = (p.water[i] ? y : Math.min(y, mapper.sea())) - 8;
+                    int hi = y + 16;
+                    biomeOps.add(new int[]{wxq, wzq, lo, hi, p.biome[i]});
+                }
             }
         }
 
-        /** 单条带的方块+biome 计划（工作线程，纯计算）。 */
-        private void buildStrip(Plan p, int x1, int z1, int W, int H, int zs, int rows,
-                                List<BlockEdit> edits, List<int[]> biomeOps) {
-            for (int dz = 0; dz < rows; dz++) {
-                int z = zs + dz;
+        private void buildRow(Plan p, int x1, int z1, int W, int H, int z,
+                              List<BlockEdit> edits, List<int[]> biomeOps) {
+            {
                 for (int x = 0; x < W; x++) {
                     int i = z * W + x;
                     int wx = x1 + x, wz = z1 + z;
@@ -1261,20 +1351,6 @@ public final class TerraService implements Listener {
                     }
                 }
             }
-            // biome 四分格列（x/z 对齐到 4 的倍数；采样格 clamp 回选区）
-            int zq0 = Math.floorDiv(z1 + zs + 3, 4) * 4;
-            for (int wzq = zq0; wzq <= z1 + zs + rows - 1; wzq += 4) {
-                int z = Math.min(H - 1, Math.max(0, wzq - z1 + 1));
-                int xq0 = Math.floorDiv(x1 + 3, 4) * 4;
-                for (int wxq = xq0; wxq <= x1 + W - 1; wxq += 4) {
-                    int x = Math.min(W - 1, Math.max(0, wxq - x1 + 1));
-                    int i = z * W + x;
-                    int y = p.y[i];
-                    int lo = (p.water[i] ? y : Math.min(y, mapper.sea())) - 8;
-                    int hi = y + 16;
-                    biomeOps.add(new int[]{wxq, wzq, lo, hi, p.biome[i]});
-                }
-            }
         }
 
         /** 洞穴替换：该格若被雕刻，返回洞穴填充（洞穴空气/偶发石笋），否则 null。 */
@@ -1288,12 +1364,32 @@ public final class TerraService implements Listener {
             return BlockSpec.of(Material.CAVE_AIR);
         }
 
-        /** 主线程限速应用一个条带（方块 + biome），完成后返回工作线程。 */
-        private void applyStripSync(World w, int sx, int sz, int width, int rows,
-                                    List<BlockEdit> edits, List<int[]> biomeOps,
-                                    long[] opsDone, long totalOps) {
-            Object lock = new Object();
-            boolean[] finished = {false};
+        /** 条带铺设票据（0.39.0 双缓冲）：submit 后主线程按 tick 预算放块，await 等完成。 */
+        private final class StripTicket {
+            final Object lock = new Object();
+            boolean finished;
+
+            void await() {
+                synchronized (lock) {
+                    while (!finished) {
+                        try {
+                            lock.wait(500);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new CancelledException();
+                        }
+                    }
+                }
+                if (cancelled.get()) throw new CancelledException();
+            }
+        }
+
+        /** 主线程限速应用一个条带（方块 + biome）；立即返回票据，await 才阻塞。 */
+        private StripTicket submitStrip(World w, int sx, int sz, int width, int rows,
+                                        List<BlockEdit> edits, List<int[]> biomeOps,
+                                        long[] opsDone, long totalOps) {
+            StripTicket ticket = new StripTicket();
+            Object lock = ticket.lock;
             Bukkit.getScheduler().runTask(plugin, () -> {
                 int c1 = sx >> 4, c2 = (sx + width) >> 4, cz1 = sz >> 4, cz2 = (sz + rows) >> 4;
                 for (int cx = c1; cx <= c2; cx++)
@@ -1332,23 +1428,13 @@ public final class TerraService implements Listener {
                         for (int cx = c1; cx <= c2; cx++)
                             for (int cz = cz1; cz <= cz2; cz++) w.removePluginChunkTicket(cx, cz, plugin);
                         synchronized (lock) {
-                            finished[0] = true;
+                            ticket.finished = true;
                             lock.notifyAll();
                         }
                     }
                 }.runTaskTimer(plugin, 1L, 1L);
             });
-            synchronized (lock) {
-                while (!finished[0]) {
-                    try {
-                        lock.wait(500);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new CancelledException();
-                    }
-                }
-            }
-            if (cancelled.get()) throw new CancelledException();
+            return ticket;
         }
 
         /** BlockSpec → BlockData（地形皮肤只用简单材质，直接建默认态；雪层单独处理）。 */
@@ -2562,16 +2648,18 @@ public final class TerraService implements Listener {
         int PW = W + 2, PH = H + 2;
         float[] elevPad = new float[PH * PW];
         float[] clim = new float[5 * H * W];
-        for (int r = 0; r < PH; r++) {
+        // 0.39.0：池化按行并行（逐格独立求和，与串行逐位一致——求和顺序 dr→dc 不变）
+        java.util.stream.IntStream.range(0, PH).parallel().forEach(r -> {
             for (int c = 0; c < PW; c++) {
                 float sum = 0;
                 for (int dr = 0; dr < p; dr++)
                     for (int dc = 0; dc < p; dc++) sum += elevN[(r * p + dr) * nW + c * p + dc];
                 elevPad[r * PW + c] = sum / (p * p);
             }
-        }
-        for (int ch = 0; ch < 5 && climN != null; ch++) {
-            for (int r = 0; r < H; r++) {
+        });
+        if (climN != null) {
+            java.util.stream.IntStream.range(0, 5 * H).parallel().forEach(rr -> {
+                int ch = rr / H, r = rr % H;
                 for (int c = 0; c < W; c++) {
                     float sum = 0;
                     for (int dr = 0; dr < p; dr++)
@@ -2579,7 +2667,7 @@ public final class TerraService implements Listener {
                             sum += climN[ch * nH * nW + ((r + 1) * p + dr) * nW + (c + 1) * p + dc];
                     clim[ch * H * W + r * W + c] = sum / (p * p);
                 }
-            }
+            });
         }
         float[] elev = new float[H * W];
         for (int r = 0; r < H; r++)
