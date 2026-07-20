@@ -563,12 +563,22 @@ public final class HubConsole implements Listener {
                 ChatColor.GRAY + "world create / hub new 的 size 上限"));
         m.inv.setItem(20, toggleItem(Material.BELL, "文明层（聚落+官道）",
                 cfg.getBoolean("terrain.civilization", true)));
+        String cs = cfg.getString("terrain.city-style", "mixed");
+        m.inv.setItem(21, item(Material.BRICKS, ChatColor.AQUA + "城内布局：" + cityStyleName(cs),
+                ChatColor.GRAY + "点击循环 混合 → 巷网城 → 分区城",
+                ChatColor.GRAY + "巷网城=街距场生长巷道+沿街连排（0.37）",
+                ChatColor.GRAY + "分区城=Voronoi 分区+区界街+块内窄巷（0.38）",
+                ChatColor.GRAY + "混合=同图五五开，方便对比；下个任务生效"));
         m.inv.setItem(15, item(Material.BOOK, ChatColor.AQUA + "只读参数（启动期定死）",
                 ChatColor.GRAY + "推理设备 device=" + cfg.getString("terrain.device", "cpu"),
                 ChatColor.GRAY + "原生比例 scale=" + cfg.getInt("terrain.scale", 2),
                 ChatColor.GRAY + "推理线程 " + cfg.getInt("terrain.inference-threads", 0),
                 ChatColor.DARK_GRAY + "改这些请编辑 config.yml 并重启"));
         m.inv.setItem(22, item(Material.OAK_DOOR, ChatColor.GRAY + "返回总览"));
+    }
+
+    private static String cityStyleName(String cs) {
+        return "lanes".equals(cs) ? "巷网城" : "wards".equals(cs) ? "分区城" : "混合";
     }
 
     private void clickConfig(Player p, Menu m, int slot) {
@@ -608,6 +618,13 @@ public final class HubConsole implements Listener {
             }
             case 20 -> {
                 cfg.set("terrain.civilization", !cfg.getBoolean("terrain.civilization", true));
+                eco.reloadTerraSettings();
+                drawConfig(m);
+            }
+            case 21 -> {
+                String cur = cfg.getString("terrain.city-style", "mixed");
+                cfg.set("terrain.city-style",
+                        "mixed".equals(cur) ? "lanes" : "lanes".equals(cur) ? "wards" : "mixed");
                 eco.reloadTerraSettings();
                 drawConfig(m);
             }

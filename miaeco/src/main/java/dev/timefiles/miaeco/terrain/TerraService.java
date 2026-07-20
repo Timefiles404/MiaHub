@@ -51,7 +51,7 @@ public final class TerraService implements Listener {
                            boolean autoEco, int ecoMinCells, int ecoCap, long maxEcoFootprint,
                            boolean caves, boolean cliffErosion, boolean geoFeatures,
                            int splitCells, int mapMaxSize, double riverDensity,
-                           boolean templateTrees, boolean civilization) { }
+                           boolean templateTrees, boolean civilization, String cityStyle) { }
 
     public Settings settings() { return st; }
 
@@ -1796,7 +1796,8 @@ public final class TerraService implements Listener {
                         + " @ " + site.wx() + "," + site.wz());
                 try {
                     List<BlockEdit> edits = new ArrayList<>();
-                    String summary = CityWorks.build(g, x1, z1, site, entry.seed, edits);
+                    String summary = CityWorks.build(g, x1, z1, site, entry.seed,
+                            st.cityStyle(), edits);
                     if (!edits.isEmpty()) {
                         applyEditsSync(w, edits);
                         progress.chat("聚落 ✔ " + summary + "（" + human(edits.size()) + " 方块）");

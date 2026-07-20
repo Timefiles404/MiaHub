@@ -53,6 +53,11 @@ terrain:
   # 城镇分级、依水择址）+ 官道网（全联通+捷径、跨水板桥）+ 建城（城墙/街网/
   # 沿街房屋/广场/王城区/农田带/路灯）。生态树木自动避让城区与大道。
   civilization: true
+  # 城内布局风格（0.38.0 双路并行，hub 控制台配置页可切）：
+  #   mixed = 按聚落哈希五五开（同图两种都出，方便对比）
+  #   lanes = 巷网城（0.37.0：街距场生长巷道 + 沿街连排）
+  #   wards = 分区城（0.38.0：watabou 式 Voronoi 分区 + 区界街 + 块内窄巷连排 + 园圃区）
+  city-style: mixed
   # 画布世界 terra gen 默认只种树库模板树（镜像×旋转变体，生成快且规整）；
   # 地图世界按创建参数 trees=template|auto（hub 草稿操作台也可切）
   template-trees: false

@@ -108,19 +108,23 @@ public final class CityProbeTool {
         };
         java.io.File outDir = new java.io.File(args.length > 0 ? args[0] : "build/cityprobe");
         outDir.mkdirs();
-        for (int biome : new int[]{1, 5, 94}) {
-            List<BlockEdit> edits = new ArrayList<>();
-            String sum = CityWorks.build(mk.apply(biome), ox, oz, cap, 20260709L, edits);
-            final int[] fey2 = ey;
-            long tall = edits.stream().filter(e -> {
-                int lx = e.x() - ox, lz = e.z() - oz;
-                return lx >= 0 && lz >= 0 && lx < EW && lz < EH
-                        && e.spec().material != org.bukkit.Material.AIR
-                        && e.y() > fey2[lz * EW + lx] + 3;
-            }).count();
-            System.out.println("biome=" + biome + ": " + sum + " (" + edits.size()
-                    + " edits, tall=" + tall + ")");
-            renderPlan(edits, ey, EW, EH, ox, oz, new java.io.File(outDir, "city_" + biome + ".png"));
+        for (String style : new String[]{"lanes", "wards"}) {
+            for (int biome : new int[]{1, 5, 94}) {
+                List<BlockEdit> edits = new ArrayList<>();
+                String sum = CityWorks.build(mk.apply(biome), ox, oz, cap, 20260709L,
+                        style, edits);
+                final int[] fey2 = ey;
+                long tall = edits.stream().filter(e -> {
+                    int lx = e.x() - ox, lz = e.z() - oz;
+                    return lx >= 0 && lz >= 0 && lx < EW && lz < EH
+                            && e.spec().material != org.bukkit.Material.AIR
+                            && e.y() > fey2[lz * EW + lx] + 3;
+                }).count();
+                System.out.println("style=" + style + " biome=" + biome + ": " + sum
+                        + " (" + edits.size() + " edits, tall=" + tall + ")");
+                renderPlan(edits, ey, EW, EH, ox, oz,
+                        new java.io.File(outDir, "city_" + biome + "_" + style + ".png"));
+            }
         }
         System.out.println("PNG -> " + outDir.getAbsolutePath());
     }

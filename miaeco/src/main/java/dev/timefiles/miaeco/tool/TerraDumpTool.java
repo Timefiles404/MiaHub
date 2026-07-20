@@ -281,33 +281,38 @@ public final class TerraDumpTool {
                     @Override public short biome(int lx, int lz) { return (short) biome; }
                     @Override public int wlvl(int lx, int lz) { return sea; }
                 };
-        for (int biome : new int[]{1, 5, 94}) {
-            List<BlockEdit> edits = new ArrayList<>();
-            try {
-                String sum = dev.timefiles.miaeco.terrain.CityWorks.build(
-                        mk.apply(biome), ox, oz, cap, 20260709L, edits);
-                if (edits.size() < 5000) {
-                    System.out.println("CITY BUILD THIN FAIL biome=" + biome + ": " + edits.size());
+        for (String style : new String[]{"lanes", "wards"}) {
+            for (int biome : new int[]{1, 5, 94}) {
+                List<BlockEdit> edits = new ArrayList<>();
+                try {
+                    String sum = dev.timefiles.miaeco.terrain.CityWorks.build(
+                            mk.apply(biome), ox, oz, cap, 20260709L, style, edits);
+                    if (edits.size() < 5000) {
+                        System.out.println("CITY BUILD THIN FAIL " + style + " biome="
+                                + biome + ": " + edits.size());
+                        fail = true;
+                    }
+                    if (biome == 94 && !sum.contains("希腊白城")) {
+                        System.out.println("GREEK CITY FAIL: 海岸城未切希腊风 -> " + sum);
+                        fail = true;
+                    }
+                    // 房屋数防回归（0.34.0 曾因扫描奇偶错开街线归零；0.38.0 两风格都查）
+                    int hIdx = sum.indexOf("房屋×");
+                    int hEnd = hIdx < 0 ? -1 : sum.indexOf(' ', hIdx);
+                    int housesN = hIdx < 0 ? -1
+                            : Integer.parseInt(sum.substring(hIdx + 3, hEnd < 0 ? sum.length() : hEnd));
+                    if (housesN < 15) {
+                        System.out.println("CITY HOUSES FAIL " + style + " biome=" + biome
+                                + ": " + housesN + " <15");
+                        fail = true;
+                    }
+                    System.out.println("civ city " + style + " biome=" + biome + ": " + sum
+                            + " (" + edits.size() + " edits)");
+                } catch (Exception e) {
+                    System.out.println("CITY BUILD EXC FAIL " + style + " biome=" + biome + ": " + e);
+                    e.printStackTrace(System.out);
                     fail = true;
                 }
-                if (biome == 94 && !sum.contains("希腊白城")) {
-                    System.out.println("GREEK CITY FAIL: 海岸城未切希腊风 -> " + sum);
-                    fail = true;
-                }
-                // 房屋数防回归（0.34.0 曾因扫描奇偶错开街线归零）
-                int hIdx = sum.indexOf("房屋×");
-                int hEnd = hIdx < 0 ? -1 : sum.indexOf(' ', hIdx);
-                int housesN = hIdx < 0 ? -1
-                        : Integer.parseInt(sum.substring(hIdx + 3, hEnd < 0 ? sum.length() : hEnd));
-                if (housesN < 15) {
-                    System.out.println("CITY HOUSES FAIL biome=" + biome + ": " + housesN + " <15");
-                    fail = true;
-                }
-                System.out.println("civ city biome=" + biome + ": " + sum + " (" + edits.size() + " edits)");
-            } catch (Exception e) {
-                System.out.println("CITY BUILD EXC FAIL biome=" + biome + ": " + e);
-                e.printStackTrace(System.out);
-                fail = true;
             }
         }
         // 桥：整幅水道窗口

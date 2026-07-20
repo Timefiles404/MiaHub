@@ -36,36 +36,36 @@ public final class CityWorks {
     }
 
     /** 风格件包：街面调色板/墙体/灯柱/篱笆材质组。 */
-    private record Kit(String pieceStyle, RoadPaint.Palette streets, Material wallCore,
+    record Kit(String pieceStyle, RoadPaint.Palette streets, Material wallCore,
                        Material wallVary, Material wallBand, Material fence, Material lampBase,
                        Material plazaA, Material plazaB, String lootHouse) { }
 
-    private static final Kit DESERT = new Kit("desert",
+    static final Kit DESERT = new Kit("desert",
             RoadPaint.CITY_DESERT,
             Material.SMOOTH_SANDSTONE, Material.SANDSTONE, Material.CUT_SANDSTONE,
             Material.SANDSTONE_WALL, Material.SANDSTONE_WALL,
             Material.SMOOTH_SANDSTONE, Material.CUT_SANDSTONE,
             "chests/village/village_desert_house");
-    private static final Kit MEDIEVAL_PLAINS = new Kit("medieval/plains",
+    static final Kit MEDIEVAL_PLAINS = new Kit("medieval/plains",
             RoadPaint.CITY_MEDIEVAL,
             Material.STONE_BRICKS, Material.COBBLESTONE, Material.MOSSY_STONE_BRICKS,
             Material.OAK_FENCE, Material.OAK_FENCE,
             Material.COBBLESTONE, Material.GRAVEL,
             "chests/village/village_plains_house");
-    private static final Kit MEDIEVAL_TAIGA = new Kit("medieval/taiga",
+    static final Kit MEDIEVAL_TAIGA = new Kit("medieval/taiga",
             RoadPaint.CITY_MEDIEVAL,
             Material.STONE_BRICKS, Material.COBBLESTONE, Material.MOSSY_STONE_BRICKS,
             Material.SPRUCE_FENCE, Material.SPRUCE_FENCE,
             Material.COBBLESTONE, Material.COARSE_DIRT,
             "chests/village/village_taiga_house");
-    private static final Kit MEDIEVAL_SNOWY = new Kit("medieval/snowy",
+    static final Kit MEDIEVAL_SNOWY = new Kit("medieval/snowy",
             RoadPaint.CITY_SNOWY,
             Material.STONE_BRICKS, Material.COBBLESTONE, Material.CRACKED_STONE_BRICKS,
             Material.SPRUCE_FENCE, Material.SPRUCE_FENCE,
             Material.STONE, Material.GRAVEL,
             "chests/village/village_snowy_house");
     /** 希腊白城（0.34.0）：温带海岸城专属——白石英墙 + 浅石街 + 神殿/灯塔地标。 */
-    private static final Kit GREEK = new Kit("greek",
+    static final Kit GREEK = new Kit("greek",
             RoadPaint.CITY_GREEK,
             Material.QUARTZ_BRICKS, Material.SMOOTH_QUARTZ, Material.CHISELED_QUARTZ_BLOCK,
             Material.OAK_FENCE, Material.QUARTZ_PILLAR,
@@ -74,7 +74,7 @@ public final class CityWorks {
 
     private CityWorks() { }
 
-    private static Kit kitOf(short biome) {
+    static Kit kitOf(short biome) {
         if (biome == 5 || biome == 26 || biome == 90) return DESERT;
         if (EcoBiomes.snowySurface(biome)) return MEDIEVAL_SNOWY;
         if (biome == 15 || biome == 115 || biome == 31 || biome == 19) return MEDIEVAL_TAIGA;
@@ -88,9 +88,21 @@ public final class CityWorks {
 
     // ============================ 主入口 ============================
 
-    /** 建一座聚落（site 中心必须在本 tile 核心区）。返回落成摘要（进度用）。 */
+    /** 旧签名兼容：mixed 风格（按聚落哈希混出巷网城/分区城）。 */
     public static String build(Ground g, int ox, int oz, CivPlanner.Site site, long seed,
                                List<BlockEdit> out) {
+        return build(g, ox, oz, site, seed, "mixed", out);
+    }
+
+    /**
+     * 建一座聚落（site 中心必须在本 tile 核心区）。返回落成摘要（进度用）。
+     *
+     * @param style 城内布局风格：{@code lanes}=0.37 生长巷网城、{@code wards}=0.38
+     *              watabou 式分区城（{@link WardWorks}）、{@code mixed}=按聚落哈希
+     *              五五开（同图两种都出，用多了才知道哪种好）
+     */
+    public static String build(Ground g, int ox, int oz, CivPlanner.Site site, long seed,
+                               String style, List<BlockEdit> out) {
         int cx = site.wx() - ox, cz = site.wz() - oz;
         int R = site.radius(), pad = site.pad();
         Kit kit = kitOf(g.biome(clamp(cx, 0, g.w() - 1), clamp(cz, 0, g.h() - 1)));
@@ -208,9 +220,14 @@ public final class CityWorks {
         // 包住实际建成的肌理 → 轮廓由内容决定
         float[] fab = fabricField(site, dirs, seed);
 
-        // ---- 街网（0.37.0 重做）：弯曲干道（城门→广场）+ 生长巷道 ----
-        // 环路与轴对齐网格退役——巷子从"街距场"最深腹地长出来，块形不规则，
-        // 大道/侧街/窄巷层级由劈开的腹地深度决定。
+        // ---- 布局风格（0.38.0 双路并行）：lanes=生长巷网城 / wards=分区城 ----
+        // 王城城市（沙漠首都）固定巷网：王城区占心后剩环带太窄，Voronoi 分区
+        // 摆不开（实测房数只剩个位）——环带上密巷更合理
+        boolean wardStyle = royal == null && ("wards".equals(style)
+                || ("mixed".equals(style)
+                && hash01(seed ^ 0x57F1EL, site.wx(), site.wz()) < 0.5));
+
+        // ---- 街网：弯曲干道（城门→广场），两种风格共用 ----
         List<Street> streets = new ArrayList<>();
         for (float th : dirs) {
             streets.add(artery(g, occ, side, off, site, cx, cz, th, hubX, hubZ, plazaH,
@@ -222,22 +239,31 @@ public final class CityWorks {
             arteryCells += stt.cells.size();
             for (int i = 0; i < stt.cells.size(); i += 3) mains.add(stt.cells.get(i));
         }
-        // 块深 ≈ laneMax：要装得下"排屋进深 12~16 + 人行带"，两排背靠背 ~32
-        int laneMax = kit == DESERT ? 19 : tier >= 2 ? 16 : 17;
-        List<Street> lanes = growLanes(g, occ, side, off, site, cx, cz, kit, ox, oz, seed, out,
-                royalRect, laneMax, fab);
-        streets.addAll(lanes);
-        if (Boolean.getBoolean("miaeco.cityDebug")) {
-            int laneCells = 0;
-            for (Street l : lanes) laneCells += l.cells.size();
-            float fabMin = Float.MAX_VALUE, fabMax = 0;
-            for (float v : fab) {
-                fabMin = Math.min(fabMin, v);
-                fabMax = Math.max(fabMax, v);
+        int[] wardStat = null;
+        if (wardStyle) {
+            // 分区城（0.38.0，WardWorks）：栅格 Voronoi ward + 区界街 +
+            // 块内递归二分窄巷 + 条带贴排——watabou 式蛛网肌理
+            wardStat = WardWorks.layout(g, occ, side, off, site, cx, cz, hubX, hubZ, plazaH,
+                    tier, kit, pad, ox, oz, seed, out, royalRect, fab, rng);
+            if (Boolean.getBoolean("miaeco.cityDebug")) {
+                System.err.println("streets dbg style=wards arteries=" + dirs.size() + "("
+                        + arteryCells + " cells) wardStreets=" + wardStat[0]
+                        + " wards=" + wardStat[2] + " wardHouses=" + wardStat[1]);
             }
-            System.err.println("streets dbg arteries=" + dirs.size() + "(" + arteryCells
-                    + " cells) lanes=" + lanes.size() + "(" + laneCells + " cells) fab=["
-                    + (int) fabMin + "," + (int) fabMax + "]");
+        } else {
+            // 巷网城（0.37.0）：块深 ≈ laneMax——装得下"排屋进深 12~16 +
+            // 人行带"两排背靠背
+            int laneMax = kit == DESERT ? 19 : tier >= 2 ? 16 : 17;
+            List<Street> lanes = growLanes(g, occ, side, off, site, cx, cz, kit, ox, oz,
+                    seed, out, royalRect, laneMax, fab);
+            streets.addAll(lanes);
+            if (Boolean.getBoolean("miaeco.cityDebug")) {
+                int laneCells = 0;
+                for (Street l : lanes) laneCells += l.cells.size();
+                System.err.println("streets dbg style=lanes arteries=" + dirs.size() + "("
+                        + arteryCells + " cells) lanes=" + lanes.size() + "("
+                        + laneCells + " cells)");
+            }
         }
 
         // ---- 广场 ----
@@ -258,9 +284,9 @@ public final class CityWorks {
             stampPiece(piece, ox + rect[0], podY, oz + rect[1], 0, null, out, true);
         }
 
-        // ---- 连排房屋（0.37.0 排面游标贴排 + 背巷补填） ----
+        // ---- 连排房屋（0.37.0 排面游标贴排 + 背巷补填；分区城已排大半，只补干道沿线与口袋地） ----
         int houses = houses(g, occ, side, off, site, cx, cz, tier, kit, pad, ox, oz, rng,
-                streets, fab, out);
+                streets, fab, out) + (wardStat != null ? wardStat[1] : 0);
 
         // ---- 城墙（0.37.0：包住实际建成肌理的不规则轮廓，tier≥2） ----
         float[] wallArr = builtRim(occ, side, off, site, cx, cz, fab);
@@ -284,6 +310,7 @@ public final class CityWorks {
         return tname + "「" + nameOf(seed, site.wx(), site.wz()) + "」"
                 + (kit == DESERT ? "沙漠风" : kit == MEDIEVAL_SNOWY ? "雪原风"
                 : kit == MEDIEVAL_TAIGA ? "针叶风" : kit == GREEK ? "希腊白城" : "平原风")
+                + (wardStyle ? "·分区城" : "·巷网城")
                 + " 房屋×" + houses + (towers > 0 ? " 城墙塔×" + towers : "")
                 + (royal != null ? " 王城区" : "") + wonderTag + " 梯田×" + farms;
     }
@@ -381,7 +408,7 @@ public final class CityWorks {
     // ============================ 肌理范围（0.37.0） ============================
 
     /** 72 桶角度数组的圆周插值（fabricField/builtRim 共用）。 */
-    private static float arrAt(float[] arr, double theta) {
+    static float arrAt(float[] arr, double theta) {
         double t = theta / (2 * Math.PI) * arr.length;
         int i0 = (int) Math.floor(t);
         double f = t - i0;
@@ -433,7 +460,7 @@ public final class CityWorks {
      * 半径 +4，空桶回退 0.45×rim；圆周平滑后再与建成半径 +2 取大（墙绝不
      * 切进房），上钳 rim−2（墙不越规划整地界）。
      */
-    private static float[] builtRim(byte[] occ, int side, int off, CivPlanner.Site site,
+    static float[] builtRim(byte[] occ, int side, int off, CivPlanner.Site site,
                                     int cx, int cz, float[] fab) {
         int N = 72;
         float[] built = new float[N];
@@ -793,7 +820,7 @@ public final class CityWorks {
         return path;
     }
 
-    private static void streetCell(Ground g, byte[] occ, int side, int off, int cx, int cz,
+    static void streetCell(Ground g, byte[] occ, int side, int off, int cx, int cz,
                                    int lx, int lz, Kit kit, int ox, int oz,
                                    long seed, double wear, List<BlockEdit> out) {
         int oi = occIdx(side, off, cx, cz, lx, lz);
@@ -813,7 +840,7 @@ public final class CityWorks {
      * 胸墙 + 隔格垛齿、内沿步道沿口，塔楼按弧长 ~30 格分布（出挑檐口 + 垛顶 +
      * 灯），城门发展成门楼——双柱塔 + 跨门石拱楣 + 楣上垛齿 + 悬灯 + 旗帜。
      */
-    private static int wall(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
+    static int wall(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
                             int cx, int cz, int tier, Kit kit, int pad, int ox, int oz,
                             long seed, List<Float> gateDirs, float[] wallArr,
                             List<BlockEdit> out) {
@@ -994,7 +1021,7 @@ public final class CityWorks {
 
     // ============================ 广场 ============================
 
-    private static void plaza(Ground g, byte[] occ, int side, int off, int cx, int cz,
+    static void plaza(Ground g, byte[] occ, int side, int off, int cx, int cz,
                               int hubX, int hubZ, int ph, int tier, Kit kit, int pad,
                               int ox, int oz, long seed, Random rng, List<BlockEdit> out) {
         // 铺装（贴地：广场核心台地即 pad）
@@ -1247,7 +1274,7 @@ public final class CityWorks {
     }
 
     /** 房体矩形可放（0.37.0 提炼）：占位空、C_PLOT、肌理内、台地高差 ≤1、不贴墙/广场。 */
-    private static boolean rectPlaceable(Ground g, byte[] occ, int side, int off,
+    static boolean rectPlaceable(Ground g, byte[] occ, int side, int off,
                                          int cx, int cz,
                                          int bx0, int bz0, int rsx, int rsz, int tier,
                                          float[] fab, int[] dbg) {
@@ -1295,7 +1322,7 @@ public final class CityWorks {
         return true;
     }
 
-    private static int rectTopY(Ground g, int bx0, int bz0, int rsx, int rsz) {
+    static int rectTopY(Ground g, int bx0, int bz0, int rsx, int rsz) {
         int yHi = Integer.MIN_VALUE;
         for (int z = bz0; z < bz0 + rsz; z++) {
             for (int x = bx0; x < bx0 + rsx; x++) {
@@ -1306,7 +1333,7 @@ public final class CityWorks {
         return yHi == Integer.MIN_VALUE ? 64 : yHi;
     }
 
-    private static void claimRect2(byte[] occ, int side, int off, int cx, int cz,
+    static void claimRect2(byte[] occ, int side, int off, int cx, int cz,
                                    int bx0, int bz0, int rsx, int rsz) {
         for (int z = bz0; z < bz0 + rsz; z++) {
             for (int x = bx0; x < bx0 + rsx; x++) {
@@ -1407,7 +1434,7 @@ public final class CityWorks {
      * 同高斑界沿平滑噪声铺**断续但成段相连**的木栏（不再是零散栏点）；
      * 作物斑内留走沟/水眼，斑心偶立草人、休耕斑散干草垛。返回成田斑块数。
      */
-    private static int fields(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
+    static int fields(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
                               int cx, int cz, Kit kit, int pad, int ox, int oz, long seed,
                               float[] wallArr, List<BlockEdit> out) {
         java.util.Set<Long> patches = new java.util.HashSet<>();
@@ -1535,7 +1562,7 @@ public final class CityWorks {
      * 大院里按斑块噪声开<b>口袋园圃</b>（草皮+花/灌+苔，读作刻意的绿地而不是
      * 漏铺的草）；散点生活道具（木桶/干草垛/南瓜/篝火盆），紧贴房墙偶挂灯。
      */
-    private static void pave(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
+    static void pave(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
                              int cx, int cz, Kit kit, int ox, int oz, long seed,
                              float[] wallArr, List<BlockEdit> out) {
         int R = site.radius();
@@ -1615,7 +1642,7 @@ public final class CityWorks {
 
     // ============================ 路灯（城内主街） ============================
 
-    private static void lamps(Ground g, byte[] occ, int side, int off, int cx, int cz,
+    static void lamps(Ground g, byte[] occ, int side, int off, int cx, int cz,
                               List<int[]> mains, Kit kit, int pad, int ox, int oz, Random rng,
                               List<BlockEdit> out) {
         int since = 0;
@@ -2026,12 +2053,12 @@ public final class CityWorks {
         }
     }
 
-    private static boolean inRect(int x, int z, int[] rect, int margin) {
+    static boolean inRect(int x, int z, int[] rect, int margin) {
         return x >= rect[0] - margin && x <= rect[2] + margin
                 && z >= rect[1] - margin && z <= rect[3] + margin;
     }
 
-    private static int occIdx(int side, int off, int cx, int cz, int lx, int lz) {
+    static int occIdx(int side, int off, int cx, int cz, int lx, int lz) {
         int dx = lx - cx + off, dz = lz - cz + off;
         if (dx < 0 || dz < 0 || dx >= side || dz >= side) return -1;
         return dz * side + dx;
@@ -2044,7 +2071,7 @@ public final class CityWorks {
         return d;
     }
 
-    private static int clamp(int v, int lo, int hi) {
+    static int clamp(int v, int lo, int hi) {
         return v < lo ? lo : Math.min(v, hi);
     }
 
@@ -2055,7 +2082,7 @@ public final class CityWorks {
         return h ^ (h >>> 31);
     }
 
-    private static double hash01(long seed, int x, int z) {
+    static double hash01(long seed, int x, int z) {
         return (hash(seed, x, z) >>> 11) / (double) (1L << 53);
     }
 }
