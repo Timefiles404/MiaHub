@@ -27,6 +27,13 @@ import java.util.List;
  *       （latent lowfreq，即最终地表的低频骨架）上二次拟合——横向向谷底微移、
  *       纵剖面按"沿线地面−嵌深"做填洼+限深切的单调化（小脊凿峡口、大脊壅回水潭），
  *       水位对实际地形的偏离两侧有界，铺设时不再出现劈山深槽或高架水道。</li>
+ *   <li><b>真值贴地</b>（0.36.0）：中频场看不见 decoder 带通残差（低地 ±2~4 格、
+ *       高山 ±10 格），水位仍会错位——高了被漫滩垫成"山脊河"，低了切出突兀深槽。
+ *       现在再给一层 {@code fine} 场（与铺设<b>逐位一致</b>的最终地表，
+ *       {@code FineField} 分块懒采样）：横向二次细吸附滑离残差鼓包 →
+ *       沿线节点+段中点加密探地 → 纵剖面在真实地表上重新定级，且壅水上限
+ *       取<b>真实侧向围束</b>（两岸实际高出河底多少才许壅多少——没有天然岸墙就
+ *       不许抬水，从根上消灭垫堤渡槽）；湖泊水位也按真实岸环下修。</li>
  * </ol>
  *
  * 纯函数（seed + 高度场 → 确定输出），断点续跑重算一致；栅格化按世界坐标逐列，跨片无缝。
@@ -84,13 +91,13 @@ public final class RiverPlanner {
     /** 方形便捷入口（旧调用兼容，无贴地精修）。 */
     public static RiverPlan plan(HeightField hf, int sea, int x1, int z1, int size,
                                  long seed, double density) {
-        return plan(hf, null, sea, x1, z1, size, size, seed, density);
+        return plan(hf, null, null, sea, x1, z1, size, size, seed, density);
     }
 
     /** 0.26.0 起支持非正方形地图：规划网格 G(X 向)×GZ(Z 向)。 */
     public static RiverPlan plan(HeightField hf, int sea, int x1, int z1, int sizeX, int sizeZ,
                                  long seed, double density) {
-        return plan(hf, null, sea, x1, z1, sizeX, sizeZ, seed, density);
+        return plan(hf, null, null, sea, x1, z1, sizeX, sizeZ, seed, density);
     }
 
     /**
@@ -99,6 +106,17 @@ public final class RiverPlanner {
      */
     public static RiverPlan plan(HeightField hf, HeightField mid, int sea, int x1, int z1,
                                  int sizeX, int sizeZ, long seed, double density) {
+        return plan(hf, mid, null, sea, x1, z1, sizeX, sizeZ, seed, density);
+    }
+
+    /**
+     * 真值贴地入口（0.36.0）：{@code fine} 为与铺设<b>逐位一致</b>的最终地表
+     * （{@code FineField} 采样链，整数格高）。null 则退回 0.27 的中频精修。
+     * 定线/填洼/汇水仍在 {@code hf}（通常=mid）上做——宏观水文要看平滑场；
+     * fine 只负责最后一步：横向细吸附 + 纵剖面对真实地表定级 + 湖泊水位对真实岸环下修。
+     */
+    public static RiverPlan plan(HeightField hf, HeightField mid, HeightField fine, int sea,
+                                 int x1, int z1, int sizeX, int sizeZ, long seed, double density) {
         if (density <= 0.01 || Math.min(sizeX, sizeZ) < 320) return RiverPlan.EMPTY;
         final int cell = Math.max(8, Math.min(32, Math.max(sizeX, sizeZ) / 128));
         final int G = Math.max(16, sizeX / cell);
@@ -278,6 +296,20 @@ public final class RiverPlanner {
             lakes.add(new Lake(x1 + m[0] * cell, z1 + m[1] * cell, cell, gw, ghh,
                     mask, lakeLevels.get(i)));
         }
+        // 真值湖面（0.36.0）：溢出位来自平滑规划场，真实岸环带着 decoder 残差——
+        // 岸环实测最低点低于规划湖面时，湖会从那里漏（containSweep 只能砌悬堤兜住）。
+        // 沿掩码边界采样 fine 地表取最低岸，湖面下修到真实岸环下沿（幅度封顶 8，
+        // 出流河/lakeGuard 全部自动跟随新水位）。
+        if (fine != null) {
+            for (int li = 0; li < lakes.size(); li++) {
+                Lake lk = lakes.get(li);
+                int lvl = fineLakeLevel(lk, fine, sea);
+                if (lvl < lk.level()) {
+                    lakes.set(li, new Lake(lk.ox(), lk.oz(), lk.cell(), lk.gw(), lk.gh(),
+                            lk.mask(), lvl));
+                }
+            }
+        }
         // 未保留的湖不阻河
         for (int i = 0; i < N; i++) {
             if (lakeId[i] >= 0 && (lakeMeta.get(lakeId[i]) == null || !kept[lakeId[i]])) lakeId[i] = -2;
@@ -334,23 +366,30 @@ public final class RiverPlanner {
                 endLake = lakes.get(lakeRemap[lakeId[lastCell]]).level();
             }
             // 汇流口锚定父河水位（claim 序保证父河先建成）：支流末端不低于父河该处
-            // 水位——低于则按回水壅高，交汇处不再出现水面错台
+            // 水位——低于则按回水壅高，交汇处不再出现水面错台。
+            // 0.36.0：同时记下父河最近节点的坐标——父河横向吸附/改道后河线可能
+            // 离 D8 汇流格 10~40 格，支流末端补一个连接节点钉到父河实际河身上，
+            // 不再出现"断头支流差一口没接上"。
             float parentWl = -1e18f;
+            float pjX = Float.NaN, pjZ = Float.NaN;
             if (claimed[lastCell] >= 0 && claimed[lastCell] < rivers.size()) {
                 River parent = rivers.get(claimed[lastCell]);
                 double jx = x1 + (lastCell % G + 0.5) * cell;
                 double jz = z1 + (lastCell / G + 0.5) * cell;
-                double bestD = 2.5 * cell;
+                double bestD = 3.2 * cell;
                 for (Node nd : parent.nodes()) {
                     double dd = Math.hypot(nd.x() - jx, nd.z() - jz);
                     if (dd < bestD) {
                         bestD = dd;
                         parentWl = nd.wl();
+                        pjX = nd.x();
+                        pjZ = nd.z();
                     }
                 }
             }
             River r = buildRiver(path, G, cell, x1, z1, fill, accum, endLake, seed,
-                    rivers.size(), !ended || toSea, mid, parentWl, sea, toSea);
+                    rivers.size(), !ended || toSea, mid, fine, parentWl, pjX, pjZ, sea, toSea,
+                    lakes);
             if (r == null) {
                 unclaim(claimed, path, rivers.size());
                 continue;
@@ -364,7 +403,7 @@ public final class RiverPlanner {
                     makeDelta(r, sea, deltas, rivers, seed);
                 }
             }
-            detectOxbows(r, rivers, seed);
+            detectOxbows(r, rivers, seed, fine);
         }
         return new RiverPlan(rivers, lakes, fans, deltas);
     }
@@ -390,8 +429,9 @@ public final class RiverPlanner {
     /** 单元路径 → 平滑蜿蜒的节点折线（宽深=汇水量，水位=填面单调→贴地精修，泉/潭/洲打标）。 */
     private static River buildRiver(List<Integer> path, int G, int cell, int x1, int z1,
                                     double[] fill, float[] accum, int endLake, long seed, int idx,
-                                    boolean extendEnd, HeightField mid, float parentWl, int sea,
-                                    boolean toSea) {
+                                    boolean extendEnd, HeightField mid, HeightField fine,
+                                    float parentWl, float pjX, float pjZ, int sea, boolean toSea,
+                                    List<Lake> pitLakes) {
         int n = path.size();
         float[] xs = new float[n], zs = new float[n], hws = new float[n], wls = new float[n];
         for (int i = 0; i < n; i++) {
@@ -401,6 +441,12 @@ public final class RiverPlanner {
             // 基础半宽锚定物理汇水面积（与起流阈值解耦）：涓流 ~0.8，大河 ~6.5
             hws[i] = (float) Math.min(6.5, 0.45 + 0.55 * Math.sqrt(accum[c] * (double) cell * cell / WIDTH_AREA));
             wls[i] = (float) fill[c];
+        }
+        // 汇流口钉接（0.36.0）：末点直接钉到父河实际最近节点上（父河吸附后
+        // 河身可能偏离 D8 汇流格几十格）；Chaikin 与全部吸附都保端点不动
+        if (!Float.isNaN(pjX)) {
+            xs[n - 1] = pjX;
+            zs[n - 1] = pjZ;
         }
         // 入湖收口：终点水位钳到湖面
         if (endLake != Integer.MIN_VALUE) wls[n - 1] = Math.min(wls[n - 1], endLake);
@@ -447,21 +493,89 @@ public final class RiverPlanner {
         // 横向：节点向局部谷底微移（绕开粗场看不见的小丘，而不是劈开它）；
         // 纵向：水位=沿线实测地面−嵌深，自河口向上游填洼+限深切单调化
         float[] w = wls, g = null;
-        if (mid != null) {
-            lateralSnap(xs, zs, hws, mid);
+        if (mid != null) lateralSnap(xs, zs, hws, mid);
+        if (fine != null) {
+            // ---- 真值贴地（0.36.0）：mid 场只有低频骨架，decoder 残差它看不见——
+            // 最后一步换到与铺设逐位一致的 fine 场上：横向细吸附滑离残差鼓包 →
+            // 节点+段内加密探地 → 沿线滑动中值（残差尖刺不进剖面——逐点 min 会被
+            // 单调化棘轮成整段深切）→ 纵剖面对真实地表定级（壅水上限=真实岸线围束，
+            // 真凹谷放心壅潭、开阔地寸水不抬）
+            if (mid == null) lateralSnap(xs, zs, hws, fine);
+            lateralSnapFine(xs, zs, hws, fine);
+            float[][] fg = channelFloorFine(xs, zs, hws, fine);
+            // 中值窗只许 ±2 节点（≤~10 格）：滤掉残差尖刺；再宽就会把真实的窄山脊
+            // 也滤没——水位从山肩正中穿过去，铺设时切出 30+ 格的深槽（实测教训）
+            g = medianSmooth(fg[0], 2);
+            float[] conf = medianSmooth(fg[1], 2);
+            w = gradeProfile(g, conf, hws, sea, endLake, parentWl);
+            // 深切治理（0.36.0 关键一环）：mid 场定的谷线撞上真值场的残差山肩时，
+            // 决不能靠切 15~30 格深槽硬穿（用户最恨的"突兀峡谷"）。三级武器，
+            // 重者优先，每轮后全量重探重定级：
+            // ① 切深 >10 的连续段先走<b>走廊改道</b>——minimax Dijkstra 找真实
+            //    鞍口/侧谷重铺子路径（水从垭口过，不硬凿山肩，至多两段）；
+            // ② 走廊里没有更低鞍口=横梁上游是<b>真封闭凹盆</b>（minimax 即溢口
+            //    高度的存在性证明）→ 灌成<b>壶穴湖</b>：盆内水面抬到溢口下沿，
+            //    湖记录入 plan（栅格化整盆铺水+湖滨），河从溢口跌出（自动成
+            //    K_PLUNGE 跌水）——山地房残差盆从"深槽硬穿"变"高山湖+出湖瀑"；
+            // ③ 残余 >5 的节点<b>再吸附</b>——按切深加大半径定向找低地重挪。
+            int rerouted = 0;
+            List<Lake> myPits = null;
+            for (int pass = 0; pass < 6; pass++) {
+                boolean changed = false;
+                if (rerouted < 2) {
+                    Reroute rr = rerouteDeepCuts(xs, zs, hws, g, w, fine);
+                    if (rr != null && rr.path() != null) {
+                        xs = rr.path()[0];
+                        zs = rr.path()[1];
+                        hws = rr.path()[2];
+                        rerouted++;
+                        changed = true;
+                    } else if (rr != null && pitLakes != null
+                            && (myPits == null || myPits.size() < 2)) {
+                        Lake lk = tryPitLake(xs, zs, g, rr.a(), rr.worst(), rr.spill(), fine);
+                        if (lk != null) {
+                            pitLakes.add(lk);
+                            if (myPits == null) myPits = new ArrayList<>(2);
+                            myPits.add(lk);
+                            changed = true;
+                        }
+                    }
+                }
+                if (!changed) changed = resnapDeepCuts(xs, zs, hws, fine, g, w);
+                if (!changed) break;
+                fg = channelFloorFine(xs, zs, hws, fine);
+                g = medianSmooth(fg[0], 2);
+                conf = medianSmooth(fg[1], 2);
+                // 壶穴湖抬底进定级输入：湖内节点的"地面"抬为湖面+嵌深 → 目标水位
+                // 恰为湖面；填洼包络/单调化自然把湖面铺平、从溢口跌出。
+                // （湖内/坝沿节点切深由此归零，后续 resnap 天然不会碰它们——
+                // 治理循环继续跑，收拾湖下游尾段的残余横梁。）
+                if (myPits != null) raisePitGround(xs, zs, g, hws, myPits);
+                w = gradeProfile(g, conf, hws, sea, endLake, parentWl);
+            }
+            m = xs.length;
+            if (DBG) dbgProfile(idx, g, conf, w, hws, sea, endLake, parentWl, toSea);
+        } else if (mid != null) {
             g = channelFloor(xs, zs, hws, mid);
-            w = gradeProfile(g, hws, sea, endLake, parentWl);
+            w = gradeProfile(g, null, hws, sea, endLake, parentWl);
         }
-        // ---- 入海口纵向平滑（0.35.0）：入海河的河口水位钳到海面，且自河口向
-        // 上游施加坡降包络（~1 格/14 格）——水面渐次降到海，不再在海岸线上
-        // 留一道 1~3 格的跌坎/瀑口；三角洲汊流（wl=sea）也随之无缝衔接。
+        // ---- 入海口纵向平滑（0.35.0，0.36.0 修界）：入海河的河口水位钳到海面，
+        // 自河口向上游施加坡降包络（~1 格/14 格）——水面渐次降到海，海岸线上
+        // 不留 1~4 格的跌坎；三角洲汊流（wl=sea）也随之无缝衔接。
+        // 0.36.0 修复：旧版早退条件比较的是<b>钳过的</b>水位（永远不高于包络，
+        // 永不触发）——陡峭入海河整条剖面都被压平到 0.07 格/格，高山河被
+        // 拖到近海平面，切出几十格深的槽（2048 真实图深切 22% 的主凶）。
+        // 现在对照<b>原剖面</b>：削唇量封顶 6 格，超出即到达陡峡头，留天然
+        // 跌水（K_PLUNGE 自动成潭），上游剖面原样贴地。
         if (toSea) {
+            final float LIP_CUT_MAX = 6f;
             float allow = sea;
             for (int i = w.length - 1; i >= 0; i--) {
-                if (w[i] > allow) w[i] = allow;
+                float w0 = w[i];
+                if (w0 > allow + LIP_CUT_MAX) break;              // 陡峡头：上游不再压平
+                if (w0 > allow) w[i] = allow;
                 if (i > 0) {
                     allow += (float) (Math.hypot(xs[i] - xs[i - 1], zs[i] - zs[i - 1]) * 0.07);
-                    if (allow > w[i] + 40) break;                 // 包络失效带，早退
                 }
             }
         }
@@ -600,8 +714,13 @@ public final class RiverPlanner {
      * 自河口向上游做填洼包络（水不倒流），再按"宁挖不垫"分配挡路脊的高差——
      * 凿穿允许 B（缓地 2.5 → 山地 8，峡口天然出现在高处），壅水硬上限
      * {@link #POND_MAX}（回水潭贴着地面漫，绝不再垫出高架水道）。
+     *
+     * @param conf 真实岸线围束（0.36.0，fine 场才有，可 null）：沿线中值的
+     *             "两侧最低岸"。水面封顶 conf+2.4——岸线洼一点交给 ≤4 格的宽羽化
+     *             漫滩收边（自然），高过它就得垫 5 格以上的悬堤（山脊河），禁止。
      */
-    private static float[] gradeProfile(float[] g, float[] hws, int sea, int endLake, float parentWl) {
+    private static float[] gradeProfile(float[] g, float[] conf, float[] hws, int sea,
+                                        int endLake, float parentWl) {
         int m = g.length;
         float[] t = new float[m];
         for (int i = 0; i < m; i++) t[i] = g[i] - (1.0f + Math.min(1.5f, hws[i] * 0.22f));
@@ -610,22 +729,527 @@ public final class RiverPlanner {
         float[] f = new float[m];
         f[m - 1] = t[m - 1];
         for (int i = m - 2; i >= 0; i--) f[i] = Math.max(t[i], f[i + 1]);
-        float[] w = new float[m];
-        float run = Float.MAX_VALUE;
+        float[] cand = new float[m];
+        float[] cap = new float[m];
         for (int i = 0; i < m; i++) {
             float b = (float) Math.max(2.5, Math.min(8, 2.5 + (g[i] - sea) * 0.035));
             // 宽河壅水上限放宽（+≤2.5）：大河遇丘壅成湖泊型河段（潭区自动展宽），
             // 远比从丘脊正中切一道深槽自然；小溪仍严守 2.5
             float pmax = POND_MAX + Math.min(2.5f, hws[i] * 0.35f);
-            float cand = Math.max(t[i], Math.min(f[i] - b, t[i] + pmax));
-            run = Math.min(run, cand);
+            cap[i] = t[i] + pmax;
+            if (conf != null) {
+                cap[i] = Math.max(t[i] + 0.4f, Math.min(cap[i], conf[i] + 2.4f));
+            }
+            cand[i] = Math.max(t[i], Math.min(f[i] - b, cap[i]));
+        }
+        // 单调化（0.36.0 换 PAVA 等渗回归）：老 cummin 是"下包络"——目标剖面每个
+        // 下摆都把水位永久棘轮拖低，剖面越贴真值噪声越被拖深（整段深切的根源）。
+        // PAVA 取 L2 中线：小丘上壅、小洼里蓄，天然形成山溪的 step-pool 韵律；
+        // 壅水天花板 cap（含真实岸线围束）单独硬剪，剪后再 cummin 兜一遍单调
+        // ——cap 与 t 同源平滑，硬剪只在真围束缺口触发，不再全线棘轮。
+        float[] w = pavaNonIncreasing(cand);
+        float run = Float.MAX_VALUE;
+        for (int i = 0; i < m; i++) {
+            if (w[i] > cap[i]) w[i] = cap[i];
+            run = Math.min(run, w[i]);
             w[i] = run;
         }
         return w;
     }
 
+    /** 非增 PAVA 等渗回归（L2、等权，O(n)）：违反单调的相邻段池化为均值。 */
+    private static float[] pavaNonIncreasing(float[] y) {
+        int m = y.length;
+        float[] val = new float[m];
+        int[] cnt = new int[m];
+        int top = -1;
+        for (int i = 0; i < m; i++) {
+            float v = y[i];
+            int c = 1;
+            while (top >= 0 && val[top] < v) {                    // 上游池比当前低=违反非增
+                v = (val[top] * cnt[top] + v * c) / (cnt[top] + c);
+                c += cnt[top];
+                top--;
+            }
+            top++;
+            val[top] = v;
+            cnt[top] = c;
+        }
+        float[] out = new float[m];
+        int k = 0;
+        for (int p = 0; p <= top; p++) {
+            for (int j = 0; j < cnt[p]; j++) out[k++] = val[p];
+        }
+        return out;
+    }
+
+    /**
+     * 深切段定向再吸附（0.36.0）：g−w>5 的节点扩大半径（8+2.6×切深，≤26）在垂直
+     * 方向上重找最低地（罚 0.12/格，宁可多挪不要深切），带窗口平滑；返回是否有节点
+     * 被挪动（有则调用方重探地面重定级）。端点与汇流口不动。
+     */
+    private static boolean resnapDeepCuts(float[] xs, float[] zs, float[] hws, HeightField fine,
+                                          float[] g, float[] w) {
+        int m = xs.length;
+        boolean moved = false;
+        float[] ox = xs.clone(), oz = zs.clone();
+        float[] off = new float[m];
+        for (int i = 1; i < m - 1; i++) {
+            float cut = g[i] - w[i];
+            if (cut <= 5) continue;
+            float dx = ox[Math.min(m - 1, i + 2)] - ox[Math.max(0, i - 2)];
+            float dz = oz[Math.min(m - 1, i + 2)] - oz[Math.max(0, i - 2)];
+            float len = (float) Math.max(1e-3, Math.hypot(dx, dz));
+            float px = -dz / len, pz = dx / len;
+            double span = Math.min(26, 8 + 2.6 * cut);
+            double best = 0, bestScore = fine.yAt(ox[i], oz[i]);
+            for (double o = -span; o <= span + 1e-6; o += 1.5) {
+                double y = fine.yAt(ox[i] + px * o, oz[i] + pz * o) + Math.abs(o) * 0.12;
+                if (y < bestScore - 1e-3) {
+                    bestScore = y;
+                    best = o;
+                }
+            }
+            if (Math.abs(best) > 0.7) {
+                off[i] = (float) best;
+                moved = true;
+            }
+        }
+        if (!moved) return false;
+        for (int i = 1; i < m - 1; i++) {
+            float s = 0;
+            int c = 0;
+            for (int k = Math.max(0, i - 2); k <= Math.min(m - 1, i + 2); k++) {
+                s += off[k];
+                c++;
+            }
+            if (Math.abs(s) < 1e-3) continue;
+            float dx = ox[Math.min(m - 1, i + 2)] - ox[Math.max(0, i - 2)];
+            float dz = oz[Math.min(m - 1, i + 2)] - oz[Math.max(0, i - 2)];
+            float len = (float) Math.max(1e-3, Math.hypot(dx, dz));
+            xs[i] = ox[i] + (-dz / len) * (s / c);
+            zs[i] = oz[i] + (dx / len) * (s / c);
+        }
+        return true;
+    }
+
+    /** 走廊改道结果：path!=null=改道子路径；path==null=无更低鞍口（真封闭凹盆，
+     *  a/worst/spill 供壶穴湖用——spill 即 minimax 溢口高度的存在性证明）。 */
+    private record Reroute(float[][] path, int a, int worst, float spill) { }
+
+    /**
+     * 深切段走廊改道（0.36.0，吸附救不了时的重武器）：横亘在 mid 场看不见的残差
+     * 山肩/横脊，吸附（≤26 格）绕不开就会切出 15~30 格深槽——对残余切深 >10 的
+     * 连续段，在真值场上以 <b>minimax Dijkstra</b>（路径代价=沿途最高点，2 格步长、
+     * 8 邻、走廊盒界内）找"最低鞍口"路线替换原子路径：水从真实的垭口/侧谷过去，
+     * 切深回到 B 允许量级。纯函数确定性；不改端点。
+     *
+     * @return null=无深切/盒退化；path!=null=改道；path==null=凹盆（壶穴湖候选）
+     */
+    private static Reroute rerouteDeepCuts(float[] xs, float[] zs, float[] hws,
+                                           float[] g, float[] w, HeightField fine) {
+        int m = xs.length;
+        int worst = -1;
+        float worstCut = 10;
+        for (int i = 1; i < m - 1; i++) {
+            if (g[i] - w[i] > worstCut) {
+                worstCut = g[i] - w[i];
+                worst = i;
+            }
+        }
+        if (worst < 0) return null;
+        int a = worst, b = worst;
+        while (a > 1 && g[a] - w[a] > 2.5f) a--;
+        while (b < m - 2 && g[b] - w[b] > 2.5f) b++;
+        if (b - a < 2) {
+            if (DBG) System.err.printf("RRDBG short a=%d b=%d%n", a, b);
+            return null;
+        }
+        // 走廊盒（子路径 bbox + 40 格），步长 2；过大则加大步长兜住计算量
+        float bx0 = Float.MAX_VALUE, bz0 = Float.MAX_VALUE, bx1 = -Float.MAX_VALUE, bz1 = -Float.MAX_VALUE;
+        for (int i = a; i <= b; i++) {
+            bx0 = Math.min(bx0, xs[i]); bx1 = Math.max(bx1, xs[i]);
+            bz0 = Math.min(bz0, zs[i]); bz1 = Math.max(bz1, zs[i]);
+        }
+        int margin = 40;
+        int step = 2;
+        int gw, gh;
+        while (true) {
+            gw = (int) ((bx1 - bx0 + 2 * margin) / step) + 2;
+            gh = (int) ((bz1 - bz0 + 2 * margin) / step) + 2;
+            if ((long) gw * gh <= 60000 || step >= 6) break;
+            step += 1;
+        }
+        double ox = bx0 - margin, oz = bz0 - margin;
+        int sa = cellOf(xs[a], zs[a], ox, oz, step, gw, gh);
+        int sb = cellOf(xs[b], zs[b], ox, oz, step, gw, gh);
+        if (sa < 0 || sb < 0 || sa == sb) {
+            if (DBG) System.err.printf("RRDBG cell sa=%d sb=%d%n", sa, sb);
+            return null;
+        }
+        // minimax Dijkstra：dist=路径上最高地面的最小可能值
+        float[] dist = new float[gw * gh];
+        java.util.Arrays.fill(dist, Float.MAX_VALUE);
+        int[] prev = new int[gw * gh];
+        java.util.Arrays.fill(prev, -1);
+        java.util.PriorityQueue<long[]> pq = new java.util.PriorityQueue<>(
+                java.util.Comparator.comparingDouble(e -> Double.longBitsToDouble(e[0])));
+        dist[sa] = groundAt(sa, ox, oz, step, gw, fine);
+        pq.add(new long[]{Double.doubleToLongBits(dist[sa]), sa});
+        final int[] rdx = {1, -1, 0, 0, 1, 1, -1, -1};
+        final int[] rdz = {0, 0, 1, -1, 1, -1, 1, -1};
+        while (!pq.isEmpty()) {
+            long[] top = pq.poll();
+            int c = (int) top[1];
+            if (Double.longBitsToDouble(top[0]) > dist[c] + 1e-6) continue;
+            if (c == sb) break;
+            int cx = c % gw, cz = c / gw;
+            for (int d = 0; d < 8; d++) {
+                int nx = cx + rdx[d], nz = cz + rdz[d];
+                if (nx < 0 || nz < 0 || nx >= gw || nz >= gh) continue;
+                int nc = nz * gw + nx;
+                float nd = Math.max(dist[c], groundAt(nc, ox, oz, step, gw, fine));
+                if (nd < dist[nc] - 1e-6) {
+                    dist[nc] = nd;
+                    prev[nc] = c;
+                    pq.add(new long[]{Double.doubleToLongBits(nd), nc});
+                }
+            }
+        }
+        // 原线过脊高度 vs 鞍口路线：至少低 3 格才值得改；没有更低鞍口 =
+        // 上游是真封闭凹盆（盆沿处处 ≥ minimax）→ 交给壶穴湖
+        if (dist[sb] >= g[worst] - 3) {
+            if (DBG) System.err.printf("RRDBG nosaddle a=%d b=%d worstG=%.1f minimax=%.1f box=%dx%d step=%d%n",
+                    a, b, g[worst], dist[sb], gw, gh, step);
+            return new Reroute(null, a, worst, Math.min(dist[sb], g[worst]));
+        }
+        List<float[]> pts = new ArrayList<>();
+        for (int c = sb; c >= 0; c = prev[c]) {
+            pts.add(new float[]{(float) (ox + (c % gw + 0.5) * step),
+                    (float) (oz + (c / gw + 0.5) * step)});
+            if (c == sa) break;
+        }
+        if (pts.size() < 2) return null;
+        java.util.Collections.reverse(pts);
+        if (DBG) System.err.printf("RRDBG OK a=%d b=%d worstG=%.1f saddle=%.1f pathPts=%d%n",
+                a, b, g[worst], dist[sb], pts.size());
+        // 重采样 ~5 格一点（首尾除外——端点仍用原 a/b 节点）
+        List<float[]> mid2 = new ArrayList<>();
+        double acc = 0;
+        for (int k = 1; k < pts.size() - 1; k++) {
+            acc += Math.hypot(pts.get(k)[0] - pts.get(k - 1)[0], pts.get(k)[1] - pts.get(k - 1)[1]);
+            if (acc >= 5) {
+                mid2.add(pts.get(k));
+                acc = 0;
+            }
+        }
+        int K = mid2.size();
+        int nm = a + 1 + K + (m - b);
+        float[] nxs = new float[nm], nzs = new float[nm], nhw = new float[nm];
+        System.arraycopy(xs, 0, nxs, 0, a + 1);
+        System.arraycopy(zs, 0, nzs, 0, a + 1);
+        System.arraycopy(hws, 0, nhw, 0, a + 1);
+        for (int k = 0; k < K; k++) {
+            nxs[a + 1 + k] = mid2.get(k)[0];
+            nzs[a + 1 + k] = mid2.get(k)[1];
+            nhw[a + 1 + k] = hws[a] + (hws[b] - hws[a]) * (k + 1) / (K + 1);
+        }
+        System.arraycopy(xs, b, nxs, a + 1 + K, m - b);
+        System.arraycopy(zs, b, nzs, a + 1 + K, m - b);
+        System.arraycopy(hws, b, nhw, a + 1 + K, m - b);
+        return new Reroute(new float[][]{nxs, nzs, nhw}, a, worst, dist[sb]);
+    }
+
+    /**
+     * 壶穴湖（0.36.0）：改道判定"无更低鞍口"= 深切段上游是真值场里的封闭凹盆
+     * （minimax=溢口高度，即盆沿处处不低于它的存在性证明）。把盆灌到溢口下沿：
+     * 4 格网格从盆内节点洪泛（只进 &lt; 湖面+0.5 的格），触界=非封闭放弃；
+     * 成湖入 plan（栅格化整盆铺水+平滑湖滨），本河湖内水位抬到湖面、
+     * 从溢口跌出（wl 落差自动打成 K_PLUNGE 跌水潭）。
+     */
+    private static Lake tryPitLake(float[] xs, float[] zs, float[] g,
+                                   int a, int worst, float spill, HeightField fine) {
+        int level = (int) Math.floor(spill - 0.6);
+        float pitFloor = Float.MAX_VALUE;
+        for (int i = a; i <= worst; i++) pitFloor = Math.min(pitFloor, g[i]);
+        if (level - pitFloor < 3) return null;                    // 盆太浅，不值一湖
+        // 洪泛盒：盆内节点 bbox + 90 格，4 格/单元
+        final int CELL = 4, MARGIN = 90;
+        float bx0 = Float.MAX_VALUE, bz0 = Float.MAX_VALUE, bx1 = -Float.MAX_VALUE, bz1 = -Float.MAX_VALUE;
+        List<Integer> seeds = new ArrayList<>();
+        for (int i = a; i <= worst; i++) {
+            if (g[i] < level - 0.5f) {
+                bx0 = Math.min(bx0, xs[i]); bx1 = Math.max(bx1, xs[i]);
+                bz0 = Math.min(bz0, zs[i]); bz1 = Math.max(bz1, zs[i]);
+                seeds.add(i);
+            }
+        }
+        if (seeds.isEmpty()) return null;
+        int ox = (int) Math.floor(bx0) - MARGIN, oz = (int) Math.floor(bz0) - MARGIN;
+        int gw = ((int) Math.ceil(bx1) + MARGIN - ox) / CELL + 1;
+        int gh = ((int) Math.ceil(bz1) + MARGIN - oz) / CELL + 1;
+        if ((long) gw * gh > 90000) return null;
+        BitSet mask = new BitSet(gw * gh);
+        java.util.ArrayDeque<Integer> bfs = new java.util.ArrayDeque<>();
+        for (int i : seeds) {
+            int cx = (int) ((xs[i] - ox) / CELL), cz = (int) ((zs[i] - oz) / CELL);
+            if (cx < 0 || cz < 0 || cx >= gw || cz >= gh) continue;
+            int c = cz * gw + cx;
+            if (!mask.get(c)) {
+                mask.set(c);
+                bfs.add(c);
+            }
+        }
+        int area = 0;
+        while (!bfs.isEmpty()) {
+            int c = bfs.poll();
+            area++;
+            int cx = c % gw, cz = c / gw;
+            if (cx == 0 || cz == 0 || cx == gw - 1 || cz == gh - 1) return null;   // 触界=非封闭
+            for (int d = 0; d < 4; d++) {
+                int nx = cx + (d == 0 ? 1 : d == 1 ? -1 : 0);
+                int nz = cz + (d == 2 ? 1 : d == 3 ? -1 : 0);
+                int nc = nz * gw + nx;
+                if (mask.get(nc)) continue;
+                float gy = fine.yAt(ox + (nx + 0.5) * CELL, oz + (nz + 0.5) * CELL);
+                if (gy < level + 0.5f) {
+                    mask.set(nc);
+                    bfs.add(nc);
+                }
+            }
+        }
+        if (area < 18) return null;                               // 太小不值一湖
+        if (DBG) System.err.printf("RRDBG PITLAKE level=%d area=%d cells @(%d,%d)%n",
+                level, area, ox, oz);
+        return new Lake(ox, oz, CELL, gw, gh, mask, level);
+    }
+
+    /** 位置是否落在湖掩码内（壶穴湖抬底用）。 */
+    private static boolean insideLake(Lake lk, float x, float z) {
+        int cx = (int) Math.floor((x - lk.ox()) / (double) lk.cell());
+        int cz = (int) Math.floor((z - lk.oz()) / (double) lk.cell());
+        if (cx < 0 || cz < 0 || cx >= lk.gw() || cz >= lk.gh()) return false;
+        return lk.mask().get(cz * lk.gw() + cx);
+    }
+
+    /** 壶穴湖内节点地面抬为湖面+嵌深（定级目标水位=湖面，出溢口自然跌落）。 */
+    private static void raisePitGround(float[] xs, float[] zs, float[] g, float[] hws,
+                                       List<Lake> pits) {
+        for (int i = 0; i < g.length; i++) {
+            for (Lake lk : pits) {
+                if (insideLake(lk, xs[i], zs[i])) {
+                    float embed = 1.0f + Math.min(1.5f, hws[i] * 0.22f);
+                    g[i] = Math.max(g[i], lk.level() + embed);
+                }
+            }
+        }
+    }
+
+    private static int cellOf(float x, float z, double ox, double oz, int step, int gw, int gh) {
+        int cx = (int) ((x - ox) / step), cz = (int) ((z - oz) / step);
+        if (cx < 0 || cz < 0 || cx >= gw || cz >= gh) return -1;
+        return cz * gw + cx;
+    }
+
+    private static float groundAt(int c, double ox, double oz, int step, int gw, HeightField fine) {
+        return fine.yAt(ox + (c % gw + 0.5) * step, oz + (c / gw + 0.5) * step);
+    }
+
+    /**
+     * 横向细吸附（0.36.0，fine 场）：在真值地表上再滑一次——步长 1 格、
+     * 搜索半径 ~2.5+1.1hw（≤9），罚 0.30 格高/格偏移。decoder 残差的鼓包
+     * 波长 ~30 格上下，河线宁可侧移几格从鼓包旁边绕过，也不要从顶上切槽。
+     * 端点固定（源头/汇流口不脱位），沿线窗口平滑防抖。
+     */
+    private static void lateralSnapFine(float[] xs, float[] zs, float[] hws, HeightField fine) {
+        int m = xs.length;
+        if (m < 6) return;
+        float[] ox = xs.clone(), oz = zs.clone();
+        float[] off = new float[m];
+        for (int i = 1; i < m - 1; i++) {
+            float dx = ox[Math.min(m - 1, i + 2)] - ox[Math.max(0, i - 2)];
+            float dz = oz[Math.min(m - 1, i + 2)] - oz[Math.max(0, i - 2)];
+            float len = (float) Math.max(1e-3, Math.hypot(dx, dz));
+            float px = -dz / len, pz = dx / len;
+            double span = Math.min(9, 2.5 + 1.1 * hws[i]);
+            double best = 0, bestScore = Double.MAX_VALUE;
+            for (double o = -span; o <= span + 1e-6; o += 1.0) {
+                double y = fine.yAt(ox[i] + px * o, oz[i] + pz * o) + Math.abs(o) * 0.30;
+                if (y < bestScore) {
+                    bestScore = y;
+                    best = o;
+                }
+            }
+            off[i] = (float) best;
+        }
+        for (int i = 1; i < m - 1; i++) {
+            float s = 0;
+            int c = 0;
+            for (int k = Math.max(1, i - 2); k <= Math.min(m - 2, i + 2); k++) {
+                s += off[k];
+                c++;
+            }
+            float dx = ox[Math.min(m - 1, i + 2)] - ox[Math.max(0, i - 2)];
+            float dz = oz[Math.min(m - 1, i + 2)] - oz[Math.max(0, i - 2)];
+            float len = (float) Math.max(1e-3, Math.hypot(dx, dz));
+            xs[i] = ox[i] + (-dz / len) * (s / c);
+            zs[i] = oz[i] + (dx / len) * (s / c);
+        }
+    }
+
+    /**
+     * 真值地面+岸线围束（0.36.0，fine 场，替代 {@link #channelFloor}）：
+     * <ul>
+     *   <li>{@code [0]} 河道地面 g：节点 + 段内 1/3、2/3 加密采样，每处中心+两侧
+     *       0.7hw 三探针取低（河槽横断面本来就取低线），三处取<b>中值</b>——
+     *       fine 场带 decoder 残差噪声，逐点取 min 会让水位变成"最低包络"，
+     *       再经单调化被残差坑一路拖低，下游整段变深切（2048 山地实测 26%），
+     *       中值定线 + 坑上积潭才是对的；沿用 0.30/0.32 的岸外近环/远环低侧
+     *       探针——山腰横穿时水位跟低岸走；</li>
+     *   <li>{@code [1]} 岸线围束 conf：两侧 hw+1.2/2.5/4.5/7 八探针取<b>最低</b>岸，
+     *       三处取中值——{@link #gradeProfile} 里水面封顶 conf+3（岸线洼一点可以
+     *       靠 ≤4 格的宽羽化漫滩收边，但绝不再垫 5~10 格的悬堤=山脊河）。</li>
+     * </ul>
+     */
+    private static float[][] channelFloorFine(float[] xs, float[] zs, float[] hws, HeightField fine) {
+        int m = xs.length;
+        float[] g = new float[m];
+        float[] conf = new float[m];
+        float[] gs = new float[3], cs = new float[3];
+        for (int i = 0; i < m; i++) {
+            float dx = xs[Math.min(m - 1, i + 1)] - xs[Math.max(0, i - 1)];
+            float dz = zs[Math.min(m - 1, i + 1)] - zs[Math.max(0, i - 1)];
+            float len = (float) Math.max(1e-3, Math.hypot(dx, dz));
+            float px = -dz / len, pz = dx / len;
+            int sub = i + 1 < m ? 3 : 1;                          // 节点 + 段内 1/3、2/3
+            for (int s = 0; s < sub; s++) {
+                float t = s / 3f;
+                float cx = xs[i] + (s == 0 ? 0 : (xs[i + 1] - xs[i]) * t);
+                float cz = zs[i] + (s == 0 ? 0 : (zs[i + 1] - zs[i]) * t);
+                float o = hws[i] * 0.7f;
+                float chan = Math.min(fine.yAt(cx, cz),
+                        Math.min(fine.yAt(cx + px * o, cz + pz * o),
+                                fine.yAt(cx - px * o, cz - pz * o)));
+                float o1 = hws[i] + 1.2f, ob = hws[i] + 2.5f, o2 = hws[i] + 4.5f, of = hws[i] + 7f;
+                float o3 = hws[i] + 10.5f, o4 = hws[i] + 16f;
+                float n1L = fine.yAt(cx + px * o1, cz + pz * o1);
+                float nbL = fine.yAt(cx + px * ob, cz + pz * ob);
+                float n2L = fine.yAt(cx + px * o2, cz + pz * o2);
+                float nfL = fine.yAt(cx + px * of, cz + pz * of);
+                float n1R = fine.yAt(cx - px * o1, cz - pz * o1);
+                float nbR = fine.yAt(cx - px * ob, cz - pz * ob);
+                float n2R = fine.yAt(cx - px * o2, cz - pz * o2);
+                float nfR = fine.yAt(cx - px * of, cz - pz * of);
+                // 跟低岸规则（0.30/0.32 山腰横穿）加"真侧坡"门槛（0.36.0）：
+                // 两侧必须一低一高（差 >3）才算山腰——fine 场残差 ±2~4 会让
+                // min-of-4 探针在平地上也系统性偏低 ~2 格，无门槛时全线被拖深
+                // 1~2 格、真实图 9% 节点中线深切 >8（噪声当坡跟）。
+                float sideL = Math.min(n1L, nbL), sideR = Math.min(n1R, nbR);
+                float lowSide = Math.min(sideL, sideR), highSide = Math.max(sideL, sideR);
+                float gg = chan;
+                if (chan - lowSide > 2 && highSide - lowSide > 3) gg = lowSide + 1;
+                float farLow = Math.min(nfL, nfR), farHigh = Math.max(nfL, nfR);
+                if (gg - farLow > 5 && farHigh - farLow > 4) gg = Math.min(gg, farLow + 2);
+                gs[s] = gg;
+                // 围束=逐侧六环（贴槽 → hw+14=羽化半径内）取最高，两侧取低——
+                // 水蓄多高看两边最矮的那面"真墙"；墙必须在栅格化羽化可达半径内，
+                // 蓄出的潭才保证被真实地形围住而不是靠悬堤
+                float hiL = Math.max(Math.max(Math.max(n1L, nbL), Math.max(n2L, nfL)),
+                        Math.max(fine.yAt(cx + px * o3, cz + pz * o3),
+                                fine.yAt(cx + px * o4, cz + pz * o4)));
+                float hiR = Math.max(Math.max(Math.max(n1R, nbR), Math.max(n2R, nfR)),
+                        Math.max(fine.yAt(cx - px * o3, cz - pz * o3),
+                                fine.yAt(cx - px * o4, cz - pz * o4)));
+                cs[s] = Math.min(hiL, hiR);
+            }
+            g[i] = sub == 3 ? median3(gs[0], gs[1], gs[2]) : gs[0];
+            conf[i] = sub == 3 ? median3(cs[0], cs[1], cs[2]) : cs[0];
+        }
+        return new float[][]{g, conf};
+    }
+
+    private static float median3(float a, float b, float c) {
+        return Math.max(Math.min(a, b), Math.min(Math.max(a, b), c));
+    }
+
+    /** 贴地诊断（-Dmiaeco.riverDebug=1）：剖面深切 >8 的河打印成因断面。 */
+    private static final boolean DBG = Boolean.getBoolean("miaeco.riverDebug");
+
+    private static void dbgProfile(int idx, float[] g, float[] conf, float[] w, float[] hws,
+                                   int sea, int endLake, float parentWl, boolean toSea) {
+        int m = g.length;
+        int worst = -1;
+        float worstCut = 8;
+        for (int i = 0; i < m; i++) {
+            if (g[i] - w[i] > worstCut) {
+                worstCut = g[i] - w[i];
+                worst = i;
+            }
+        }
+        if (worst < 0) return;
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("RIVDBG r%d m=%d worst@%d(%.0f%%) cut=%.1f toSea=%b endLake=%s parentWl=%s%n",
+                idx, m, worst, 100.0 * worst / m, worstCut, toSea,
+                endLake == Integer.MIN_VALUE ? "-" : String.valueOf(endLake),
+                parentWl < -1e17f ? "-" : String.format("%.1f", parentWl)));
+        for (int i = Math.max(0, worst - 12); i <= Math.min(m - 1, worst + 12); i += 3) {
+            sb.append(String.format("  #%d g=%.1f conf=%.1f w=%.1f hw=%.1f%n",
+                    i, g[i], conf[i], w[i], hws[i]));
+        }
+        System.err.print(sb);
+    }
+
+    /** 沿线滑动中值（±rad 节点窗）：残差尖刺不进剖面，真实丘谷起伏保留。 */
+    private static float[] medianSmooth(float[] a, int rad) {
+        int m = a.length;
+        float[] out = new float[m];
+        float[] buf = new float[2 * rad + 1];
+        for (int i = 0; i < m; i++) {
+            int lo = Math.max(0, i - rad), hi = Math.min(m - 1, i + rad);
+            int n = hi - lo + 1;
+            for (int k = 0; k < n; k++) buf[k] = a[lo + k];
+            java.util.Arrays.sort(buf, 0, n);
+            out[i] = n % 2 == 1 ? buf[n / 2] : (buf[n / 2 - 1] + buf[n / 2]) * 0.5f;
+        }
+        return out;
+    }
+
     private static double dist(Node a, Node b) {
         return Math.hypot(a.x() - b.x(), a.z() - b.z());
+    }
+
+    /**
+     * 真值湖面（0.36.0）：规划湖面=平滑场溢出位，真实岸环带 decoder 残差——岸环实测
+     * 最低处低于规划湖面时，湖水会从那里漏出去（旧版只能靠 containSweep 沿湖缘砌一圈
+     * 悬堤兜住=湖边"山脊"）。沿掩码边界向外采样 fine 地表，湖面下修到真实岸环下沿：
+     * 最低岸恰与水面齐平（天然溢口观感）。下修封顶 8 格、不低于 sea+1（湖资格保持）。
+     */
+    private static int fineLakeLevel(Lake lk, HeightField fine, int sea) {
+        int gw = lk.gw(), gh = lk.gh(), cell = lk.cell();
+        BitSet mask = lk.mask();
+        int minBank = Integer.MAX_VALUE;
+        for (int gz = 0; gz < gh; gz++) {
+            for (int gx = 0; gx < gw; gx++) {
+                if (!mask.get(gz * gw + gx)) continue;
+                double cx = lk.ox() + (gx + 0.5) * cell, cz = lk.oz() + (gz + 0.5) * cell;
+                for (int d = 0; d < 4; d++) {
+                    int nx = gx + (d == 0 ? 1 : d == 1 ? -1 : 0);
+                    int nz = gz + (d == 2 ? 1 : d == 3 ? -1 : 0);
+                    if (nx >= 0 && nz >= 0 && nx < gw && nz < gh && mask.get(nz * gw + nx)) {
+                        continue;                                 // 邻单元还在湖里
+                    }
+                    // 岸带在本单元与掩码外邻单元之间：采指示 ≈0.5 的中点与外邻中心
+                    double ox = lk.ox() + (nx + 0.5) * cell, oz = lk.oz() + (nz + 0.5) * cell;
+                    int bankMid = (int) fine.yAt((cx + ox) * 0.5, (cz + oz) * 0.5);
+                    int bankOut = (int) fine.yAt(ox, oz);
+                    // 岸高取两点较高者：漏水点要"里外都低"才真漏（单点毛刺不缩湖）
+                    minBank = Math.min(minBank, Math.max(bankMid, bankOut));
+                }
+            }
+        }
+        if (minBank == Integer.MAX_VALUE) return lk.level();
+        // 允许下修到 sea：贴海低地湖降为潟湖（与海面齐平）也比垫一圈悬堤自然
+        return Math.max(Math.max(lk.level() - 8, sea), Math.min(lk.level(), minBank));
     }
 
     /** 坡折检测 → 冲积扇（山口冲出平原处的沉积锥）+ 2~3 条辫状干沟。 */
@@ -684,7 +1308,7 @@ public final class RiverPlanner {
     }
 
     /** 低地蜿蜒段旁的牛轭湖：静水弯月（与河同水位，齐平岸相接成湿链）。 */
-    private static void detectOxbows(River r, List<River> rivers, long seed) {
+    private static void detectOxbows(River r, List<River> rivers, long seed, HeightField fine) {
         List<Node> ns = r.nodes();
         for (int i = 14; i < ns.size() - 14; i += 12) {
             Node d = ns.get(i);
@@ -703,11 +1327,23 @@ public final class RiverPlanner {
             List<Node> arc = new ArrayList<>();
             double a0 = Math.atan2(-pz, -px) - 1.55, a1 = a0 + 3.1;
             int steps = 9;
+            boolean misfit = false;
             for (int k = 0; k <= steps; k++) {
                 double a = a0 + (a1 - a0) * k / steps;
-                arc.add(new Node(cx + (float) (Math.cos(a) * rad), cz + (float) (Math.sin(a) * rad),
-                        d.wl(), Math.max(1.2f, d.halfW() * 0.55f), 1.4f, 0.03f, K_NORMAL));
+                float ax = cx + (float) (Math.cos(a) * rad), az = cz + (float) (Math.sin(a) * rad);
+                // 真值体检（0.36.0）：弯月所在的真实地表须与河面基本齐平——
+                // 高出太多要深挖环沟、低太多要垫环堤，都突兀，直接放弃这只牛轭
+                if (fine != null) {
+                    float gy = fine.yAt(ax, az);
+                    if (gy - d.wl() > 2.5f || d.wl() - gy > 2f) {
+                        misfit = true;
+                        break;
+                    }
+                }
+                arc.add(new Node(ax, az, d.wl(), Math.max(1.2f, d.halfW() * 0.55f),
+                        1.4f, 0.03f, K_NORMAL));
             }
+            if (misfit) continue;
             rivers.add(new River(arc, R_OXBOW));
         }
     }

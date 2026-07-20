@@ -783,8 +783,52 @@ public final class TerraService implements Listener {
                 plugin.getLogger().log(Level.WARNING, "lowfreq mid field", e);
                 progress.chat("贴地采样不可用，本图退回 coarse 定线: " + rootMsg(e));
             }
-            RiverPlanner.RiverPlan rp = RiverPlanner.plan(mid != null ? mid : hf, mid,
-                    mapper.sea(), mapX1, mapZ1, sX, sZ, entry.seed ^ 0x51E77AL, st.riverDensity());
+            // ---- 真值贴地场（0.36.0）：与铺设<b>逐位一致</b>的最终地表 ----
+            // FineField 按 64² 块懒采样（池化路径与 fetchPooled 完全同序求和），走与
+            // buildPlanMap 相同的 boost→sketch→edgeFalloff→yOf 链。decoder 残差
+            // （中频场看不见的那 ±2~10 格）从此进入水位定级——沿河算出的推理窗口
+            // 全部进管线缓存，铺设阶段直接复用，整图总推理量几乎不变。
+            RiverPlanner.HeightField fine = null;
+            if (mid != null) {
+                int pool = mpb <= 15 ? 0 : Math.max(1, mpb / 30);
+                int estChunks = Math.max(16, (sX / 64) * (sZ / 64) / 4);
+                java.util.concurrent.atomic.AtomicInteger nChunk = new java.util.concurrent.atomic.AtomicInteger();
+                FineField ff = new FineField(pool, () -> {
+                    checkCancel();
+                    int n = nChunk.incrementAndGet();
+                    if (n % 6 == 0) {
+                        progress.update(Math.min(0.95, n / (double) estChunks),
+                                "真值采样 " + n + " 块");
+                    }
+                });
+                fine = (wx, wz) -> {
+                    int bx = (int) Math.floor(wx), bz = (int) Math.floor(wz);
+                    float m = boost(ff.metersAt(bx, bz));
+                    if (sketch != null) {
+                        m += sketchAt(sketch, sketchN, sketchNZ, mapX1, mapZ1, sX, sZ, bx, bz);
+                    }
+                    if (!openEdge) {
+                        int d = Math.min(Math.min(bx - mapX1, bz - mapZ1),
+                                Math.min(mapX1 + sX - 1 - bx, mapZ1 + sZ - 1 - bz));
+                        m = edgeFalloff(m, d, band);
+                    }
+                    return mapper.yOf(m);
+                };
+            }
+            RiverPlanner.RiverPlan rp;
+            try {
+                rp = RiverPlanner.plan(mid != null ? mid : hf, mid, fine, mapper.sea(),
+                        mapX1, mapZ1, sX, sZ, entry.seed ^ 0x51E77AL, st.riverDensity());
+            } catch (CancelledException ce) {
+                throw ce;
+            } catch (RuntimeException e) {
+                if (fine == null) throw e;
+                // 真值采样中途失败（推理异常等）：规划是纯函数，直接降级重规划
+                plugin.getLogger().log(Level.WARNING, "fine river grading", e);
+                progress.chat("真值贴地采样失败，本图退回中频贴地: " + rootMsg(e));
+                rp = RiverPlanner.plan(mid, mid, null, mapper.sea(),
+                        mapX1, mapZ1, sX, sZ, entry.seed ^ 0x51E77AL, st.riverDensity());
+            }
             // ---- 文明规划（0.33.0）：同一低频场上选聚落 + 官道网（跨片确定性）----
             if (st.civilization()) {
                 try {

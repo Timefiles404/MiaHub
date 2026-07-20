@@ -64,6 +64,8 @@ tasks.register<JavaExec>("dumpTerra") {
             ?: rootProject.projectDir.parentFile.resolve("references/terrain-diffusion/weights").absolutePath).toString())
     // -Pmiaeco.device=gpu 走 CUDA EP（需 weights/gpu-natives + weights/cuda 就位）
     systemProperty("miaeco.device", (findProperty("miaeco.device") ?: "cpu").toString())
+    // -Pmiaeco.only=river 只跑水文合成校验（无需权重，秒级迭代）
+    systemProperty("miaeco.only", (findProperty("miaeco.only") ?: "").toString())
     args(layout.buildDirectory.dir("terradump").get().asFile.absolutePath)
 }
 
@@ -104,6 +106,8 @@ tasks.register<JavaExec>("riverMap") {
     systemProperty("miaeco.sea", (findProperty("miaeco.sea") ?: "0").toString())
     // -Pmiaeco.civDebug=1 输出文明选址淘汰计数（stderr）
     systemProperty("miaeco.civDebug", (findProperty("miaeco.civDebug") ?: "false").toString())
+    // -Pmiaeco.riverDebug=1 输出贴地剖面深切诊断（stderr）
+    systemProperty("miaeco.riverDebug", (findProperty("miaeco.riverDebug") ?: "false").toString())
     args(layout.buildDirectory.dir("rivermap").get().asFile.absolutePath)
 }
 

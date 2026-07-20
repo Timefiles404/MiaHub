@@ -30,6 +30,15 @@ public final class TerraDumpTool {
         File outDir = new File(args.length > 0 ? args[0] : "build/terradump");
         outDir.mkdirs();
 
+        // -Dmiaeco.only=river：只跑水文合成校验（无需权重，秒级——贴地迭代的快速回路）
+        if ("river".equals(System.getProperty("miaeco.only", ""))) {
+            boolean f = riverRun();
+            f |= nonSquareRun();
+            System.out.println(f ? "TERRA CHECK: FAIL" : "TERRA CHECK: PASS");
+            if (f) System.exit(1);
+            return;
+        }
+
         boolean fail = false;
         for (int run = 0; run < 2; run++) {
             long seed = SEED + run * 991L;
@@ -458,13 +467,18 @@ public final class TerraDumpTool {
             return mapper.yOfF((float) (base + hills + bowl));
         };
         // 生产失配模拟拆两级：低频 ±5@74（latent lowfreq 看得见 → 贴地精修应吸收）
-        // + 高频 ±4@23（decoder 细节残差，贴地场看不见 → 两态岸羽化兜底）。
-        // 0.29.0 起 mid 同时也是定线场（与生产同构：plan(mid, mid, …)）
+        // + 高频 ±4@23（decoder 细节残差）。0.36.0 起高频层也进规划——fine 场
+        // 与栅格化地形用同一函数构造（"fine==铺设"合同），水位对真实地表定级。
         dev.timefiles.miaeco.terrain.RiverPlanner.HeightField mid = (wx, wz) ->
                 hf.yAt(wx, wz) + (float) ((dev.timefiles.miaeco.terrain.PlanOps.patch(
                         0xD1F7L, (int) Math.floor(wx), (int) Math.floor(wz), 74.0) - 0.5) * 10);
+        dev.timefiles.miaeco.terrain.RiverPlanner.HeightField fine = (wx, wz) -> {
+            int bx = (int) Math.floor(wx), bz = (int) Math.floor(wz);
+            return (float) Math.floor(mid.yAt(bx + 0.5, bz + 0.5)
+                    + (dev.timefiles.miaeco.terrain.PlanOps.patch(0xD1F8L, bx, bz, 23.0) - 0.5) * 8);
+        };
         var plan = dev.timefiles.miaeco.terrain.RiverPlanner.plan(
-                mid, mid, sea, -SZ / 2, -SZ / 2, SZ, SZ, SEED, 1.3);
+                mid, mid, fine, sea, -SZ / 2, -SZ / 2, SZ, SZ, SEED, 1.3);
         boolean fail = false;
         if (plan.rivers().isEmpty()) {
             System.out.println("RIVER EMPTY");
@@ -574,18 +588,16 @@ public final class TerraDumpTool {
                 }
             }
         }
-        // 栅格化：齐平岸（河+湖）+ 跨片一致。精细地形 = hf + 低频散度(±5@74) + 高频
-        // 散度(±4@23)，模拟生产环境 coarse 规划 vs 精细推理的失配——低频部分贴地
-        // 精修应吸收，高频残差靠漫滩/谷壁兜住（无漏水、无窄堤墙）
+        // 栅格化：齐平岸（河+湖）+ 跨片一致。精细地形与规划用的 fine 场<b>同一函数</b>
+        // （"fine==铺设"合同）：hf + 低频散度(±5@74) + 高频散度(±4@23)——
+        // 0.36.0 起两级失配规划器全都看得见，水位应几乎无残余深切/壅水
         int EW = 480, EH = 480, ox = -240, ozr = -60;            // 覆盖盆地湖区
         int[] ey = new int[EW * EH];
         boolean[] eWater = new boolean[EW * EH];
         for (int z = 0; z < EH; z++) {
             for (int x = 0; x < EW; x++) {
-                float y = mid.yAt(ox + x + 0.5, ozr + z + 0.5)
-                        + (float) ((dev.timefiles.miaeco.terrain.PlanOps.patch(
-                        0xD1F8L, ox + x, ozr + z, 23.0) - 0.5) * 8);
-                ey[z * EW + x] = (int) Math.floor(y);
+                int y = (int) fine.yAt(ox + x, ozr + z);
+                ey[z * EW + x] = y;
                 eWater[z * EW + x] = y < sea - 0.5f;
             }
         }
@@ -678,7 +690,9 @@ public final class TerraDumpTool {
                             + " ‖ 粗规划 深切 %.1f%% 壅水 %.1f%%%n",
                     fit[0], fit[2], pct(fit[0], fit[2]), fit[1], pct(fit[1], fit[2]),
                     pct(fit0[0], fit0[2]), pct(fit0[1], fit0[2]));
-            if (fit[2] > 200 && (fit[0] > fit[2] * 0.05 || fit[1] > fit[2] * 0.03)) {
+            // 0.36.0 真值贴地后阈值大幅收紧（此前 5%/3%）：规划器看得见全部失配，
+            // 残余只剩 节点间插值 + 取整 的量级
+            if (fit[2] > 200 && (fit[0] > fit[2] * 0.02 || fit[1] > fit[2] * 0.02)) {
                 System.out.println("RIVER FIT FAIL（贴地后残余深切/壅水超限）");
                 fail = true;
             }

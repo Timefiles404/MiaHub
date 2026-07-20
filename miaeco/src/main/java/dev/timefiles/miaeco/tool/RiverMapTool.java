@@ -64,8 +64,13 @@ public final class RiverMapTool {
         // 0.29.0 起同时也是定线场（Priority-Flood/D8/湖泊看见真实丘谷）
         var lf = new LocalTerrainProvider.LowfreqSampler(npb);
         RiverPlanner.HeightField mid = (wx, wz) -> mapper.yOfF(boost(lf.metersAt(wx, wz)));
+        // 真值贴地场（0.36.0，与 TerraService.planRivers 同构）：FineField 分块懒采样，
+        // 与下方 fetchPooled 铺设值逐位一致（跑完有硬自检）
+        var ff = new dev.timefiles.miaeco.terrain.FineField(p, null);
+        RiverPlanner.HeightField fine = (wx, wz) ->
+                mapper.yOf(boost(ff.metersAt((int) Math.floor(wx), (int) Math.floor(wz))));
         RiverPlanner.RiverPlan plan = RiverPlanner.plan(
-                mid, mid, sea, x1, z1, size, size, seed ^ 0x51E77AL, 1.0);
+                mid, mid, fine, sea, x1, z1, size, size, seed ^ 0x51E77AL, 1.0);
         int mains = 0, oxbows = 0, springs = 0;
         for (RiverPlanner.River r : plan.rivers()) {
             if (r.kind() == RiverPlanner.R_MAIN) {
@@ -82,18 +87,30 @@ public final class RiverMapTool {
         // ---- 精细高程（池化推理，与铺设一致）----
         t0 = System.currentTimeMillis();
         var data = TerraService.fetchPooled(x1, z1, size, size, p);
-        System.out.printf("pooled inference %.1fs%n", (System.currentTimeMillis() - t0) / 1000.0);
+        System.out.printf("pooled inference %.1fs（贴地采样已预热 %d 块，窗口全复用）%n",
+                (System.currentTimeMillis() - t0) / 1000.0, ff.chunksLoaded());
 
         int N = size * size;
         int[] ey = new int[N];
         boolean[] eWater = new boolean[N];
+        int fineMismatch = 0;
         for (int z = 0; z < size; z++) {
             for (int x = 0; x < size; x++) {
                 float m = boost(data.heightmap[z][x]);           // open：无海环衰减
                 int i = z * size + x;
                 ey[i] = mapper.yOf(m);
                 eWater[i] = m < 0 && ey[i] < sea;
+                // 真值场自检：FineField 采样链必须与铺设读数逐位一致
+                if ((x % 37 == 5) && (z % 37 == 11)
+                        && (int) fine.yAt(x1 + x, z1 + z) != ey[i]) {
+                    fineMismatch++;
+                }
             }
+        }
+        if (fineMismatch > 0) {
+            System.out.println("FINE FIELD MISMATCH! " + fineMismatch + " 采样点与铺设值不一致");
+        } else {
+            System.out.println("fine==铺设 自检 OK（逐位一致）");
         }
         boolean[] eRiver = new boolean[N];
         boolean[] eShoal = new boolean[N];
@@ -135,6 +152,54 @@ public final class RiverMapTool {
         System.out.printf("贴地：残余深切>8 %d/%d(%.2f%%)，壅水>4 %d(%.2f%%)%n",
                 fit[0], fit[2], fit[2] > 0 ? 100.0 * fit[0] / fit[2] : 0,
                 fit[1], fit[2] > 0 ? 100.0 * fit[1] / fit[2] : 0);
+        // 中心线体检：节点水位 vs 该点铺设前地形（区分“剖面定级错”与“V 谷壁被计入”）
+        {
+            int[] hist = new int[6];   // ≤-5 / (-5,-2] / (-2,2) / [2,5) / [5,8] / >8
+            int nn = 0;
+            for (RiverPlanner.River r : plan.rivers()) {
+                if (r.kind() != RiverPlanner.R_MAIN) continue;
+                for (RiverPlanner.Node nd : r.nodes()) {
+                    int bx = (int) Math.floor(nd.x()) - x1, bz = (int) Math.floor(nd.z()) - z1;
+                    if (bx < 0 || bz < 0 || bx >= size || bz >= size) continue;
+                    int mis = eyB[bz * size + bx] - nd.wl();
+                    nn++;
+                    hist[mis <= -5 ? 0 : mis <= -2 ? 1 : mis < 2 ? 2 : mis < 5 ? 3 : mis <= 8 ? 4 : 5]++;
+                }
+            }
+            System.out.printf("中心线 mis 直方图（地面−水位, n=%d）：≤-5:%d (-5,-2]:%d (-2,2):%d [2,5):%d [5,8]:%d >8:%d%n",
+                    nn, hist[0], hist[1], hist[2], hist[3], hist[4], hist[5]);
+        }
+        if (Boolean.getBoolean("miaeco.riverDebug")) {
+            // 最大深切热点的地形横断面（铺设前地形 + 水位）：看清是 V 谷壁还是真渡槽/深槽
+            int hx = -1, hz = -1;
+            long bestScore = -1;
+            for (int z = 8; z < size - 8; z += 4) {
+                for (int x = 8; x < size - 8; x += 4) {
+                    int i = z * size + x;
+                    if (!eRiver[i] || eyB[i] - eWl[i] <= 8) continue;
+                    long sc = 0;
+                    for (int dz2 = -8; dz2 <= 8; dz2 += 2)
+                        for (int dx2 = -8; dx2 <= 8; dx2 += 2) {
+                            int j = (z + dz2) * size + x + dx2;
+                            if (eRiver[j] && eyB[j] - eWl[j] > 8) sc++;
+                        }
+                    if (sc > bestScore) { bestScore = sc; hx = x; hz = z; }
+                }
+            }
+            if (hx >= 0) {
+                System.err.printf("XSEC hotspot @world(%d,%d) wl=%d eyB=%d%n",
+                        x1 + hx, z1 + hz, eWl[hz * size + hx], eyB[hz * size + hx]);
+                for (int dz2 = -6; dz2 <= 6; dz2 += 2) {
+                    StringBuilder sb = new StringBuilder(String.format("  z%+d: ", dz2));
+                    for (int dx2 = -12; dx2 <= 12; dx2++) {
+                        int j = (hz + dz2) * size + hx + dx2;
+                        sb.append(String.format("%4d", eyB[j]));
+                        sb.append(eRiver[j] ? String.format("w%-3d", eWl[j]) : "    ");
+                    }
+                    System.err.println(sb);
+                }
+            }
+        }
 
         // ---- 渲染：高程分层设色 × 山体阴影 + 水体 ----
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
