@@ -114,6 +114,22 @@
       "dependencies": [],
       "passwordProtected": false,
       "description": "Parametric procedural forest plugin: terrain-driven tree placement, async cellular tree growth, and succession."
+    },
+    {
+      "id": "miaattributes",
+      "name": "MiaAttributes",
+      "pluginName": "MiaAttributes",
+      "repository": "Timefiles404/MiaHub",
+      "releaseTag": "miaattributes-v0.1.0",
+      "asset": "MiaAttributes-0.1.0.jar",
+      "fileName": "MiaAttributes.jar",
+      "version": "0.1.0",
+      "minecraft": "1.21.x",
+      "java": 21,
+      "restartRequired": false,
+      "dependencies": [],
+      "passwordProtected": false,
+      "description": "Virtual health/damage/food/exp takeover with an extensible RPG attribute engine."
     }
   ]
 }

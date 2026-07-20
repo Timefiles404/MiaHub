@@ -1,0 +1,247 @@
+# MiaAttributes 属性注册表
+#
+# 每个条目注册一个属性：
+#   display-name : 展示名称（支持 & 颜色代码）
+#   base         : 默认基础值（玩家可被 /miattr setbase 覆盖）
+#   min / max    : 最终值钳制范围（防止修饰符把数值推到非法区间）
+#   vanilla      : 可选，映射到原版 attribute（按 registry key 解析，1.21.x 新旧 key 都会尝试）
+#     key        : 原版 attribute key，例如 minecraft:movement_speed
+#     op         : add = 修饰符加法（最终值-baseline 作为增量）；multiply = 百分比乘法（最终值/baseline 为倍率）
+#     baseline   : op=add 时默认 0；op=multiply 时默认 100（即 base=100 表示 100%，120 表示 +20%）
+#
+# 删除条目即停用该属性（核心属性会以默认值自动补回）；新增条目即注册自定义属性，
+# 自定义属性可通过 API / PlaceholderAPI / 修饰符系统直接使用。
+
+attributes:
+  # ---- 生命与防御 ----
+  max_health:
+    display-name: "&c最大生命值"
+    base: 100.0
+    min: 1.0
+    max: 10000000.0
+  health_regen:
+    display-name: "&a生命回复/秒"
+    base: 2.0
+    min: 0.0
+    max: 1000000.0
+  healing_bonus:
+    display-name: "&d受疗加成%"
+    base: 100.0
+    min: 0.0
+    max: 10000.0
+  max_absorption:
+    display-name: "&e最大吸收护盾"
+    base: 400.0
+    min: 0.0
+    max: 10000000.0
+  defense:
+    display-name: "&9防御力"
+    base: 0.0
+    min: 0.0
+    max: 1000000.0
+  damage_reduction:
+    display-name: "&9百分比减伤%"
+    base: 0.0
+    min: 0.0
+    max: 100.0
+  flat_reduction:
+    display-name: "&9固定减伤"
+    base: 0.0
+    min: 0.0
+    max: 1000000.0
+  dodge_chance:
+    display-name: "&b闪避几率%"
+    base: 0.0
+    min: 0.0
+    max: 100.0
+
+  # ---- 攻击 ----
+  attack_damage:
+    display-name: "&4附加攻击伤害"
+    base: 0.0
+    min: 0.0
+    max: 10000000.0
+  attack_power:
+    display-name: "&4攻击威力%"
+    base: 100.0
+    min: 0.0
+    max: 100000.0
+  crit_chance:
+    display-name: "&6暴击几率%"
+    base: 5.0
+    min: 0.0
+    max: 100.0
+  crit_damage:
+    display-name: "&6暴击伤害%"
+    base: 150.0
+    min: 100.0
+    max: 100000.0
+  lifesteal:
+    display-name: "&5吸血%"
+    base: 0.0
+    min: 0.0
+    max: 1000.0
+
+  # ---- 饱食 ----
+  max_food:
+    display-name: "&e最大饱食度"
+    base: 100.0
+    min: 1.0
+    max: 1000000.0
+  hunger_rate:
+    display-name: "&e饥饿消耗速度%"
+    base: 100.0
+    min: 0.0
+    max: 10000.0
+  nutrition_bonus:
+    display-name: "&e食物营养加成%"
+    base: 100.0
+    min: 0.0
+    max: 10000.0
+
+  # ---- 经验 ----
+  exp_gain:
+    display-name: "&2经验获取%"
+    base: 100.0
+    min: 0.0
+    max: 100000.0
+
+  # ---- 原版属性映射（虚拟属性 -> 原版 attribute，通过临时修饰符桥接，卸载/崩溃零残留）----
+  movement_speed:
+    display-name: "&f移动速度%"
+    base: 100.0
+    min: 0.0
+    max: 1000.0
+    vanilla: { key: "minecraft:movement_speed", op: multiply, baseline: 100.0 }
+  attack_speed:
+    display-name: "&f攻击速度%"
+    base: 100.0
+    min: 0.0
+    max: 1000.0
+    vanilla: { key: "minecraft:attack_speed", op: multiply, baseline: 100.0 }
+  knockback_resistance:
+    display-name: "&f击退抗性"
+    base: 0.0
+    min: 0.0
+    max: 1.0
+    vanilla: { key: "minecraft:knockback_resistance", op: add }
+  vanilla_armor:
+    display-name: "&f原版护甲加成"
+    base: 0.0
+    min: -30.0
+    max: 30.0
+    vanilla: { key: "minecraft:armor", op: add }
+  vanilla_armor_toughness:
+    display-name: "&f原版护甲韧性加成"
+    base: 0.0
+    min: -20.0
+    max: 20.0
+    vanilla: { key: "minecraft:armor_toughness", op: add }
+  luck:
+    display-name: "&f幸运"
+    base: 0.0
+    min: -1024.0
+    max: 1024.0
+    vanilla: { key: "minecraft:luck", op: add }
+  scale:
+    display-name: "&f体型%"
+    base: 100.0
+    min: 6.25
+    max: 1600.0
+    vanilla: { key: "minecraft:scale", op: multiply, baseline: 100.0 }
+  step_height:
+    display-name: "&f跨步高度加成"
+    base: 0.0
+    min: 0.0
+    max: 10.0
+    vanilla: { key: "minecraft:step_height", op: add }
+  jump_strength:
+    display-name: "&f跳跃力%"
+    base: 100.0
+    min: 0.0
+    max: 1000.0
+    vanilla: { key: "minecraft:jump_strength", op: multiply, baseline: 100.0 }
+  gravity:
+    display-name: "&f重力%"
+    base: 100.0
+    min: -100.0
+    max: 1000.0
+    vanilla: { key: "minecraft:gravity", op: multiply, baseline: 100.0 }
+  safe_fall_distance:
+    display-name: "&f安全坠落距离加成"
+    base: 0.0
+    min: -1024.0
+    max: 1024.0
+    vanilla: { key: "minecraft:safe_fall_distance", op: add }
+  fall_damage_multiplier:
+    display-name: "&f坠落伤害%"
+    base: 100.0
+    min: 0.0
+    max: 10000.0
+    vanilla: { key: "minecraft:fall_damage_multiplier", op: multiply, baseline: 100.0 }
+  block_interaction_range:
+    display-name: "&f方块交互距离加成"
+    base: 0.0
+    min: -6.0
+    max: 64.0
+    vanilla: { key: "minecraft:block_interaction_range", op: add }
+  entity_interaction_range:
+    display-name: "&f实体交互距离加成"
+    base: 0.0
+    min: -6.0
+    max: 64.0
+    vanilla: { key: "minecraft:entity_interaction_range", op: add }
+  block_break_speed:
+    display-name: "&f挖掘速度%"
+    base: 100.0
+    min: 0.0
+    max: 1000.0
+    vanilla: { key: "minecraft:block_break_speed", op: multiply, baseline: 100.0 }
+  mining_efficiency:
+    display-name: "&f挖掘效率加成"
+    base: 0.0
+    min: 0.0
+    max: 1024.0
+    vanilla: { key: "minecraft:mining_efficiency", op: add }
+  sneaking_speed:
+    display-name: "&f潜行速度%"
+    base: 100.0
+    min: 0.0
+    max: 1000.0
+    vanilla: { key: "minecraft:sneaking_speed", op: multiply, baseline: 100.0 }
+  movement_efficiency:
+    display-name: "&f困难地形移动效率"
+    base: 0.0
+    min: 0.0
+    max: 1.0
+    vanilla: { key: "minecraft:movement_efficiency", op: add }
+  water_movement_efficiency:
+    display-name: "&f水下移动效率"
+    base: 0.0
+    min: 0.0
+    max: 1.0
+    vanilla: { key: "minecraft:water_movement_efficiency", op: add }
+  submerged_mining_speed:
+    display-name: "&f水下挖掘速度%"
+    base: 100.0
+    min: 0.0
+    max: 1000.0
+    vanilla: { key: "minecraft:submerged_mining_speed", op: multiply, baseline: 100.0 }
+  oxygen_bonus:
+    display-name: "&f氧气加成"
+    base: 0.0
+    min: 0.0
+    max: 1024.0
+    vanilla: { key: "minecraft:oxygen_bonus", op: add }
+  burning_time:
+    display-name: "&f燃烧时间%"
+    base: 100.0
+    min: 0.0
+    max: 10000.0
+    vanilla: { key: "minecraft:burning_time", op: multiply, baseline: 100.0 }
+  explosion_knockback_resistance:
+    display-name: "&f爆炸击退抗性"
+    base: 0.0
+    min: 0.0
+    max: 1.0
+    vanilla: { key: "minecraft:explosion_knockback_resistance", op: add }

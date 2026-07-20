@@ -1,0 +1,23 @@
+name: MiaAttributes
+main: dev.timefiles.miaattributes.MiaAttributesPlugin
+version: ${version}
+api-version: "1.21"
+description: Virtual health/damage/food/exp takeover with an extensible RPG attribute engine.
+author: Timefiles404
+softdepend:
+  - PlaceholderAPI
+commands:
+  miattr:
+    description: MiaAttributes 命令。
+    aliases: [miaa]
+    usage: /miattr help
+permissions:
+  miaattributes.use:
+    description: 允许查看自己的 MiaAttributes 属性面板。
+    default: true
+  miaattributes.admin:
+    description: 允许管理玩家属性、虚拟数值与修饰符。
+    default: op
+  miaattributes.reload:
+    description: 允许重载 MiaAttributes。
+    default: op

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>MiaAttributes Wiki</title>
+  <style>
+    body{margin:0;background:#f6f8fb;color:#1c2430;font:15px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    main{max-width:980px;margin:0 auto;padding:42px 24px}
+    h1{font-size:32px;margin:0 0 8px}h2{font-size:20px;margin:30px 0 10px}h3{font-size:16px;margin:18px 0 8px}
+    code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+    pre{background:#172033;color:#eef4ff;padding:16px;border-radius:8px;overflow:auto}
+    section{background:white;border:1px solid #dfe6f0;border-radius:8px;padding:22px;margin-top:18px}
+    table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #edf1f6;text-align:left;vertical-align:top}
+  </style>
+</head>
+<body>
+<main>
+  <h1>MiaAttributes</h1>
+  <p>MiaAttributes 为 RPG 玩法提供一套<strong>虚拟数值层</strong>：玩家的生命值、吸收护盾、饱食度、经验值全部先存在于插件的虚拟层中，原版事件被接管后<strong>先走虚拟结算，再按比例映射回原版数值</strong>——血条、饱食条、经验条只是"显示器"。每一路映射都可以独立关闭。在此之上提供可扩展的 RPG 属性引擎（暴击、闪避、防御、吸血……）以及尽可能全的原版属性映射（移动速度、幸运、体型、重力、挖掘速度等）。</p>
+
+  <section>
+    <h2>核心机制</h2>
+    <h3>虚拟生命值</h3>
+    <p>玩家受伤时（HIGHEST 优先级，低优先级插件的修改会作为输入），伤害先乘 <code>damage.scale</code> 进入虚拟规模，走完整伤害管线后扣减虚拟生命/护盾；随后插件把原版伤害事件的全部修正清零、只保留 BASE，使事件应用后的<strong>原版血条恰好等于虚拟比例</strong>。击退、红屏、死亡动画、不死图腾判定全部保留原版行为。虚拟生命归零时构造必死伤害，让原版死亡流程（掉落、死亡消息、图腾）自然发生；图腾生效后下一 tick 从原版反向同步虚拟层。</p>
+    <p>吸收护盾（金苹果等）同样被虚拟化：药水给予的原版吸收心会按比例进入虚拟护盾池，伤害先扣护盾再扣生命，剩余护盾映射回原版金心显示。</p>
+    <h3>虚拟伤害管线</h3>
+    <pre>输入伤害 x damage.scale
+  → +attack_damage → x attack_power% → 暴击判定（crit_chance / crit_damage）
+  → 闪避判定（dodge_chance，仅实体攻击） → 防御力减伤 defense/(defense+K)
+  → 百分比减伤 damage_reduction（封顶可配） → 固定减伤 flat_reduction
+  → VirtualDamageEvent（API 可修改/取消） → 扣护盾 → 扣生命 → 吸血 lifesteal</pre>
+    <p>玩家攻击未接管的目标（怪物）时，攻击方属性照常生效，结果按原版规模写回事件，怪物的原版护甲继续运作。<code>damage.input</code> 可选 <code>final</code>（保留原版护甲/附魔减免语义）或 <code>base</code>（完全架空，防御全部交给虚拟属性）。</p>
+    <h3>虚拟饱食度</h3>
+    <p>饱食变化事件被接管：进食恢复乘 <code>nutrition_bonus</code>，饥饿消耗乘 <code>hunger_rate</code>，换算进 0..max_food 的虚拟池后再映射回原版 20 格显示。饱和度的恢复与消耗在原版里不触发事件，由对账循环按比例吸收。</p>
+    <h3>虚拟经验</h3>
+    <p>经验获取事件被接管（乘 <code>exp_gain</code>）进入虚拟经验池，等级曲线可选 <code>vanilla</code> / <code>linear</code> / <code>exponential</code>。原版等级条显示虚拟等级。附魔台、砧板等消耗原版等级的操作无需特判：原版显示等级就是虚拟等级，插件把等级差按曲线换算为虚拟经验差额自动吸收。死亡掉落经验与保留比例可配。</p>
+    <h3>对账兜底（无漏洞的关键）</h3>
+    <p>任何绕过事件直接 <code>setHealth</code> / <code>setFoodLevel</code> / <code>setLevel</code>、或原版没有事件的路径（饱和度消耗、/xp 命令加经验条进度、药水吸收心衰减），都由每 tick 的对账循环检测"实际原版值 vs 上次映射写入的期望值"，把差值按比例反向吸收进虚拟层并重新映射。虚拟层与显示层最多 1 tick 内收敛，永不脱节。每玩家每 tick 的常态开销只是十几次浮点比较。</p>
+  </section>
+
+  <section>
+    <h2>属性系统</h2>
+    <p>属性在 <code>attributes.yml</code> 注册，删除条目即停用（核心属性会以默认值自动补回），新增条目即注册自定义属性。每个属性有基础值、最终值钳制范围，支持三种修饰符运算：</p>
+    <pre>最终值 = (base + ΣADD) x (1 + ΣADD_PERCENT/100) x ΠMULTIPLY，再按 [min, max] 钳制</pre>
+    <p>修饰符可带时限（到期自动移除，不持久化）与来源标签（可按来源批量清除）。带 <code>vanilla</code> 段的属性会通过 <strong>transient 修饰符</strong>桥接到原版 attribute（不写入玩家存档，崩溃/卸载零残留），例如移动速度、攻击速度、幸运、体型、重力、跳跃力、挖掘速度、氧气、燃烧时间等 20 余项。</p>
+    <table>
+      <thead><tr><th>分组</th><th>属性</th></tr></thead>
+      <tbody>
+        <tr><td>生命防御</td><td>max_health、health_regen、healing_bonus、max_absorption、defense、damage_reduction、flat_reduction、dodge_chance</td></tr>
+        <tr><td>攻击</td><td>attack_damage、attack_power、crit_chance、crit_damage、lifesteal</td></tr>
+        <tr><td>饱食</td><td>max_food、hunger_rate、nutrition_bonus</td></tr>
+        <tr><td>经验</td><td>exp_gain</td></tr>
+        <tr><td>原版映射</td><td>movement_speed、attack_speed、knockback_resistance、vanilla_armor、vanilla_armor_toughness、luck、scale、step_height、jump_strength、gravity、safe_fall_distance、fall_damage_multiplier、block_interaction_range、entity_interaction_range、block_break_speed、mining_efficiency、sneaking_speed、movement_efficiency、water_movement_efficiency、submerged_mining_speed、oxygen_bonus、burning_time、explosion_knockback_resistance</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>命令</h2>
+    <pre>/miattr stats [玩家]                          查看虚拟数值与属性面板
+/miattr get &lt;玩家&gt; &lt;属性&gt;                      属性详情（含修饰符列表）
+/miattr setbase &lt;玩家&gt; &lt;属性&gt; &lt;数值&gt;            设置基础值
+/miattr resetbase &lt;玩家&gt; &lt;属性&gt;                重置基础值
+/miattr mod add &lt;玩家&gt; &lt;属性&gt; &lt;id&gt; &lt;数值&gt; &lt;add|addpercent|multiply&gt; [秒] [来源]
+/miattr mod remove &lt;玩家&gt; &lt;属性&gt; &lt;id&gt;
+/miattr mod clear &lt;玩家&gt; [来源]
+/miattr mod list &lt;玩家&gt; [属性]
+/miattr hp &lt;set|add|damage|heal&gt; &lt;玩家&gt; &lt;数值&gt;
+/miattr food &lt;set|add&gt; &lt;玩家&gt; &lt;数值&gt;
+/miattr xp &lt;give|take|setlevel&gt; &lt;玩家&gt; &lt;数值&gt;
+/miattr sync &lt;玩家&gt;                            强制重映射原版数值
+/miattr reload                                重载配置与属性注册表</pre>
+    <p>权限：<code>miaattributes.use</code>（查看自己，默认所有人）、<code>miaattributes.admin</code>（管理，默认 OP）、<code>miaattributes.reload</code>（重载，默认 OP）。别名 <code>/miaa</code>。</p>
+  </section>
+
+  <section>
+    <h2>PlaceholderAPI</h2>
+    <pre>%miaattr_hp% %miaattr_hp_max% %miaattr_hp_percent% %miaattr_absorption%
+%miaattr_food% %miaattr_food_max% %miaattr_food_percent% %miaattr_saturation%
+%miaattr_level% %miaattr_xp_total% %miaattr_xp_progress% %miaattr_xp_to_next%
+%miaattr_value_&lt;属性id&gt;% %miaattr_base_&lt;属性id&gt;%</pre>
+  </section>
+
+  <section>
+    <h2>开发者 API</h2>
+    <p>通过 ServicesManager 获取 <code>dev.timefiles.miaattributes.api.MiaAttributesApi</code>：</p>
+    <pre>MiaAttributesApi api = Bukkit.getServicesManager().load(MiaAttributesApi.class);
+api.addModifier(uuid, "crit_chance", "myplugin:ring", 15.0, ModifierOperation.ADD, "myplugin", 0);
+api.heal(uuid, 50.0);
+double hp = api.health(uuid).orElse(0);</pre>
+    <p>可监听的事件（均在结算前触发、可取消/修改，数值处于虚拟规模）：</p>
+    <pre>VirtualDamageEvent    虚拟伤害结算前（可改最终伤害；取消则连原版伤害一起取消）
+VirtualHealEvent      虚拟回复前
+VirtualExpGainEvent   虚拟经验变动前
+VirtualFoodChangeEvent 虚拟饱食变动前</pre>
+  </section>
+
+  <section>
+    <h2>配置要点</h2>
+    <table>
+      <thead><tr><th>键</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>mapping.health / food / exp</code></td><td>各路虚拟数值是否映射回原版。关闭后虚拟层照常运行（平行模式），适合用自定义 HUD 展示。</td></tr>
+        <tr><td><code>mapping.health-display-max</code></td><td>原版血条显示上限（20=一排心，40=两排），仅影响显示。</td></tr>
+        <tr><td><code>mapping.virtual-death-kills</code></td><td>不映射生命时，虚拟生命归零是否仍然杀死玩家。</td></tr>
+        <tr><td><code>damage.scale</code></td><td>原版伤害进入虚拟规模的全局倍率。默认 5.0 配合 max_health=100 保持原版"半颗心"体感。</td></tr>
+        <tr><td><code>damage.input</code></td><td><code>final</code>=保留原版护甲减免语义；<code>base</code>=完全架空原版减伤。</td></tr>
+        <tr><td><code>health.takeover-natural-regen</code></td><td>取消原版饱食回血，改由 health_regen 属性驱动。</td></tr>
+        <tr><td><code>exp.curve</code></td><td>等级曲线 vanilla / linear / exponential，max-level 封顶。</td></tr>
+        <tr><td><code>hud.actionbar</code></td><td>actionbar 显示虚拟数值（默认关）。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>兼容性说明</h2>
+    <p>接管挂在 HIGHEST 优先级：其他插件在更低优先级对伤害/饱食/经验事件的修改会作为虚拟层的输入被尊重。MONITOR 级别的插件看到的是映射后的原版数值。原版属性桥只增删自己命名空间（<code>miaattributes:attr_*</code>）的 transient 修饰符，与其他插件的修饰符互不干扰。玩家退出、插件卸载时会清理全部桥接修饰符；即使服务器崩溃，transient 修饰符也不会残留在玩家存档里。</p>
+    <p>纯 Bukkit API 实现、零 NMS，jar 声明 mojang 映射命名空间，Paper 免重映射直接加载。</p>
+  </section>
+</main>
+</body>
+</html>

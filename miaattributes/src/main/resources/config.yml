@@ -1,0 +1,79 @@
+# MiaAttributes 主配置
+#
+# 核心思想：玩家的生命值 / 吸收护盾 / 饱食度 / 经验值全部先存在于"虚拟层"，
+# 原版事件（受伤、回血、饱食变化、捡经验、附魔扣级……）会被接管，先在虚拟层结算，
+# 再按比例映射回原版数值（血条 / 饱食条 / 经验条只是显示器）。
+# 每一路映射都可以单独关闭：关闭后虚拟数值仍然完整运行，只是不再改写原版数值。
+
+mapping:
+  # 虚拟生命值是否映射到原版血条（含吸收护盾接管）。
+  health: true
+  # 虚拟饱食度 / 饱和度是否映射到原版饱食条。
+  food: true
+  # 虚拟经验是否映射到原版等级 / 经验条。
+  exp: true
+  # 原版血条的显示上限（20 = 一排心，40 = 两排）。通过 max_health 修饰符实现，仅影响显示。
+  health-display-max: 20.0
+  # mapping.health 关闭时，虚拟生命归零是否仍然杀死玩家（false 时虚拟死亡只发事件不杀人）。
+  virtual-death-kills: true
+
+reconcile:
+  # 对账兜底：每 tick 比较原版数值与上次映射写入的期望值，
+  # 任何绕过事件直接 setHealth / setFoodLevel / setLevel 的外部修改都会被按比例吸收进虚拟层。
+  # 这是"无漏洞"的最后一道防线，开销是每玩家每 tick 几次浮点比较，可忽略。
+  enabled: true
+
+damage:
+  # 原版伤害进入虚拟管线的全局缩放。默认 5.0：原版 1 点伤害 = 5 点虚拟伤害，
+  # 配合默认 max_health=100（原版 20 血 x5），保持与原版一致的"半颗心"体感。
+  scale: 5.0
+  # 虚拟伤害的输入口径：
+  #   final = 事件最终伤害（已含原版护甲/药水/附魔/盾牌减免，吸收护盾除外），保留原版装备语义；
+  #   base  = 事件原始伤害（完全架空原版减伤，防御全部交给虚拟属性），适合全 RPG 化的服务器。
+  input: final
+  # 防御力减伤公式 damage * (1 - defense / (defense + K)) 中的常数 K。
+  # K=100 时 100 点防御 = 50% 减伤，300 点防御 = 75% 减伤。
+  defense-constant: 100.0
+  # damage_reduction（百分比减伤属性）的封顶值。
+  max-damage-reduction-percent: 90.0
+  # 闪避成功时的反馈（actionbar 提示 + 音效）。
+  dodge-feedback: true
+
+health:
+  # 是否取消原版的饱食自然回血（SATIATED/REGEN），改由 health_regen 属性驱动虚拟回复。
+  takeover-natural-regen: true
+  # 虚拟饱食度百分比达到该值才触发 health_regen 自然回复。
+  regen-requires-food-percent: 30.0
+  # 自然回复间隔（tick），默认 20 = 每秒回复 health_regen 点虚拟生命。
+  regen-interval-ticks: 20
+
+food:
+  # 原版饥饿消耗换算到虚拟层时是否随 hunger_rate 属性缩放（100 = 原版速度）。
+  # 进食恢复受 nutrition_bonus 属性缩放。
+  respect-attributes: true
+
+exp:
+  # 等级曲线：vanilla = 原版公式；linear = 每级固定 XP；exponential = 指数增长。
+  curve: vanilla
+  # 曲线的最大等级（超过后经验继续累积但等级封顶）。
+  max-level: 1000
+  linear:
+    xp-per-level: 100.0
+  exponential:
+    base-xp: 50.0
+    growth: 1.08
+
+death:
+  # 死亡时虚拟经验保留比例（0.0 = 全部清空，1.0 = 完全保留）。keepLevel 规则（如 /gamerule keepInventory）优先。
+  keep-exp-ratio: 0.0
+  # 死亡掉落经验 = min(虚拟等级 * dropped-exp-per-level, dropped-exp-max)。
+  dropped-exp-per-level: 7
+  dropped-exp-max: 100
+
+hud:
+  # 每 10 tick 用 actionbar 显示虚拟数值（❤ 生命 | 🍗 饱食 | ✦ 等级）。默认关闭。
+  actionbar: false
+
+storage:
+  # 自动保存间隔（秒），只保存有变化的玩家。
+  autosave-seconds: 300
