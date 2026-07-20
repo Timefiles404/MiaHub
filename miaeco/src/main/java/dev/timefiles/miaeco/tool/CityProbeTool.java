@@ -106,10 +106,94 @@ public final class CityProbeTool {
             @Override public short biome(int lx, int lz) { return (short) biome; }
             @Override public int wlvl(int lx, int lz) { return sea; }
         };
+        java.io.File outDir = new java.io.File(args.length > 0 ? args[0] : "build/cityprobe");
+        outDir.mkdirs();
         for (int biome : new int[]{1, 5, 94}) {
             List<BlockEdit> edits = new ArrayList<>();
             String sum = CityWorks.build(mk.apply(biome), ox, oz, cap, 20260709L, edits);
-            System.out.println("biome=" + biome + ": " + sum + " (" + edits.size() + ")");
+            final int[] fey2 = ey;
+            long tall = edits.stream().filter(e -> {
+                int lx = e.x() - ox, lz = e.z() - oz;
+                return lx >= 0 && lz >= 0 && lx < EW && lz < EH
+                        && e.spec().material != org.bukkit.Material.AIR
+                        && e.y() > fey2[lz * EW + lx] + 3;
+            }).count();
+            System.out.println("biome=" + biome + ": " + sum + " (" + edits.size()
+                    + " edits, tall=" + tall + ")");
+            renderPlan(edits, ey, EW, EH, ox, oz, new java.io.File(outDir, "city_" + biome + ".png"));
         }
+        System.out.println("PNG -> " + outDir.getAbsolutePath());
+    }
+
+    /** 顶视平面图：底图=合成地形灰阶，叠加编辑列的最高非空气方块按材质族着色。 */
+    private static void renderPlan(List<BlockEdit> edits, int[] ey, int EW, int EH,
+                                   int ox, int oz, java.io.File f) {
+        var img = new java.awt.image.BufferedImage(EW, EH, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        for (int z = 0; z < EH; z++) {
+            for (int x = 0; x < EW; x++) {
+                int y = ey[z * EW + x];
+                int v = Math.max(0, Math.min(255, 96 + (y - 70) * 6));
+                img.setRGB(x, z, v << 16 | (v + 12 & 255) << 8 | v);
+            }
+        }
+        int[] topY = new int[EW * EH];
+        java.util.Arrays.fill(topY, Integer.MIN_VALUE);
+        int[] col = new int[EW * EH];
+        for (BlockEdit e : edits) {
+            int lx = e.x() - ox, lz = e.z() - oz;
+            if (lx < 0 || lz < 0 || lx >= EW || lz >= EH) continue;
+            String n = e.spec().material.name();
+            if (n.equals("AIR")) continue;
+            int i = lz * EW + lx;
+            if (e.y() < topY[i]) continue;
+            topY[i] = e.y();
+            col[i] = colorOf(n);
+        }
+        for (int i = 0; i < EW * EH; i++) {
+            if (topY[i] == Integer.MIN_VALUE || col[i] == 0) continue;
+            int c = col[i];
+            int h = topY[i] - ey[i];
+            if (h > 2) {
+                // 建筑体：按高度加亮（高的更亮，贴地铺装压暗）
+                double lum = Math.min(1.35, 1.0 + h * 0.03);
+                int r = Math.min(255, (int) ((c >> 16 & 255) * lum));
+                int gg = Math.min(255, (int) ((c >> 8 & 255) * lum));
+                int b = Math.min(255, (int) ((c & 255) * lum));
+                c = r << 16 | gg << 8 | b;
+            } else {
+                int r = (int) ((c >> 16 & 255) * 0.62);
+                int gg = (int) ((c >> 8 & 255) * 0.62);
+                int b = (int) ((c & 255) * 0.62);
+                c = r << 16 | gg << 8 | b;
+            }
+            img.setRGB(i % EW, i / EW, c);
+        }
+        try {
+            javax.imageio.ImageIO.write(img, "png", f);
+        } catch (java.io.IOException ignored) { }
+    }
+
+    private static int colorOf(String n) {
+        if (n.contains("WATER")) return 0x3F76E4;
+        if (n.contains("FARMLAND") || n.contains("WHEAT") || n.contains("CARROT")
+                || n.contains("POTATO") || n.contains("BEETROOT")) return 0xC9B458;
+        if (n.contains("PLANKS") || n.contains("LOG") || n.contains("WOOD")) return 0x8A5A30;
+        if (n.contains("PATH")) return 0xB8945F;
+        if (n.contains("GRAVEL")) return 0x7E7E78;
+        if (n.contains("COBBLESTONE")) return 0x828282;
+        if (n.contains("SANDSTONE")) return 0xD9CB94;
+        if (n.contains("QUARTZ")) return 0xEDE8E0;
+        if (n.contains("STONE_BRICK")) return 0x9A9A9A;
+        if (n.contains("BRICK")) return 0xA8624C;
+        if (n.contains("ANDESITE") || n.equals("STONE")) return 0x8C8C8C;
+        if (n.contains("LEAVES") || n.contains("GRASS") || n.contains("FLOWER")
+                || n.contains("DAISY") || n.contains("CORNFLOWER")) return 0x5E9A4E;
+        if (n.contains("WOOL") || n.contains("TERRACOTTA")) return 0xB05548;
+        if (n.contains("LANTERN") || n.contains("TORCH")) return 0xFFD966;
+        if (n.contains("FENCE") || n.contains("WALL")) return 0x6E5B3E;
+        if (n.contains("HAY")) return 0xD4B03E;
+        if (n.contains("SNOW")) return 0xF2F2F2;
+        if (n.contains("DIRT")) return 0x96702F;
+        return 0x707070;
     }
 }

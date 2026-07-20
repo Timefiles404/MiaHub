@@ -195,27 +195,50 @@ public final class CityWorks {
             }
         }
 
-        // ---- 街网 ----
-        // 主街一路铺到地块边缘（穿过城门与农田带，衔接官道端点）
-        List<int[]> mains = new ArrayList<>();      // 主街格（本地坐标）
-        for (float th : dirs) {
-            int reachOut = (int) (CivPlanner.rimAt(site, th) + CivPlanner.FIELD_BAND - 1);
-            int gx = cx + (int) Math.round(Math.cos(th) * reachOut);
-            int gz = cz + (int) Math.round(Math.sin(th) * reachOut);
-            paintStreet(g, occ, side, off, cx, cz, hubX + (int) Math.signum(gx - hubX) * plazaH,
-                    hubZ + (int) Math.signum(gz - hubZ) * plazaH, gx, gz, 2, kit, pad, ox, oz,
-                    seed, out, mains, royalRect);
+        // ---- 广场预占位（0.37.0）：巷道生长与连排房都要绕开场地 ----
+        for (int dz = -plazaH; dz <= plazaH; dz++) {
+            for (int dx = -plazaH; dx <= plazaH; dx++) {
+                int oi = occIdx(side, off, cx, cz, hubX + dx, hubZ + dz);
+                if (oi >= 0 && occ[oi] == 0) occ[oi] = 4;
+            }
         }
-        if (tier >= 2) {
-            ringStreet(g, occ, side, off, site, cx, cz, kit, pad, ox, oz, seed, out, royalRect);
-        }
-        gridStreets(g, occ, side, off, site, cx, cz, hubX, hubZ, plazaH, kit, pad, ox, oz,
-                seed, out, royalRect, tier);
 
-        // ---- 城墙（tier≥2，沿 rim 有机轮廓） ----
-        int towers = 0;
-        if (tier >= 2) towers = wall(g, occ, side, off, site, cx, cz, tier, kit, pad, ox, oz,
-                seed, dirs, out);
+        // ---- 肌理范围场（0.37.0）：城不再是圆——每向半径 = rim × 谐波起伏
+        // （0.55~1.0，朝城门向外隆起）；巷道/房屋/铺装全按它伸展，城墙随后
+        // 包住实际建成的肌理 → 轮廓由内容决定
+        float[] fab = fabricField(site, dirs, seed);
+
+        // ---- 街网（0.37.0 重做）：弯曲干道（城门→广场）+ 生长巷道 ----
+        // 环路与轴对齐网格退役——巷子从"街距场"最深腹地长出来，块形不规则，
+        // 大道/侧街/窄巷层级由劈开的腹地深度决定。
+        List<Street> streets = new ArrayList<>();
+        for (float th : dirs) {
+            streets.add(artery(g, occ, side, off, site, cx, cz, th, hubX, hubZ, plazaH,
+                    kit, pad, ox, oz, seed, out, royalRect));
+        }
+        List<int[]> mains = new ArrayList<>();      // 主街格（路灯用）
+        int arteryCells = 0;
+        for (Street stt : streets) {
+            arteryCells += stt.cells.size();
+            for (int i = 0; i < stt.cells.size(); i += 3) mains.add(stt.cells.get(i));
+        }
+        // 块深 ≈ laneMax：要装得下"排屋进深 12~16 + 人行带"，两排背靠背 ~32
+        int laneMax = kit == DESERT ? 19 : tier >= 2 ? 16 : 17;
+        List<Street> lanes = growLanes(g, occ, side, off, site, cx, cz, kit, ox, oz, seed, out,
+                royalRect, laneMax, fab);
+        streets.addAll(lanes);
+        if (Boolean.getBoolean("miaeco.cityDebug")) {
+            int laneCells = 0;
+            for (Street l : lanes) laneCells += l.cells.size();
+            float fabMin = Float.MAX_VALUE, fabMax = 0;
+            for (float v : fab) {
+                fabMin = Math.min(fabMin, v);
+                fabMax = Math.max(fabMax, v);
+            }
+            System.err.println("streets dbg arteries=" + dirs.size() + "(" + arteryCells
+                    + " cells) lanes=" + lanes.size() + "(" + laneCells + " cells) fab=["
+                    + (int) fabMin + "," + (int) fabMax + "]");
+        }
 
         // ---- 广场 ----
         plaza(g, occ, side, off, cx, cz, hubX, hubZ, plazaH, tier, kit, pad, ox, oz, seed, rng, out);
@@ -235,11 +258,24 @@ public final class CityWorks {
             stampPiece(piece, ox + rect[0], podY, oz + rect[1], 0, null, out, true);
         }
 
-        // ---- 沿街房屋（0.34.0 交错密排：过道式间距） ----
-        int houses = houses(g, occ, side, off, site, cx, cz, tier, kit, pad, ox, oz, rng, out);
+        // ---- 连排房屋（0.37.0 排面游标贴排 + 背巷补填） ----
+        int houses = houses(g, occ, side, off, site, cx, cz, tier, kit, pad, ox, oz, rng,
+                streets, fab, out);
 
-        // ---- 鱼鳞梯田（0.35.0 整带铺作物） ----
-        int farms = fields(g, occ, side, off, site, cx, cz, kit, pad, ox, oz, seed, out);
+        // ---- 城墙（0.37.0：包住实际建成肌理的不规则轮廓，tier≥2） ----
+        float[] wallArr = builtRim(occ, side, off, site, cx, cz, fab);
+        int towers = 0;
+        if (tier >= 2) {
+            towers = wall(g, occ, side, off, site, cx, cz, tier, kit, pad, ox, oz,
+                    seed, dirs, wallArr, out);
+        }
+
+        // ---- 城内铺装（0.37.0）：墙内空地一律铺装/院石/口袋园圃——告别裸泥地 ----
+        pave(g, occ, side, off, site, cx, cz, kit, ox, oz, seed, wallArr, out);
+
+        // ---- 鱼鳞梯田（0.35.0 整带铺作物；0.37.0 从城墙脚一直铺到规划带缘） ----
+        int farms = fields(g, occ, side, off, site, cx, cz, kit, pad, ox, oz, seed,
+                wallArr, out);
 
         // ---- 路灯（主街两侧） ----
         lamps(g, occ, side, off, cx, cz, mains, kit, pad, ox, oz, rng, out);
@@ -342,6 +378,102 @@ public final class CityWorks {
         return d <= CivPlanner.rimAt(s, Math.atan2(dz, dx)) - margin;
     }
 
+    // ============================ 肌理范围（0.37.0） ============================
+
+    /** 72 桶角度数组的圆周插值（fabricField/builtRim 共用）。 */
+    private static float arrAt(float[] arr, double theta) {
+        double t = theta / (2 * Math.PI) * arr.length;
+        int i0 = (int) Math.floor(t);
+        double f = t - i0;
+        i0 = Math.floorMod(i0, arr.length);
+        return (float) (arr[i0] * (1 - f) + arr[(i0 + 1) % arr.length] * f);
+    }
+
+    /**
+     * 肌理范围场：城市实际长到的半径 = rim × (0.60~1.0)。逐桶哈希噪声圆周平滑
+     * 出大波瓣（有的方向城压根不长过去），城门方向加隆起（沿路自然更繁华）——
+     * 城的轮廓从此由"往哪边长"决定，不再是揉过的圆。
+     */
+    private static float[] fabricField(CivPlanner.Site site, List<Float> dirs, long seed) {
+        int N = 72;
+        float[] fac = new float[N];
+        for (int i = 0; i < N; i++) {
+            fac[i] = (float) (0.60 + 0.40 * hash01(seed ^ 0xFAB21CL, i / 6, 7));
+        }
+        for (int it = 0; it < 3; it++) {
+            float[] s2 = new float[N];
+            for (int i = 0; i < N; i++) {
+                s2[i] = (fac[(i + N - 1) % N] + fac[i] * 2 + fac[(i + 1) % N]) / 4f;
+            }
+            fac = s2;
+        }
+        float[] out = new float[N];
+        for (int i = 0; i < N; i++) {
+            double th = 2 * Math.PI * i / N;
+            double bulge = 0;
+            for (float gd : dirs) {
+                double dd = Math.abs(angDiff(th, gd));
+                bulge = Math.max(bulge, 0.30 * Math.max(0, 1 - dd / 0.9));
+            }
+            double f = Math.min(1.0, fac[i] + bulge);
+            out[i] = (float) (CivPlanner.rimAt(site, th) * Math.max(0.52, f));
+        }
+        return out;
+    }
+
+    /** (lx,lz) 是否在肌理范围内收 margin。 */
+    private static boolean insideFab(float[] fab, int cx, int cz, int lx, int lz, double margin) {
+        double dx = lx - cx, dz = lz - cz;
+        double d = Math.sqrt(dx * dx + dz * dz);
+        return d <= arrAt(fab, Math.atan2(dz, dx)) - margin;
+    }
+
+    /**
+     * 建成肌理的包络半径（城墙走线）：逐桶取"实际建成格（街/房/广场）"最远
+     * 半径 +4，空桶回退 0.45×rim；圆周平滑后再与建成半径 +2 取大（墙绝不
+     * 切进房），上钳 rim−2（墙不越规划整地界）。
+     */
+    private static float[] builtRim(byte[] occ, int side, int off, CivPlanner.Site site,
+                                    int cx, int cz, float[] fab) {
+        int N = 72;
+        float[] built = new float[N];
+        for (int lz = cz - off; lz <= cz + off; lz++) {
+            for (int lx = cx - off; lx <= cx + off; lx++) {
+                int oi = occIdx(side, off, cx, cz, lx, lz);
+                if (oi < 0) continue;
+                byte v = occ[oi];
+                if (v != 1 && v != 2 && v != 4) continue;
+                double dx = lx - cx, dz = lz - cz;
+                double d = Math.sqrt(dx * dx + dz * dz);
+                double rimHere = CivPlanner.rimAt(site, Math.atan2(dz, dx));
+                if (d > rimHere) continue;                        // 出城段街道不算肌理
+                int bin = Math.floorMod((int) Math.round(
+                        Math.atan2(dz, dx) / (2 * Math.PI) * N), N);
+                built[bin] = (float) Math.max(built[bin], d);
+            }
+        }
+        float[] arr = new float[N];
+        for (int i = 0; i < N; i++) {
+            double th = 2 * Math.PI * i / N;
+            float fallback = (float) (CivPlanner.rimAt(site, th) * 0.45);
+            arr[i] = Math.max(built[i] + 4, fallback);
+        }
+        for (int it = 0; it < 2; it++) {
+            float[] s2 = new float[N];
+            for (int i = 0; i < N; i++) {
+                s2[i] = (arr[(i + N - 1) % N] + arr[i] * 2 + arr[(i + 1) % N]) / 4f;
+            }
+            arr = s2;
+        }
+        for (int i = 0; i < N; i++) {
+            double th = 2 * Math.PI * i / N;
+            arr[i] = Math.max(arr[i], built[i] + 2);
+            arr[i] = (float) Math.min(arr[i], CivPlanner.rimAt(site, th) - 2);
+            arr[i] = Math.max(arr[i], 12);
+        }
+        return arr;
+    }
+
     /** 矩形四角+边中点全部在 rim 内。 */
     private static boolean rectInsideRim(CivPlanner.Site s, int cx, int cz, int[] rect,
                                          double margin) {
@@ -367,94 +499,302 @@ public final class CityWorks {
 
     // ============================ 街道 ============================
 
-    private static void paintStreet(Ground g, byte[] occ, int side, int off, int cx, int cz,
-                                    int x0, int z0, int x1, int z1, int halfW, Kit kit, int pad,
-                                    int ox, int oz, long seed, List<BlockEdit> out,
-                                    List<int[]> mains, int[] royalRect) {
-        double len = Math.hypot(x1 - x0, z1 - z0);
-        int steps = Math.max(1, (int) (len * 1.6));
-        for (int s = 0; s <= steps; s++) {
-            double t = s / (double) steps;
-            int px = (int) Math.round(x0 + (x1 - x0) * t);
-            int pz = (int) Math.round(z0 + (z1 - z0) * t);
-            if (royalRect != null && inRect(px, pz, royalRect, 1)) return;   // 停在王城边
-            // 跨河板桥：街道中线遇水铺 3 宽木板桥面（河穿城时街网不断）
-            if (px >= 0 && pz >= 0 && px < g.w() && pz < g.h() && g.water(px, pz)) {
-                int deck = g.wlvl(px, pz) + 1;
-                for (int dz = -1; dz <= 1; dz++) {
-                    for (int dx = -1; dx <= 1; dx++) {
-                        int bx = px + dx, bz = pz + dz;
-                        if (bx < 0 || bz < 0 || bx >= g.w() || bz >= g.h()) continue;
-                        if (!g.water(bx, bz)) continue;
-                        out.add(new BlockEdit(ox + bx, deck, oz + bz,
-                                BlockSpec.of(Material.SPRUCE_PLANKS)));
-                    }
-                }
-            }
-            for (int dz = -halfW; dz <= halfW; dz++) {
-                for (int dx = -halfW; dx <= halfW; dx++) {
-                    if (dx * dx + dz * dz > halfW * halfW + 1) continue;
-                    double edge = Math.sqrt(dx * dx + dz * dz) / Math.max(1, halfW);
-                    streetCell(g, occ, side, off, cx, cz, px + dx, pz + dz, kit, pad,
-                            ox, oz, seed, 0.9 - 0.35 * edge, out);
-                }
-            }
-            if (mains != null && (s % 3) == 0) mains.add(new int[]{px, pz});
+    /**
+     * 一条街（0.37.0 街网重做）：有序中线格 + 半宽 + 磨损档。连排房沿它的
+     * 走向逐间贴排（frontage cursor），巷道从街距场里长出来——不再有环路
+     * 与轴对齐网格。
+     */
+    static final class Street {
+        final List<int[]> cells = new ArrayList<>();   // 有序中线（本地坐标，~1 格步距）
+        final int halfW;
+        final double wear;
+
+        Street(int halfW, double wear) {
+            this.halfW = halfW;
+            this.wear = wear;
         }
     }
 
-    /** 环路（tier≥2）：沿 0.55×rim 的有机环线。 */
-    private static void ringStreet(Ground g, byte[] occ, int side, int off,
-                                   CivPlanner.Site site, int cx, int cz, Kit kit, int pad,
-                                   int ox, int oz, long seed, List<BlockEdit> out,
-                                   int[] royalRect) {
-        int steps = (int) (2 * Math.PI * site.radius() * 0.55 * 1.6);
-        for (int s = 0; s < steps; s++) {
-            double th = 2 * Math.PI * s / steps;
-            double r = CivPlanner.rimAt(site, th) * 0.55;
-            int px = cx + (int) Math.round(Math.cos(th) * r);
-            int pz = cz + (int) Math.round(Math.sin(th) * r);
-            if (royalRect != null && inRect(px, pz, royalRect, 1)) continue;
+    /**
+     * 有机主干（0.37.0）：城门→广场缘的<b>弯曲</b>干道——中点系列按噪声垂向
+     * 偏摆（两端衰减：城门段对准门洞、广场段对准场缘），Chaikin 平滑。
+     * 出城段照旧铺到农田带外缘衔接官道。
+     */
+    private static Street artery(Ground g, byte[] occ, int side, int off,
+                                 CivPlanner.Site site, int cx, int cz, float th,
+                                 int hubX, int hubZ, int plazaH, Kit kit, int pad,
+                                 int ox, int oz, long seed, List<BlockEdit> out,
+                                 int[] royalRect) {
+        int reachOut = (int) (CivPlanner.rimAt(site, th) + CivPlanner.FIELD_BAND - 1);
+        double gx = cx + Math.cos(th) * reachOut, gz = cz + Math.sin(th) * reachOut;
+        double sx = hubX + Math.signum(gx - hubX) * plazaH;
+        double sz = hubZ + Math.signum(gz - hubZ) * plazaH;
+        // 王城挡路（沙漠首都）：起点→城门的直线穿过王城区时，经王城角外绕行
+        List<double[]> base = new ArrayList<>();
+        base.add(new double[]{sx, sz});
+        if (royalRect != null && segHitsRect(sx, sz, gx, gz, royalRect, 3)) {
+            double c1x = (Math.abs(gx - royalRect[0]) < Math.abs(gx - royalRect[2])
+                    ? royalRect[0] - 6 : royalRect[2] + 6);
+            double c1z = (Math.abs(sz - royalRect[1]) < Math.abs(sz - royalRect[3])
+                    ? royalRect[1] - 6 : royalRect[3] + 6);
+            base.add(new double[]{c1x, sz});
+            base.add(new double[]{c1x, c1z});
+        }
+        base.add(new double[]{gx, gz});
+        // 控制点：分段取 6 份，垂向噪声偏摆（幅度 ≤ len 的 12%，两端 smooth 衰减；
+        // 城门附近（rim±10 内）强制归零——干道必须正对门洞穿墙）
+        double rimHere = CivPlanner.rimAt(site, th);
+        List<double[]> ctrl = new ArrayList<>();
+        for (int seg = 0; seg + 1 < base.size(); seg++) {
+            double ax = base.get(seg)[0], az = base.get(seg)[1];
+            double bx2 = base.get(seg + 1)[0], bz2 = base.get(seg + 1)[1];
+            double len = Math.hypot(bx2 - ax, bz2 - az);
+            double px = -(bz2 - az) / Math.max(1e-6, len), pz = (bx2 - ax) / Math.max(1e-6, len);
+            boolean last = seg == base.size() - 2;
+            int K = Math.max(2, (int) (len / 22));
+            for (int k = 0; k < K + (last ? 1 : 0); k++) {
+                double t = k / (double) K;
+                double bx = ax + (bx2 - ax) * t, bz = az + (bz2 - az) * t;
+                double dCenter = Math.hypot(bx - cx, bz - cz);
+                double env = base.size() > 2 ? 0.3 : Math.min(1, 3.2 * t * (1 - t));
+                if (Math.abs(dCenter - rimHere) < 10) env = 0;     // 门洞段拉直
+                if (dCenter > rimHere) env *= 0.35;                // 城外段微摆即可
+                if (royalRect != null && inRect((int) bx, (int) bz, royalRect, 8)) env = 0;
+                double amp = Math.min(9, len * 0.12) * env;
+                double n = PlanOps.patch(seed ^ 0xA57E11L ^ (long) (th * 1000),
+                        (int) (t * 64), seg * 31 + 7, 2.6) * 2 - 1;
+                ctrl.add(new double[]{bx + px * n * amp, bz + pz * n * amp});
+            }
+        }
+        // Chaikin ×2 平滑
+        for (int it = 0; it < 2; it++) {
+            List<double[]> nc = new ArrayList<>();
+            nc.add(ctrl.get(0));
+            for (int i = 0; i + 1 < ctrl.size(); i++) {
+                double[] a = ctrl.get(i), b = ctrl.get(i + 1);
+                nc.add(new double[]{a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25});
+                nc.add(new double[]{a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75});
+            }
+            nc.add(ctrl.get(ctrl.size() - 1));
+            ctrl = nc;
+        }
+        Street st = new Street(2, 0.9);
+        for (int i = 0; i + 1 < ctrl.size(); i++) {
+            double[] a = ctrl.get(i), b = ctrl.get(i + 1);
+            int steps = Math.max(1, (int) (Math.hypot(b[0] - a[0], b[1] - a[1]) * 1.6));
+            for (int s2 = 0; s2 < steps; s2++) {
+                double t = s2 / (double) steps;
+                int qx = (int) Math.round(a[0] + (b[0] - a[0]) * t);
+                int qz = (int) Math.round(a[1] + (b[1] - a[1]) * t);
+                int n = st.cells.size();
+                if (n > 0 && st.cells.get(n - 1)[0] == qx && st.cells.get(n - 1)[1] == qz) continue;
+                if (royalRect != null && inRect(qx, qz, royalRect, 1)) continue;   // 绕行段贴边跳过
+                paintStreetDisc(g, occ, side, off, cx, cz, qx, qz, st.halfW, kit,
+                        ox, oz, seed, out);
+                st.cells.add(new int[]{qx, qz});
+            }
+        }
+        return st;
+    }
+
+    /** 线段（含 margin 外扩）是否穿过矩形。 */
+    private static boolean segHitsRect(double x0, double z0, double x1, double z1,
+                                       int[] rect, int margin) {
+        int steps = (int) Math.max(2, Math.hypot(x1 - x0, z1 - z0) / 3);
+        for (int s = 0; s <= steps; s++) {
+            double t = s / (double) steps;
+            if (inRect((int) Math.round(x0 + (x1 - x0) * t),
+                    (int) Math.round(z0 + (z1 - z0) * t), rect, margin)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 街面圆盘 + 跨河板桥（河穿城时街网不断）。 */
+    private static void paintStreetDisc(Ground g, byte[] occ, int side, int off, int cx, int cz,
+                                        int px, int pz, int halfW, Kit kit,
+                                        int ox, int oz, long seed, List<BlockEdit> out) {
+        if (px >= 0 && pz >= 0 && px < g.w() && pz < g.h() && g.water(px, pz)) {
+            int deck = g.wlvl(px, pz) + 1;
             for (int dz = -1; dz <= 1; dz++) {
                 for (int dx = -1; dx <= 1; dx++) {
-                    streetCell(g, occ, side, off, cx, cz, px + dx, pz + dz, kit, pad,
-                            ox, oz, seed, 0.55, out);
+                    int bx = px + dx, bz = pz + dz;
+                    if (bx < 0 || bz < 0 || bx >= g.w() || bz >= g.h()) continue;
+                    if (!g.water(bx, bz)) continue;
+                    out.add(new BlockEdit(ox + bx, deck, oz + bz,
+                            BlockSpec.of(Material.SPRUCE_PLANKS)));
                 }
+            }
+            return;
+        }
+        for (int dz = -halfW; dz <= halfW; dz++) {
+            for (int dx = -halfW; dx <= halfW; dx++) {
+                if (dx * dx + dz * dz > halfW * halfW + 1) continue;
+                double edge = Math.sqrt(dx * dx + dz * dz) / Math.max(1, halfW);
+                streetCell(g, occ, side, off, cx, cz, px + dx, pz + dz, kit,
+                        ox, oz, seed, 0.9 - 0.35 * edge, out);
             }
         }
     }
 
     /**
-     * 网格巷道（0.34.0 密化）：间距 medieval 城 16 / 镇 18 / desert 24，
-     * 1 格宽窄巷——中世纪"房屋交错、巷道过人"的骨架。
+     * 巷道生长（0.37.0，替代环路+网格）：对"街距场"（到最近街/广场的 BFS 距离）
+     * 反复找最深腹地点，从它沿最陡下降双向走到两条既有街上——一条穿过腹地的
+     * 巷子把大街块自然劈开。块形不规则、巷线顺肌理，宽度按劈开的腹地深度分档
+     * （侧街 3 宽 / 窄巷 2 宽）。直到处处离街 ≤ laneMax。
      */
-    private static void gridStreets(Ground g, byte[] occ, int side, int off,
-                                    CivPlanner.Site site, int cx, int cz,
-                                    int hubX, int hubZ, int plazaH, Kit kit, int pad,
-                                    int ox, int oz, long seed, List<BlockEdit> out,
-                                    int[] royalRect, int tier) {
-        int spacing = kit == DESERT ? 22 : kit == GREEK ? 17 : tier >= 2 ? 16 : 18;
-        int maxR = site.radius() - 3;
-        for (int k = -maxR / spacing; k <= maxR / spacing; k++) {
-            int lx = cx + k * spacing;
-            for (int z = cz - maxR; z <= cz + maxR; z++) {
-                if (!insideRim(site, cx, cz, lx, z, 4)) continue;
-                if (Math.abs(lx - hubX) <= plazaH + 1 && Math.abs(z - hubZ) <= plazaH + 1) continue;
-                if (royalRect != null && inRect(lx, z, royalRect, 1)) continue;
-                streetCell(g, occ, side, off, cx, cz, lx, z, kit, pad, ox, oz, seed, 0.4, out);
+    private static List<Street> growLanes(Ground g, byte[] occ, int side, int off,
+                                          CivPlanner.Site site, int cx, int cz, Kit kit,
+                                          int ox, int oz, long seed, List<BlockEdit> out,
+                                          int[] royalRect, int laneMax, float[] fab) {
+        List<Street> lanes = new ArrayList<>();
+        int R = site.radius();
+        int[] dist = new int[side * side];
+        java.util.BitSet failed = new java.util.BitSet(side * side);
+        java.util.ArrayDeque<Integer> q = new java.util.ArrayDeque<>();
+        int lastBest = -1;
+        for (int pass = 0; pass < 120 && lanes.size() < 90; pass++) {
+            // BFS 街距场（多源：街/广场/王城/墙；范围：肌理场内的 C_PLOT）
+            java.util.Arrays.fill(dist, Integer.MAX_VALUE);
+            q.clear();
+            for (int lz = cz - R; lz <= cz + R; lz++) {
+                for (int lx = cx - R; lx <= cx + R; lx++) {
+                    int oi = occIdx(side, off, cx, cz, lx, lz);
+                    if (oi < 0 || occ[oi] == 0) continue;
+                    dist[oi] = 0;
+                    q.add(oi);
+                }
             }
-            int lz = cz + k * spacing;
-            for (int x = cx - maxR; x <= cx + maxR; x++) {
-                if (!insideRim(site, cx, cz, x, lz, 4)) continue;
-                if (Math.abs(x - hubX) <= plazaH + 1 && Math.abs(lz - hubZ) <= plazaH + 1) continue;
-                if (royalRect != null && inRect(x, lz, royalRect, 1)) continue;
-                streetCell(g, occ, side, off, cx, cz, x, lz, kit, pad, ox, oz, seed, 0.4, out);
+            while (!q.isEmpty()) {
+                int c = q.poll();
+                int lx = c % side - off + cx, lz = c / side - off + cz;
+                int d = dist[c];
+                int[][] n4 = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+                for (int[] nn : n4) {
+                    int nx = lx + nn[0], nz = lz + nn[1];
+                    int oi = occIdx(side, off, cx, cz, nx, nz);
+                    if (oi < 0 || dist[oi] <= d + 1) continue;
+                    if (nx < 0 || nz < 0 || nx >= g.w() || nz >= g.h()) continue;
+                    if (g.civ(nx, nz) != CivPlanner.C_PLOT) continue;
+                    if (!insideFab(fab, cx, cz, nx, nz, 3)) continue;
+                    dist[oi] = d + 1;
+                    q.add(oi);
+                }
+            }
+            // 最深腹地
+            int bestI = -1, bestD = laneMax;
+            for (int lz = cz - R; lz <= cz + R; lz++) {
+                for (int lx = cx - R; lx <= cx + R; lx++) {
+                    int oi = occIdx(side, off, cx, cz, lx, lz);
+                    if (oi < 0 || dist[oi] == Integer.MAX_VALUE || dist[oi] == 0) continue;
+                    if (failed.get(oi)) continue;
+                    if (dist[oi] > bestD) {
+                        bestD = dist[oi];
+                        bestI = oi;
+                    }
+                }
+            }
+            if (bestI < 0) break;
+            if (bestI == lastBest) {
+                // 上一轮铺完它还是最深=铺不动（水面/占位死角）——拉黑防活锁
+                if (Boolean.getBoolean("miaeco.cityDebug")) {
+                    int sx0 = bestI % side - off + cx, sz0 = bestI / side - off + cz;
+                    System.err.println("lane STUCK @(" + sx0 + "," + sz0 + ") civ="
+                            + g.civ(clamp(sx0, 0, g.w() - 1), clamp(sz0, 0, g.h() - 1))
+                            + " water=" + g.water(clamp(sx0, 0, g.w() - 1),
+                            clamp(sz0, 0, g.h() - 1)) + " occ=" + occ[bestI]);
+                }
+                failed.set(bestI);
+                continue;
+            }
+            lastBest = bestI;
+            // 双向最陡下降 → 两条既有街之间的一条巷
+            int mx = bestI % side - off + cx, mz = bestI / side - off + cz;
+            List<int[]> half1 = descend(dist, side, off, cx, cz, mx, mz, 0, 0);
+            int f1x = 0, f1z = 0;
+            if (half1.size() >= 2) {
+                f1x = half1.get(1)[0] - half1.get(0)[0];
+                f1z = half1.get(1)[1] - half1.get(0)[1];
+            }
+            List<int[]> half2 = descend(dist, side, off, cx, cz, mx, mz, -f1x, -f1z);
+            java.util.Collections.reverse(half1);
+            List<int[]> lane = new ArrayList<>(half1);
+            for (int i = 1; i < half2.size(); i++) lane.add(half2.get(i));
+            if (lane.size() < 3) {
+                failed.set(bestI);                                // 这只腹地废了，换下一处
+                continue;
+            }
+            int halfW = bestD > laneMax + 7 ? 1 : 0;
+            Street st = new Street(Math.max(1, halfW), halfW >= 1 ? 0.55 : 0.4);
+            for (int[] c : lane) {
+                if (royalRect != null && inRect(c[0], c[1], royalRect, 1)) continue;   // 贴王城段跳过
+                if (halfW >= 1) {
+                    paintStreetDisc(g, occ, side, off, cx, cz, c[0], c[1], 1, kit,
+                            ox, oz, seed, out);
+                } else {
+                    // 窄巷 2 宽：本格 + 右手侧一格（按行进方向恒定，巷面连续）
+                    streetCell(g, occ, side, off, cx, cz, c[0], c[1], kit, ox, oz, seed, 0.4, out);
+                    int n = st.cells.size();
+                    int tx = n > 0 ? c[0] - st.cells.get(n - 1)[0] : 1;
+                    int tz = n > 0 ? c[1] - st.cells.get(n - 1)[1] : 0;
+                    streetCell(g, occ, side, off, cx, cz, c[0] - tz, c[1] + tx, kit,
+                            ox, oz, seed, 0.4, out);
+                }
+                st.cells.add(c);
+            }
+            if (Boolean.getBoolean("miaeco.cityDebug")) {
+                System.err.println("lane pass=" + pass + " bestD=" + bestD + " @(" + mx + ","
+                        + mz + ") h1=" + half1.size() + " h2=" + half2.size()
+                        + " kept=" + st.cells.size());
+            }
+            if (st.cells.isEmpty()) {
+                failed.set(bestI);                                // 全程无效（王城内等）防活锁
+            } else {
+                lanes.add(st);
             }
         }
+        return lanes;
+    }
+
+    /** 沿 BFS 距离场最陡下降到 dist==0（既有街），首步偏好给定方向的另一半球。 */
+    private static List<int[]> descend(int[] dist, int side, int off, int cx, int cz,
+                                       int sx, int sz, int biasX, int biasZ) {
+        List<int[]> path = new ArrayList<>();
+        int x = sx, z = sz;
+        path.add(new int[]{x, z});
+        int guard = 0;
+        while (guard++ < 200) {
+            int ci = occIdx(side, off, cx, cz, x, z);
+            if (ci < 0 || dist[ci] == 0) break;
+            int d0 = dist[ci];
+            int bx = 0, bz = 0, bd = d0;
+            int[][] n8 = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
+            for (int[] nn : n8) {
+                int oi = occIdx(side, off, cx, cz, x + nn[0], z + nn[1]);
+                if (oi < 0 || dist[oi] == Integer.MAX_VALUE) continue;
+                int nd = dist[oi];
+                // 首步：避开 bias 反方向（分头下降才劈得开块）
+                if (path.size() == 1 && (biasX != 0 || biasZ != 0)
+                        && nn[0] * biasX + nn[1] * biasZ < 0) {
+                    continue;
+                }
+                if (nd < bd || (nd == bd && bx == 0 && bz == 0 && nd < d0)) {
+                    bd = nd;
+                    bx = nn[0];
+                    bz = nn[1];
+                }
+            }
+            if (bx == 0 && bz == 0) break;
+            x += bx;
+            z += bz;
+            path.add(new int[]{x, z});
+        }
+        return path;
     }
 
     private static void streetCell(Ground g, byte[] occ, int side, int off, int cx, int cz,
-                                   int lx, int lz, Kit kit, int pad, int ox, int oz,
+                                   int lx, int lz, Kit kit, int ox, int oz,
                                    long seed, double wear, List<BlockEdit> out) {
         int oi = occIdx(side, off, cx, cz, lx, lz);
         if (oi < 0 || occ[oi] != 0) return;
@@ -475,7 +815,8 @@ public final class CityWorks {
      */
     private static int wall(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
                             int cx, int cz, int tier, Kit kit, int pad, int ox, int oz,
-                            long seed, List<Float> gateDirs, List<BlockEdit> out) {
+                            long seed, List<Float> gateDirs, float[] wallArr,
+                            List<BlockEdit> out) {
         int hWall = tier >= 3 ? 9 : 7;
         int steps = (int) (2 * Math.PI * site.radius() * 1.6);
         int towers = 0;
@@ -483,13 +824,24 @@ public final class CityWorks {
         double acc = towerEvery / 2;
         for (int s = 0; s < steps; s++) {
             double th = 2 * Math.PI * s / steps;
-            double wallR = CivPlanner.rimAt(site, th) - 2;
+            double wallR = arrAt(wallArr, th);
             boolean gate = false;
             for (float gd : gateDirs) {
                 double dd = Math.abs(angDiff(th, gd));
                 if (dd * wallR < 4.5) {
                     gate = true;
                     break;
+                }
+            }
+            // 0.37.0：干道/巷道实际穿墙处也留门洞（墙包肌理后穿墙点=街与包络的交点）
+            if (!gate) {
+                int sx2 = cx + (int) Math.round(Math.cos(th) * wallR);
+                int sz2 = cz + (int) Math.round(Math.sin(th) * wallR);
+                for (int dz = -2; dz <= 2 && !gate; dz++) {
+                    for (int dx = -2; dx <= 2 && !gate; dx++) {
+                        int oi = occIdx(side, off, cx, cz, sx2 + dx, sz2 + dz);
+                        if (oi >= 0 && occ[oi] == 1) gate = true;
+                    }
                 }
             }
             acc += 2 * Math.PI * wallR / steps;
@@ -511,7 +863,7 @@ public final class CityWorks {
         }
         // 门楼：两侧柱塔 + 跨门石楣（高 5..6）+ 楣上垛齿 + 楣下悬灯 + 旗
         for (float gd : gateDirs) {
-            double wallR = CivPlanner.rimAt(site, gd) - 2;
+            double wallR = arrAt(wallArr, gd);
             int gy = wallBase(g, cx + (int) Math.round(Math.cos(gd) * wallR),
                     cz + (int) Math.round(Math.sin(gd) * wallR), pad);
             for (int sgn = -1; sgn <= 1; sgn += 2) {
@@ -652,7 +1004,7 @@ public final class CityWorks {
                 int oi = occIdx(side, off, cx, cz, lx, lz);
                 if (oi < 0 || lx < 0 || lz < 0 || lx >= g.w() || lz >= g.h()) continue;
                 if (g.civ(lx, lz) != CivPlanner.C_PLOT) continue;
-                if (occ[oi] == 3 || occ[oi] == 4) continue;
+                if (occ[oi] == 3) continue;    // 0.37.0：场地已预占 4，这里只避墙
                 occ[oi] = 4;
                 double r = hash01(seed ^ 0x91A2AL, ox + lx, oz + lz);
                 Material m = r < 0.5 ? kit.plazaA() : r < 0.8 ? kit.plazaB()
@@ -710,27 +1062,39 @@ public final class CityWorks {
     // ============================ 房屋 ============================
 
     /**
-     * 沿街交错密排（0.34.0）：从每个街格向四法向试放，只查"本体矩形干净 +
-     * 不压街 + 墙/广场留 1 圈"，房与房允许贴排/1~2 格过道——中世纪街巷肌理。
+     * 连排房（0.37.0）：沿每条街的走向逐间<b>贴排</b>——排面游标从街头推到街尾，
+     * 下一间的临街边直接接上一间的山墙（70% 零间隙连排、其余留 1~2 格穿巷），
+     * 门一律朝街。剩余口袋地再用 0.34 的四法向散扫补填（背巷小屋）。
      */
     private static int houses(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
                               int cx, int cz, int tier, Kit kit, int pad, int ox, int oz,
-                              Random rng, List<BlockEdit> out) {
+                              Random rng, List<Street> streets, float[] fab, List<BlockEdit> out) {
         var metas = CityPieces.metas(kit.pieceStyle(), "house");
         if (metas.isEmpty()) return 0;
-        int cap = tier >= 3 ? 150 : tier == 2 ? 100 : 45;
+        int cap = tier >= 3 ? 170 : tier == 2 ? 120 : 55;
         // 巴比伦风是垂直风格：footprint 更大、允许更高的塔屋；60+ 的巨塔仍排除
         int maxFp = kit == DESERT ? 34 : kit == GREEK ? 28 : tier >= 2 ? 26 : 20;
         int maxH = kit == DESERT ? 44 : kit == GREEK ? 34 : 32;
         var pool = metas.stream().filter(m -> m.footprint() <= maxFp && m.sy() > 4
                 && m.sy() <= maxH).toList();
         if (pool.isEmpty()) return 0;
-        double skip = kit == DESERT ? 0.18 : kit == GREEK ? 0.15 : 0.12;
-        int placed = 0;
-        int reach = site.radius();
+        // 排屋池：真房子（有一定高度、非 accessory 小件——货摊水井花车归背巷散扫）
+        var rowPool = pool.stream().filter(m -> m.sy() >= 7
+                && !m.path().contains("accessory")).toList();
+        if (rowPool.isEmpty()) rowPool = pool;
         int[] dbg = new int[8];   // 0 starts 1 skip 2 occBusy 3 rim 4 civ 5 ring 6 nullPiece 7 tries
-        // 步长必须是 1：网格街距是偶数时，步长 2 的奇偶格会与街线完全错开
-        // （0.34.0 房屋×0 回归的根因），街格一个都扫不到
+        int placed = 0;
+        for (Street stt : streets) {
+            if (placed >= cap) break;
+            placed += rowAlong(g, occ, side, off, site, cx, cz, stt, +1, tier, kit,
+                    ox, oz, rng, rowPool, fab, out, cap - placed, dbg);
+            if (placed >= cap) break;
+            placed += rowAlong(g, occ, side, off, site, cx, cz, stt, -1, tier, kit,
+                    ox, oz, rng, rowPool, fab, out, cap - placed, dbg);
+        }
+        // 背巷补填：剩余口袋地四法向散扫（0.34 逻辑，跳街率放大——密排主力已就位）
+        double skip = 0.3;
+        int reach = site.radius();
         for (int lz = cz - reach; lz <= cz + reach && placed < cap; lz++) {
             for (int lx = cx - reach; lx <= cx + reach && placed < cap; lx++) {
                 int oi = occIdx(side, off, cx, cz, lx, lz);
@@ -738,15 +1102,14 @@ public final class CityWorks {
                 dbg[0]++;
                 if (hash01(rng.nextLong(), lx, lz) < skip) {
                     dbg[1]++;
-                    continue; // 少量留白
+                    continue;
                 }
-                // 四个法向试放
                 int[][] ns = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
                 int start = rng.nextInt(4);
                 for (int k = 0; k < 4; k++) {
                     int[] nrm = ns[(start + k) & 3];
                     if (tryHouse(g, occ, side, off, site, cx, cz, lx, lz, nrm, tier, kit, pad,
-                            ox, oz, rng, pool, out, dbg)) {
+                            ox, oz, rng, pool, fab, out, dbg)) {
                         placed++;
                         break;
                     }
@@ -762,11 +1125,203 @@ public final class CityWorks {
         return placed;
     }
 
+    /**
+     * 沿一条街的一侧推连排（0.37.0）：把街心线按主导轴切成近直的"排段"，段内
+     * 排面游标逐间推进——每间房临街边贴在游标处、离街 halfW+1（人行带 1 格），
+     * 门转向街，放下后游标推进 房宽+间隙（70% 零间隙、15% 1 格、15% 2 格）。
+     * 段向变化（街拐弯）即重开一段。返回本侧落成数。
+     */
+    private static int rowAlong(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
+                                int cx, int cz, Street stt, int sideSign, int tier, Kit kit,
+                                int ox, int oz, Random rng, List<CityPieces.Meta> pool,
+                                float[] fab, List<BlockEdit> out, int budget, int[] dbg) {
+        int placed = 0;
+        int n = stt.cells.size();
+        if (n < 6) return 0;
+        int cursor = 0;                                            // 街心线下标（跟踪街走向）
+        // 行基线：直段内锁死临街线——下一间的山墙严格贴上一间（真连排），
+        // 街拐弯（漂移 >1）才换行重新锚定
+        int rowAxis = -1, rowBase = Integer.MIN_VALUE, nextLead = Integer.MIN_VALUE, rowDir = 0;
+        int tryNo = 0;                                             // 同一位置的第几次尝试
+        while (cursor < n - 2 && placed < budget) {
+            // 局部主导轴（前视 6 格）：axis 0=E-W（沿 x），1=N-S（沿 z）
+            int[] a = stt.cells.get(cursor);
+            int[] b = stt.cells.get(Math.min(n - 1, cursor + 6));
+            int tx = b[0] - a[0], tz = b[1] - a[1];
+            if (tx == 0 && tz == 0) {
+                cursor++;
+                continue;
+            }
+            int axis = Math.abs(tx) >= Math.abs(tz) ? 0 : 1;
+            int dirAlong = axis == 0 ? (tx >= 0 ? 1 : -1) : (tz >= 0 ? 1 : -1);
+            int perpHere = axis == 0 ? a[1] : a[0];
+            if (axis != rowAxis || rowDir != dirAlong || rowBase == Integer.MIN_VALUE
+                    || nextLead == Integer.MIN_VALUE
+                    || Math.abs(perpHere - rowBase) > 1) {
+                rowAxis = axis;                                    // 换行：重新锚定基线
+                rowDir = dirAlong;
+                rowBase = perpHere;
+                nextLead = axis == 0 ? a[0] : a[1];
+            }
+            // 挑件：临街宽 ≤18 优先（巨件重抽一次，排面密度靠窄门脸）；
+            // 第二轮（tryNo=1）直接抽小件（fp ≤13）——窄块/排尾补位
+            var m = pool.get(rng.nextInt(pool.size()));
+            for (int retry = 0; retry < 2 && m.footprint() > 18; retry++) {
+                m = pool.get(rng.nextInt(pool.size()));
+            }
+            if (tryNo > 0) {
+                for (int retry = 0; retry < 4 && m.footprint() > 13; retry++) {
+                    m = pool.get(rng.nextInt(pool.size()));
+                }
+            }
+            var piece = CityPieces.load(m);
+            if (piece == null) {
+                dbg[6]++;
+                cursor += 2;
+                continue;
+            }
+            // 门要朝街：街在 sideSign 的反向
+            String want = axis == 0 ? (sideSign > 0 ? "north" : "south")
+                    : (sideSign > 0 ? "west" : "east");
+            int rot = rng.nextInt(4);
+            if (!piece.entrances.isEmpty()) {
+                var door = piece.entrances.get(rng.nextInt(piece.entrances.size()));
+                for (int k = 0; k < 4; k++) {
+                    if (TownPieces.rotFacing(door.facing(), k).equals(want)) {
+                        rot = k;
+                        break;
+                    }
+                }
+            }
+            int rsx = (rot & 1) == 0 ? m.sx() : m.sz();
+            int rsz = (rot & 1) == 0 ? m.sz() : m.sx();
+            int front = axis == 0 ? rsx : rsz;                     // 临街宽（沿街轴）
+            int lead = nextLead;
+            boolean ok = false;
+            int bx0 = 0, bz0 = 0;
+            // 临街线 = 行基线 + 人行带 1 格；窄巷第二铺装格挡道时退 1 格再试
+            for (int setback = stt.halfW + 1; setback <= stt.halfW + 2 && !ok; setback++) {
+                if (axis == 0) {
+                    bx0 = dirAlong > 0 ? lead : lead - (front - 1);
+                    bz0 = rowBase + sideSign * setback + (sideSign > 0 ? 0 : -(rsz - 1));
+                } else {
+                    bz0 = dirAlong > 0 ? lead : lead - (rsz - 1);
+                    bx0 = rowBase + sideSign * setback + (sideSign > 0 ? 0 : -(rsx - 1));
+                }
+                dbg[7]++;
+                ok = rectPlaceable(g, occ, side, off, cx, cz, bx0, bz0, rsx, rsz, tier, fab, dbg);
+            }
+            if (ok) {
+                int yHi = rectTopY(g, bx0, bz0, rsx, rsz);
+                stampPiece(piece, ox + bx0, yHi, oz + bz0, rot, kit.lootHouse(), out,
+                        !"nbt".equals(m.format()));
+                claimRect2(occ, side, off, cx, cz, bx0, bz0, rsx, rsz);
+                placed++;
+                tryNo = 0;
+                // 行游标推进：房宽 + 间隙（78% 零间隙贴山墙连排）
+                double gp = rng.nextDouble();
+                int gap = gp < 0.78 ? 0 : gp < 0.9 ? 1 : 2;
+                nextLead = lead + dirAlong * (front + gap);
+                cursor = advanceAlong(stt, cursor, front + gap);
+            } else if (tryNo == 0) {
+                tryNo = 1;                                         // 原地换小件再试一次
+            } else {
+                tryNo = 0;
+                nextLead = Integer.MIN_VALUE;                      // 断排：下间重新锚定
+                cursor = advanceAlong(stt, cursor, 2);
+            }
+        }
+        return placed;
+    }
+
+    /** 沿街心线推进 dist 格（按相邻格间距累计），返回新下标。 */
+    private static int advanceAlong(Street stt, int cursor, int dist) {
+        double acc = 0;
+        int i = cursor;
+        while (i + 1 < stt.cells.size() && acc < dist) {
+            int[] a = stt.cells.get(i), b = stt.cells.get(i + 1);
+            acc += Math.hypot(b[0] - a[0], b[1] - a[1]);
+            i++;
+        }
+        return i;
+    }
+
+    /** 房体矩形可放（0.37.0 提炼）：占位空、C_PLOT、肌理内、台地高差 ≤1、不贴墙/广场。 */
+    private static boolean rectPlaceable(Ground g, byte[] occ, int side, int off,
+                                         int cx, int cz,
+                                         int bx0, int bz0, int rsx, int rsz, int tier,
+                                         float[] fab, int[] dbg) {
+        // 坐标健全性（防溢出空循环把幽灵矩形放行）
+        if (bx0 < -(1 << 20) || bz0 < -(1 << 20) || bx0 > (1 << 20) || bz0 > (1 << 20)
+                || rsx <= 0 || rsz <= 0) {
+            return false;
+        }
+        int wallMargin = tier >= 2 ? 3 : 2;
+        int yLo = Integer.MAX_VALUE, yHi = Integer.MIN_VALUE;
+        for (int z = bz0; z < bz0 + rsz; z++) {
+            for (int x = bx0; x < bx0 + rsx; x++) {
+                int oi = occIdx(side, off, cx, cz, x, z);
+                if (oi < 0 || occ[oi] != 0) {
+                    dbg[2]++;
+                    return false;
+                }
+                if (!insideFab(fab, cx, cz, x, z, wallMargin)) {
+                    dbg[3]++;
+                    return false;
+                }
+                if (x < 0 || z < 0 || x >= g.w() || z >= g.h()) return false;
+                if (g.civ(x, z) != CivPlanner.C_PLOT) {
+                    dbg[4]++;
+                    return false;
+                }
+                int y = g.y(x, z);
+                yLo = Math.min(yLo, y);
+                yHi = Math.max(yHi, y);
+                if (yHi - yLo > 1) {
+                    dbg[5]++;
+                    return false;
+                }
+            }
+        }
+        for (int z = bz0 - 1; z <= bz0 + rsz; z++) {
+            for (int x = bx0 - 1; x <= bx0 + rsx; x++) {
+                int oi = occIdx(side, off, cx, cz, x, z);
+                if (oi >= 0 && occ[oi] >= 3) {
+                    dbg[5]++;
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static int rectTopY(Ground g, int bx0, int bz0, int rsx, int rsz) {
+        int yHi = Integer.MIN_VALUE;
+        for (int z = bz0; z < bz0 + rsz; z++) {
+            for (int x = bx0; x < bx0 + rsx; x++) {
+                if (x < 0 || z < 0 || x >= g.w() || z >= g.h()) continue;
+                yHi = Math.max(yHi, g.y(x, z));
+            }
+        }
+        return yHi == Integer.MIN_VALUE ? 64 : yHi;
+    }
+
+    private static void claimRect2(byte[] occ, int side, int off, int cx, int cz,
+                                   int bx0, int bz0, int rsx, int rsz) {
+        for (int z = bz0; z < bz0 + rsz; z++) {
+            for (int x = bx0; x < bx0 + rsx; x++) {
+                int oi = occIdx(side, off, cx, cz, x, z);
+                if (oi >= 0) occ[oi] = 2;
+            }
+        }
+    }
+
     private static boolean tryHouse(Ground g, byte[] occ, int side, int off,
                                     CivPlanner.Site site, int cx, int cz,
                                     int sx, int sz, int[] nrm, int tier, Kit kit, int pad,
                                     int ox, int oz, Random rng,
-                                    List<CityPieces.Meta> pool, List<BlockEdit> out, int[] dbg) {
+                                    List<CityPieces.Meta> pool, float[] fab,
+                                    List<BlockEdit> out, int[] dbg) {
         dbg[7]++;
         var m = pool.get(rng.nextInt(pool.size()));
         var piece = CityPieces.load(m);
@@ -791,54 +1346,12 @@ public final class CityWorks {
         // 房屋矩形：沿法向离街 2 格（门前 1 格过道），横向居中于出发点
         int bx0 = sx + nrm[0] * 2 + (nrm[0] > 0 ? 0 : nrm[0] < 0 ? -(rsx - 1) : -rsx / 2);
         int bz0 = sz + nrm[1] * 2 + (nrm[1] > 0 ? 0 : nrm[1] < 0 ? -(rsz - 1) : -rsz / 2);
-        // 本体矩形必须干净（空地、非街、C_PLOT、rim 内）；与其他房屋允许贴排。
-        // 0.35.0 台地化：矩形须落在同一台地（高差 ≤1，取高位为基座——低 1 格
-        // 的列由件的地皮层自然补齐），跨 ≥2 格台阶的位置弃试。
-        int wallMargin = tier >= 2 ? 4 : 2;
-        int yLo = Integer.MAX_VALUE, yHi = Integer.MIN_VALUE;
-        for (int z = bz0; z < bz0 + rsz; z++) {
-            for (int x = bx0; x < bx0 + rsx; x++) {
-                int oi = occIdx(side, off, cx, cz, x, z);
-                if (oi < 0 || occ[oi] != 0) {
-                    dbg[2]++;
-                    return false;
-                }
-                if (!insideRim(site, cx, cz, x, z, wallMargin)) {
-                    dbg[3]++;
-                    return false;
-                }
-                if (x < 0 || z < 0 || x >= g.w() || z >= g.h()) return false;
-                if (g.civ(x, z) != CivPlanner.C_PLOT) {
-                    dbg[4]++;
-                    return false;
-                }
-                int y = g.y(x, z);
-                yLo = Math.min(yLo, y);
-                yHi = Math.max(yHi, y);
-                if (yHi - yLo > 1) {
-                    dbg[5]++;
-                    return false;
-                }
-            }
+        if (!rectPlaceable(g, occ, side, off, cx, cz, bx0, bz0, rsx, rsz, tier, fab, dbg)) {
+            return false;
         }
-        // 外 1 圈只避让墙/广场/王城（占位 3/4），房屋（2）与街（1）允许紧邻
-        for (int z = bz0 - 1; z <= bz0 + rsz; z++) {
-            for (int x = bx0 - 1; x <= bx0 + rsx; x++) {
-                int oi = occIdx(side, off, cx, cz, x, z);
-                if (oi >= 0 && occ[oi] >= 3) {
-                    dbg[5]++;
-                    return false;
-                }
-            }
-        }
-        stampPiece(piece, ox + bx0, yHi, oz + bz0, rot, kit.lootHouse(), out,
-                !"nbt".equals(m.format()));
-        for (int z = bz0; z < bz0 + rsz; z++) {
-            for (int x = bx0; x < bx0 + rsx; x++) {
-                int oi = occIdx(side, off, cx, cz, x, z);
-                if (oi >= 0) occ[oi] = 2;
-            }
-        }
+        stampPiece(piece, ox + bx0, rectTopY(g, bx0, bz0, rsx, rsz), oz + bz0, rot,
+                kit.lootHouse(), out, !"nbt".equals(m.format()));
+        claimRect2(occ, side, off, cx, cz, bx0, bz0, rsx, rsz);
         // 门前小径接街
         int doorX = sx + nrm[0], doorZ = sz + nrm[1];
         if (doorX >= 0 && doorZ >= 0 && doorX < g.w() && doorZ < g.h()) {
@@ -896,7 +1409,7 @@ public final class CityWorks {
      */
     private static int fields(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
                               int cx, int cz, Kit kit, int pad, int ox, int oz, long seed,
-                              List<BlockEdit> out) {
+                              float[] wallArr, List<BlockEdit> out) {
         java.util.Set<Long> patches = new java.util.HashSet<>();
         int R2 = site.radius() + CivPlanner.FIELD_BAND;
         Material fence = kit.fence();
@@ -905,8 +1418,12 @@ public final class CityWorks {
                 if (lx < 1 || lz < 1 || lx >= g.w() - 1 || lz >= g.h() - 1) continue;
                 double dx = lx - cx, dz = lz - cz;
                 double d = Math.sqrt(dx * dx + dz * dz);
-                double rimHere = CivPlanner.rimAt(site, Math.atan2(dz, dx));
-                if (d <= rimHere + 1 || d > rimHere + CivPlanner.FIELD_BAND) continue;
+                double th = Math.atan2(dz, dx);
+                double rimHere = CivPlanner.rimAt(site, th);
+                // 0.37.0：田从城墙脚（包络+2）一直铺到规划带缘——墙收进来后
+                // 墙外~rim 之间的整地不留"平草荒圈"
+                double inner = wallArr != null ? arrAt(wallArr, th) + 2 : rimHere + 1;
+                if (d <= inner || d > rimHere + CivPlanner.FIELD_BAND) continue;
                 if (g.civ(lx, lz) != CivPlanner.C_PLOT) continue;      // 野格/水：田绕开
                 int oi = occIdx(side, off, cx, cz, lx, lz);
                 if (oi < 0 || occ[oi] != 0) continue;                  // 街/门楼已占
@@ -1008,6 +1525,92 @@ public final class CityWorks {
             }
         }
         return patches.size();
+    }
+
+    // ============================ 城内铺装（0.37.0） ============================
+
+    /**
+     * 墙内地面全铺装：占位仍空的 C_PLOT 一律换城市地皮——按街距分磨损
+     * （贴街硬石重磨损 → 院里砾石/夯土混），碎步噪声成片不胡椒；离街 ≥3 的
+     * 大院里按斑块噪声开<b>口袋园圃</b>（草皮+花/灌+苔，读作刻意的绿地而不是
+     * 漏铺的草）；散点生活道具（木桶/干草垛/南瓜/篝火盆），紧贴房墙偶挂灯。
+     */
+    private static void pave(Ground g, byte[] occ, int side, int off, CivPlanner.Site site,
+                             int cx, int cz, Kit kit, int ox, int oz, long seed,
+                             float[] wallArr, List<BlockEdit> out) {
+        int R = site.radius();
+        // 街距场（多源 BFS：街/广场；房与墙算障碍不进队但不挡传播语义——院子按绕行距离）
+        int[] dist = new int[side * side];
+        java.util.Arrays.fill(dist, Integer.MAX_VALUE);
+        java.util.ArrayDeque<Integer> q = new java.util.ArrayDeque<>();
+        for (int lz = cz - R; lz <= cz + R; lz++) {
+            for (int lx = cx - R; lx <= cx + R; lx++) {
+                int oi = occIdx(side, off, cx, cz, lx, lz);
+                if (oi < 0) continue;
+                if (occ[oi] == 1 || occ[oi] == 4) {
+                    dist[oi] = 0;
+                    q.add(oi);
+                }
+            }
+        }
+        while (!q.isEmpty()) {
+            int c = q.poll();
+            int lx = c % side - off + cx, lz = c / side - off + cz;
+            int d = dist[c];
+            int[][] n4 = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            for (int[] nn : n4) {
+                int oi = occIdx(side, off, cx, cz, lx + nn[0], lz + nn[1]);
+                if (oi < 0 || dist[oi] <= d + 1 || occ[oi] == 3) continue;
+                dist[oi] = d + 1;
+                q.add(oi);
+            }
+        }
+        for (int lz = cz - R; lz <= cz + R; lz++) {
+            for (int lx = cx - R; lx <= cx + R; lx++) {
+                int oi = occIdx(side, off, cx, cz, lx, lz);
+                if (oi < 0 || occ[oi] != 0) continue;
+                if (lx < 1 || lz < 1 || lx >= g.w() - 1 || lz >= g.h() - 1) continue;
+                if (g.civ(lx, lz) != CivPlanner.C_PLOT) continue;
+                if (!insideFab(wallArr, cx, cz, lx, lz, 1)) continue;   // 只铺墙内
+                int wx = ox + lx, wz = oz + lz;
+                int gy = g.y(lx, lz);
+                int d = dist[oi] == Integer.MAX_VALUE ? 9 : dist[oi];
+                // 口袋园圃：离街 ≥3 的院腹地按 11 格斑块噪声成片留绿
+                if (d >= 3 && PlanOps.patch(seed ^ 0x6A2DE9L, wx, wz, 11.0) > 0.72) {
+                    double h = hash01(seed ^ 0x9AD3L, wx, wz);
+                    if (h < 0.10) {
+                        out.add(new BlockEdit(wx, gy + 1, wz, BlockSpec.of(
+                                h < 0.05 ? Material.OXEYE_DAISY : Material.CORNFLOWER)));
+                    } else if (h < 0.16) {
+                        out.add(new BlockEdit(wx, gy + 1, wz, BlockSpec.of(Material.SHORT_GRASS)));
+                    } else if (h > 0.985) {
+                        out.add(new BlockEdit(wx, gy + 1, wz,
+                                BlockSpec.of(Material.OAK_LEAVES)));
+                    }
+                    continue;                                     // 地面保留群系草皮
+                }
+                // 铺装：磨损随街距衰减（贴街硬石 → 院里夯土/砾石）
+                double wear = Math.max(0.14, 0.7 - d * 0.09);
+                Material m = RoadPaint.pick(kit.streets(), seed ^ 0x9A7EDL, wx, wz, wear);
+                out.add(new BlockEdit(wx, gy, wz, BlockSpec.of(m)));
+                // 生活道具散点（只在院子里，不在人行带）
+                if (d >= 2) {
+                    double h = hash01(seed ^ 0xCA57L, wx, wz);
+                    if (h < 0.006) {
+                        out.add(new BlockEdit(wx, gy + 1, wz, BlockSpec.raw(Material.BARREL,
+                                "minecraft:barrel[facing=up]",
+                                "chests/village/village_plains_house")));
+                    } else if (h < 0.009) {
+                        out.add(new BlockEdit(wx, gy + 1, wz, BlockSpec.of(Material.HAY_BLOCK)));
+                    } else if (h < 0.011) {
+                        out.add(new BlockEdit(wx, gy + 1, wz, BlockSpec.of(Material.PUMPKIN)));
+                    } else if (h < 0.0125) {
+                        out.add(new BlockEdit(wx, gy + 1, wz, BlockSpec.of(kit.lampBase())));
+                        out.add(new BlockEdit(wx, gy + 2, wz, BlockSpec.of(Material.LANTERN)));
+                    }
+                }
+            }
+        }
     }
 
     // ============================ 路灯（城内主街） ============================
