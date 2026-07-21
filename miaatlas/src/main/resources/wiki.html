@@ -26,8 +26,10 @@
 <h2>快速开始</h2>
 <pre>/miaatlas create wheel                       # basic 模式，随机种子
 /miaatlas create wheel mode=basic seed=123   # 指定种子
+/miaatlas create wheel pregen=true           # 建完立刻全图生成到硬盘（导出/交付用）
 /miaatlas tp wheel                           # 传送查看
-/miaatlas pregen wheel                       # 预生成全图（断点续跑，交付前必做）</pre>
+/miaatlas pregen wheel                       # 强制生成全图（断点续跑）
+/miaatlas verify wheel                       # 核对 region 完整性，确认可以导出</pre>
 <p class="tip">别名 <code>/atlas</code>。权限 <code>miaatlas.use</code>（默认 op）。</p>
 
 <h2>三种细节源（mode）</h2>
@@ -81,12 +83,32 @@
 <li>矿物：原版风格分布（煤铁铜金红石青金钻，深板岩变体），<code>ores.enabled: false</code> 可关。</li>
 </ul>
 
+<h2>全图预生成与导出</h2>
+<p>Minecraft 默认<b>玩家走到哪才生成到哪</b>——不跑图的话世界文件夹里只有一小块地形，
+拷出去导入其他工具就是残图。交付/导出前必须跑一遍预生成，把 22 万个区块全部写进
+<code>region/*.mca</code>。</p>
+<pre>/miaatlas pregen &lt;世界&gt;            开始（或从断点续跑）
+/miaatlas pregen &lt;世界&gt; status     进度、速度、预计剩余时间
+/miaatlas pregen &lt;世界&gt; restart    从头重扫一遍（补缺口、把半成品区块升级为完整区块）
+/miaatlas stop &lt;世界&gt;              暂停（游标已存，随时续）
+/miaatlas verify &lt;世界&gt;            扫 region 文件核对完整性，报缺多少、缺在哪</pre>
+<ul>
+<li>全程<b>不需要玩家在场</b>，控制台执行即可；服务器中途重启会自动续跑
+（<code>pregen.resume-on-start</code>）。</li>
+<li>TPS 掉到 <code>pregen.min-tps</code> 以下自动降速，不会把服务器压死；
+<code>chunks-in-flight</code> 调大更快也更吃内存。</li>
+<li>每 <code>save-every-chunks</code> 个区块强制落盘一次，中途也能安全拷走 region 文件。</li>
+<li><code>verify</code> 报 100% 才算完整；有缺口就 <code>pregen … restart</code>
+（已生成的区块只是快速载入，不会重算）。</li>
+</ul>
+
 <h2>命令一览</h2>
-<pre>/miaatlas create &lt;名&gt; [mode=basic|diffusion|import] [seed=N] [file=xx.png]
-/miaatlas pregen &lt;世界&gt;     预生成全图（约 22 万区块；进度播报，随时 stop 暂停，游标续跑）
-/miaatlas stop &lt;世界&gt;       暂停预生成
+<pre>/miaatlas create &lt;名&gt; [mode=basic|diffusion|import] [seed=N] [file=xx.png] [pregen=true]
+/miaatlas pregen &lt;世界&gt; [restart|status]   全图预生成
+/miaatlas verify &lt;世界&gt;                    完整性核对
+/miaatlas stop &lt;世界&gt;                      暂停预生成
 /miaatlas list | tp | info | remove</pre>
-<p class="tip">交付流程建议：create → tp 抽查 → pregen 跑完 → 关服 → 打包世界文件夹交付。
-<code>remove</code> 只注销登记，不删世界文件夹。</p>
+<p class="tip">交付流程建议：create（或加 <code>pregen=true</code>）→ tp 抽查 → pregen 跑完
+→ verify 报 100% → 关服 → 打包世界文件夹交付。<code>remove</code> 只注销登记，不删世界文件夹。</p>
 </body>
 </html>

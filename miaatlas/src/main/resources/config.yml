@@ -65,3 +65,15 @@ ores:
   enabled: true         # 原版风格矿物分布（煤铁铜金红石青金钻；关掉则地下无矿）
 caves:
   enabled: true         # 天然洞穴（意面+奶酪+深处熔岩；蓝洞/深暗之域周边自动禁刻保密封）
+
+# ==================== 全图预生成（导出/成品图必做） ====================
+# Minecraft 默认"玩家走到哪生成到哪"，不跑图就只有一小块地形落盘，导不出完整世界。
+# /miaatlas pregen <世界> 强制把整张图生成到硬盘（7500×7500 ≈ 22 万区块），
+# 完成后 /miaatlas verify <世界> 核对 region 文件，确认无缺口再拷走世界文件夹。
+pregen:
+  auto-on-create: false   # true = /miaatlas create 建完自动开跑（等同加 pregen=true 参数）
+  resume-on-start: true   # 服务器重启后自动续跑未完成的预生成（断点游标存在 pregen/）
+  chunks-in-flight: 64    # 并发在途区块：调大更快、更吃内存与磁盘
+  min-tps: 17.0           # TPS 低于此值自动降速，保证服务器可用（0 = 全速不限）
+  save-every-chunks: 8192 # 每这么多区块强制落盘一次（中途也能安全拷 region 文件）
+  unload-after: true      # 生成后立即请求卸载：控内存 + 让区块尽快写进 region 文件

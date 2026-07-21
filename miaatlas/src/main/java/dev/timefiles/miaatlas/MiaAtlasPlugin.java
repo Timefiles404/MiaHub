@@ -37,8 +37,23 @@ public final class MiaAtlasPlugin extends JavaPlugin {
         saveDefaultConfig();
         saveResource("wiki.html", true);
         pregen = new PregenService(this);
+        pregen.configure(getConfig());
         loadWorlds();
         getLogger().info("MiaAtlas 就绪（已注册 " + specs.size() + " 个轮盘世界）。手册: plugins/MiaAtlas/wiki.html");
+        if (getConfig().getBoolean("pregen.resume-on-start", true)) {
+            // 世界刚建好，等区块系统稳定再续跑未完成的预生成
+            Bukkit.getScheduler().runTaskLater(this, this::resumePending, 100L);
+        }
+    }
+
+    /** 启动续跑：有断点游标的世界自动接着生成（服务器中途重启不会丢进度）。 */
+    private void resumePending() {
+        for (AtlasSpec spec : specs.values()) {
+            World w = Bukkit.getWorld(spec.worldName);
+            if (w == null || !pregen.hasPending(spec.worldName) || pregen.running(spec.worldName)) continue;
+            getLogger().info("检测到 " + spec.worldName + " 的预生成断点，自动续跑（config: pregen.resume-on-start）");
+            pregen.start(Bukkit.getConsoleSender(), w, spec, false);
+        }
     }
 
     @Override
@@ -106,8 +121,11 @@ public final class MiaAtlasPlugin extends JavaPlugin {
             case "list" -> {
                 if (specs.isEmpty()) sender.sendMessage("§7[MiaAtlas] 还没有轮盘世界。/miaatlas create <名字> 开建。");
                 for (AtlasSpec s : specs.values()) {
+                    int pct = pregen.percent(s.worldName);
                     sender.sendMessage("§b" + s.worldName + " §7seed=" + s.seed + " mode=" + s.mode
-                            + " size=" + s.size + (pregen.running(s.worldName) ? " §e[预生成中]" : ""));
+                            + " size=" + s.size
+                            + (pct >= 0 ? " §e[预生成中 " + pct + "%]"
+                            : pregen.hasPending(s.worldName) ? " §e[预生成未完成]" : ""));
                 }
             }
             case "tp" -> {
@@ -119,11 +137,23 @@ public final class MiaAtlasPlugin extends JavaPlugin {
                 sender.sendMessage("§a已传送到 " + args[1] + "。");
             }
             case "pregen" -> {
-                if (args.length < 2) { sender.sendMessage("§c用法: /miaatlas pregen <世界>"); return true; }
+                if (args.length < 2) { sender.sendMessage("§c用法: /miaatlas pregen <世界> [restart|status]"); return true; }
                 AtlasSpec s = specs.get(args[1]);
                 World w = Bukkit.getWorld(args[1]);
                 if (s == null || w == null) { sender.sendMessage("§c未找到世界 " + args[1]); return true; }
-                pregen.start(sender, w, s);
+                String sub = args.length > 2 ? args[2].toLowerCase(Locale.ROOT) : "";
+                if (sub.equals("status")) {
+                    sender.sendMessage(pregen.statusLine(args[1]));
+                } else {
+                    pregen.start(sender, w, s, sub.equals("restart"));
+                }
+            }
+            case "verify" -> {
+                if (args.length < 2) { sender.sendMessage("§c用法: /miaatlas verify <世界>"); return true; }
+                AtlasSpec s = specs.get(args[1]);
+                World w = Bukkit.getWorld(args[1]);
+                if (s == null || w == null) { sender.sendMessage("§c未找到世界 " + args[1]); return true; }
+                pregen.verify(sender, w, s);
             }
             case "stop" -> {
                 if (args.length < 2) { sender.sendMessage("§c用法: /miaatlas stop <世界>"); return true; }
@@ -159,9 +189,11 @@ public final class MiaAtlasPlugin extends JavaPlugin {
 
     private void help(CommandSender sender) {
         sender.sendMessage("§b==== MiaAtlas 轮盘世界 ====");
-        sender.sendMessage("§7/miaatlas create <名字> [mode=basic|diffusion|import] [seed=N] [file=xx.png]");
-        sender.sendMessage("§7/miaatlas pregen <世界>  预生成全图（断点续跑） | stop <世界> 暂停");
-        sender.sendMessage("§7/miaatlas list | tp <世界> | info <世界> | remove <世界>");
+        sender.sendMessage("§7/miaatlas create <名字> [mode=basic|diffusion|import] [seed=N] [file=xx.png] [pregen=true]");
+        sender.sendMessage("§7  pregen=true 建完立刻把整张图生成到硬盘（导出用，无需玩家跑图）");
+        sender.sendMessage("§7/miaatlas pregen <世界> [restart|status]  全图预生成 / 从头重扫 / 看进度");
+        sender.sendMessage("§7/miaatlas verify <世界>  核对 region 文件完整性（导出前确认）");
+        sender.sendMessage("§7/miaatlas stop <世界> 暂停 | list | tp <世界> | info <世界> | remove <世界>");
         sender.sendMessage("§7手册: plugins/MiaAtlas/wiki.html");
     }
 
@@ -180,6 +212,7 @@ public final class MiaAtlasPlugin extends JavaPlugin {
             return;
         }
         String mode = "basic", file = null;
+        boolean autoPregen = getConfig().getBoolean("pregen.auto-on-create", false);
         long seed = ThreadLocalRandom.current().nextLong(100_000_000L);
         for (int i = 2; i < args.length; i++) {
             String[] kv = args[i].split("=", 2);
@@ -192,6 +225,8 @@ public final class MiaAtlasPlugin extends JavaPlugin {
                     }
                 }
                 case "file" -> file = kv[1];
+                case "pregen", "forceload" -> autoPregen = kv[1].equalsIgnoreCase("true")
+                        || kv[1].equalsIgnoreCase("yes") || kv[1].equals("1");
             }
         }
         if (!mode.equals("basic") && !mode.equals("diffusion") && !mode.equals("import")) {
@@ -211,6 +246,7 @@ public final class MiaAtlasPlugin extends JavaPlugin {
         sender.sendMessage("§a[MiaAtlas] 开始构建 " + name + "（mode=" + mode + ", seed=" + seed + "）…");
         String importFile = file;
         long fseed = seed;
+        boolean startPregen = autoPregen;
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
             try {
                 if (spec.mode.equals("diffusion")) {
@@ -244,6 +280,7 @@ public final class MiaAtlasPlugin extends JavaPlugin {
                                 + " 查看，/miaatlas pregen " + name + " 预生成全图。");
                         sender.sendMessage("§7蓝洞 (" + (int) spec.blueHoleX + ", " + (int) spec.blueHoleZ
                                 + ")  ★深暗之域 (" + (int) spec.deepDarkX + ", " + (int) spec.deepDarkZ + ")");
+                        if (startPregen) pregen.start(sender, w, spec, true);
                     } catch (Exception e) {
                         sender.sendMessage("§c[MiaAtlas] 创建失败: " + e.getMessage());
                         getLogger().severe("创建世界失败: " + e);
@@ -263,13 +300,18 @@ public final class MiaAtlasPlugin extends JavaPlugin {
     public List<String> onTabComplete(CommandSender sender, Command cmd, String alias, String[] args) {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
-            for (String s : new String[]{"create", "list", "tp", "pregen", "stop", "info", "remove"}) {
+            for (String s : new String[]{"create", "list", "tp", "pregen", "verify", "stop", "info", "remove"}) {
                 if (s.startsWith(args[0].toLowerCase(Locale.ROOT))) out.add(s);
             }
         } else if (args.length == 2 && !args[0].equalsIgnoreCase("create")) {
             for (String s : specs.keySet()) if (s.startsWith(args[1])) out.add(s);
+        } else if (args.length == 3 && args[0].equalsIgnoreCase("pregen")) {
+            for (String s : new String[]{"restart", "status"}) {
+                if (s.startsWith(args[2].toLowerCase(Locale.ROOT))) out.add(s);
+            }
         } else if (args[0].equalsIgnoreCase("create") && args.length >= 3) {
-            for (String s : new String[]{"mode=basic", "mode=diffusion", "mode=import", "seed=", "file="}) {
+            for (String s : new String[]{"mode=basic", "mode=diffusion", "mode=import",
+                    "seed=", "file=", "pregen=true"}) {
                 if (s.startsWith(args[args.length - 1].toLowerCase(Locale.ROOT))) out.add(s);
             }
         }
