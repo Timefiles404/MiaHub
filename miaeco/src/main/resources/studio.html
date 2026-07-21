@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terra Studio · 山体高度图工作室</title>
+<style>
+  :root {
+    --bg: #12151a; --panel: #1a1f27; --card: #1f2530; --line: #2c3442;
+    --fg: #d8dee8; --dim: #8b95a5; --acc: #58a6ff; --ok: #7ce38b; --warn: #f0a742;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.55 "Segoe UI", "Microsoft YaHei", sans-serif; }
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 12px 20px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 20;
+  }
+  header h1 { font-size: 17px; font-weight: 600; }
+  .chip { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .chip.gpu { color: var(--ok); border-color: #2c5237; }
+  #outdir { margin-left: auto; font-size: 12px; color: var(--dim); max-width: 42vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wrap { display: flex; gap: 18px; padding: 18px 20px; align-items: flex-start; }
+  aside { width: 308px; flex: none; display: flex; flex-direction: column; gap: 14px; position: sticky; top: 66px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .panel h2 { font-size: 13px; color: var(--dim); font-weight: 600; letter-spacing: .05em; margin-bottom: 10px; }
+  .presets { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px; }
+  .preset {
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 9px; cursor: pointer; font-size: 13px; text-align: left;
+    color: var(--fg); transition: border-color .12s;
+  }
+  .preset:hover { border-color: var(--acc); }
+  .preset.sel { border-color: var(--acc); background: #223047; }
+  .preset small { display: block; color: var(--dim); font-size: 11px; }
+  label.row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; color: var(--dim); }
+  label.row > span:first-child { width: 66px; flex: none; }
+  label.row output { width: 40px; text-align: right; color: var(--fg); font-variant-numeric: tabular-nums; }
+  input[type=range] { flex: 1; accent-color: var(--acc); }
+  select, input[type=text], input[type=number] {
+    background: #141920; border: 1px solid var(--line); border-radius: 6px;
+    color: var(--fg); padding: 5px 8px; font-size: 13px; width: 100%;
+  }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    background: var(--acc); color: #0b1420; font-weight: 600; border: 0;
+    border-radius: 8px; padding: 9px 14px; font-size: 14px; cursor: pointer; width: 100%;
+  }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.ghost { background: var(--card); color: var(--fg); border: 1px solid var(--line); font-weight: 400; }
+  .btn.mini { width: auto; padding: 4px 10px; font-size: 12px; border-radius: 6px; }
+  .btn.danger { color: #ff7b72; }
+  main { flex: 1; min-width: 0; }
+  #jobbar { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; display: none; }
+  #jobbar .msg { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 8px; }
+  #jobbar .bar { height: 8px; background: #141920; border-radius: 4px; overflow: hidden; }
+  #jobbar .fill { height: 100%; width: 0; background: linear-gradient(90deg, #3178c6, var(--acc)); transition: width .4s; }
+  #jobbar.err .fill { background: #d1494f; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .card .imgbox { position: relative; height: 190px; background: #0d1015; cursor: zoom-in; }
+  .card .imgbox img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .card .kind {
+    position: absolute; top: 8px; left: 8px; font-size: 11px; padding: 1px 8px;
+    border-radius: 999px; background: #0009; backdrop-filter: blur(4px);
+  }
+  .kind.field { color: #9ecbff; } .kind.mount { color: var(--ok); }
+  .kind.derived { color: #d2a8ff; } .kind.upload { color: var(--warn); }
+  .card .body { padding: 10px 12px; }
+  .card .name { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .stats { font-size: 12px; color: var(--dim); margin: 3px 0 8px; }
+  .card .acts { display: flex; gap: 6px; }
+  .drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 16px 10px; text-align: center; color: var(--dim); font-size: 13px; cursor: pointer; transition: border-color .15s; }
+  .drop.over { border-color: var(--acc); color: var(--fg); }
+  dialog {
+    background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 12px; padding: 20px; max-width: min(92vw, 460px); margin: auto;
+  }
+  dialog::backdrop { background: #000a; }
+  dialog h3 { font-size: 15px; margin-bottom: 12px; }
+  #lightbox { max-width: 94vw; padding: 12px; }
+  #lightbox .big { max-width: 88vw; max-height: 72vh; display: block; margin: 0 auto; }
+  #lightbox .thumbs { display: flex; gap: 8px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
+  #lightbox .thumbs img { width: 84px; height: 62px; object-fit: cover; border-radius: 6px; border: 2px solid transparent; cursor: pointer; background: #0d1015; }
+  #lightbox .thumbs img.sel { border-color: var(--acc); }
+  #lightbox .lmeta { text-align: center; color: var(--dim); font-size: 12.5px; margin-top: 8px; }
+  .empty { text-align: center; color: var(--dim); padding: 60px 0; font-size: 14px; }
+  .hint { font-size: 12px; color: var(--dim); margin-top: 8px; }
+  .seedrow { display: flex; gap: 6px; }
+  .seedrow input { flex: 1; }
+  .seedrow button { width: 40px; flex: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏔 Terra Studio</h1>
+  <span class="chip" id="devchip">…</span>
+  <span class="chip" id="cntchip">0 素材</span>
+  <span id="outdir"></span>
+</header>
+
+<div class="wrap">
+<aside>
+  <div class="panel">
+    <h2>生成地形</h2>
+    <div class="presets" id="presets"></div>
+    <label class="row"><span>区域尺寸</span>
+      <select id="p_size">
+        <option value="512">512 · 快速</option>
+        <option value="768">768</option>
+        <option value="1024" selected>1024 · 推荐</option>
+        <option value="1536">1536</option>
+        <option value="2048">2048 · 大场</option>
+      </select>
+    </label>
+    <label class="row"><span>种子</span>
+      <span class="seedrow" style="flex:1">
+        <input type="text" id="p_seed" placeholder="留空随机">
+        <button class="btn ghost mini" id="btnDice" title="随机">🎲</button>
+      </span>
+    </label>
+    <label class="row"><span>山地强度</span><input type="range" id="p_mountain" min="0.4" max="2.5" step="0.05" value="1.0"><output id="o_mountain">1.0</output></label>
+    <label class="row"><span>多样性</span><input type="range" id="p_variety" min="0.5" max="3" step="0.1" value="2.0"><output id="o_variety">2.0</output></label>
+    <label class="row"><span>骨架</span>
+      <select id="p_skeleton">
+        <option value="none">无（纯采样）</option>
+        <option value="peak">中央孤峰</option>
+        <option value="twin">双子峰</option>
+        <option value="ridge">斜脊山脉</option>
+        <option value="ring">环形山垒</option>
+        <option value="basin">盆地缘山</option>
+        <option value="plateau">高原台地</option>
+      </select>
+    </label>
+    <label class="row"><span>骨架幅度</span><input type="range" id="p_skelAmp" min="0" max="1500" step="50" value="800"><output id="o_skelAmp">800</output></label>
+    <label class="row" title="低于此突起量（米）的峰并入邻山：调低切得碎、调高切得整"><span>独立度</span><input type="range" id="p_sens" min="10" max="120" step="5" value="30"><output id="o_sens">30</output></label>
+    <button class="btn" id="btnGen">⛏ 生成并切块</button>
+    <div class="hint">生成 → 自动切出每座山 → 逐一渲染 2.5D 预览。GPU 下 1024 约 1~2 分钟。</div>
+  </div>
+
+  <div class="panel">
+    <h2>上传高度图</h2>
+    <div class="drop" id="drop">拖入 PNG 高度图<br>或点击选择文件</div>
+    <input type="file" id="file" accept="image/png,image/jpeg" hidden>
+    <label class="row"><span>模式</span>
+      <select id="u_mode">
+        <option value="single">整图作为一座山</option>
+        <option value="carve">自动切块</option>
+      </select>
+    </label>
+    <label class="row"><span>最高海拔</span><input type="range" id="u_hscale" min="50" max="800" step="10" value="250"><output id="o_hscale">250</output></label>
+    <div class="hint">最高亮度对应的米数（决定预览立体感与切片标定）。</div>
+  </div>
+</aside>
+
+<main>
+  <div id="jobbar">
+    <div class="msg"><span id="jobmsg">…</span><span id="jobpct">0%</span></div>
+    <div class="bar"><div class="fill" id="jobfill"></div></div>
+  </div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">还没有素材——左侧选个预设，点「生成并切块」。</div>
+</main>
+</div>
+
+<dialog id="deriveDlg">
+  <h3>🧬 派生变体 · <span id="dv_name"></span></h3>
+  <label class="row"><span>数量</span>
+    <select id="dv_count"><option>4</option><option selected>6</option><option>9</option><option>12</option></select>
+  </label>
+  <label class="row"><span>变异强度</span><input type="range" id="dv_strength" min="0.1" max="1" step="0.05" value="0.5"><output id="o_dvs">0.50</output></label>
+  <label class="row"><span>种子</span><input type="text" id="dv_seed" placeholder="留空随机"></label>
+  <div style="display:flex; gap:8px; margin-top:14px">
+    <button class="btn" id="dv_go">开始派生</button>
+    <button class="btn ghost" id="dv_cancel">取消</button>
+  </div>
+</dialog>
+
+<dialog id="lightbox">
+  <img class="big" id="lb_img" alt="">
+  <div class="thumbs" id="lb_thumbs"></div>
+  <div class="lmeta" id="lb_meta"></div>
+</dialog>
+
+<script>
+const PRESETS = [
+  { id:'continent', name:'随机大陆', desc:'纯 diffusion', p:{ variety:2.0, mountain:1.0, skeleton:'none', skelAmp:0 } },
+  { id:'alps',      name:'苍茫山脉', desc:'斜脊引导',     p:{ variety:2.2, mountain:1.5, skeleton:'ridge', skelAmp:800 } },
+  { id:'lonepeak',  name:'中央孤峰', desc:'单体素材',     p:{ variety:1.8, mountain:1.3, skeleton:'peak', skelAmp:900 } },
+  { id:'twin',      name:'双子峰',   desc:'对峙双峰',     p:{ variety:1.8, mountain:1.25, skeleton:'twin', skelAmp:850 } },
+  { id:'ring',      name:'环形山垒', desc:'环状山墙',     p:{ variety:1.9, mountain:1.15, skeleton:'ring', skelAmp:700 } },
+  { id:'mesa',      name:'高原台地', desc:'平顶方山',     p:{ variety:1.6, mountain:0.95, skeleton:'plateau', skelAmp:500 } },
+  { id:'hills',     name:'丘陵原野', desc:'低缓起伏',     p:{ variety:1.2, mountain:0.7, skeleton:'none', skelAmp:0 } },
+  { id:'fjord',     name:'峡湾峻岭', desc:'盆地陡缘',     p:{ variety:2.6, mountain:1.7, skeleton:'basin', skelAmp:600 } },
+];
+const $ = id => document.getElementById(id);
+let lib = [], jobTimer = null, hoverTimer = null;
+
+// ---------- 预设 ----------
+const presetsBox = $('presets');
+PRESETS.forEach((pr, i) => {
+  const b = document.createElement('button');
+  b.className = 'preset' + (i === 0 ? ' sel' : '');
+  b.innerHTML = `${pr.name}<small>${pr.desc}</small>`;
+  b.onclick = () => {
+    document.querySelectorAll('.preset').forEach(x => x.classList.remove('sel'));
+    b.classList.add('sel');
+    $('p_mountain').value = pr.p.mountain;
+    $('p_variety').value = pr.p.variety;
+    $('p_skeleton').value = pr.p.skeleton;
+    $('p_skelAmp').value = pr.p.skelAmp;
+    syncOutputs();
+  };
+  presetsBox.appendChild(b);
+});
+function selPreset() { const s = document.querySelector('.preset.sel'); return s ? PRESETS[[...presetsBox.children].indexOf(s)].id : ''; }
+
+// ---------- 滑条回显 ----------
+const bindOut = (r, o, f) => { $(r).addEventListener('input', () => $(o).textContent = f($(r).value)); };
+function syncOutputs() {
+  $('o_mountain').textContent = (+$('p_mountain').value).toFixed(2).replace(/0$/, '');
+  $('o_variety').textContent = (+$('p_variety').value).toFixed(1);
+  $('o_skelAmp').textContent = $('p_skelAmp').value;
+  $('o_sens').textContent = $('p_sens').value;
+  $('o_hscale').textContent = $('u_hscale').value;
+}
+bindOut('p_mountain', 'o_mountain', v => (+v).toFixed(2).replace(/0$/, ''));
+bindOut('p_variety', 'o_variety', v => (+v).toFixed(1));
+bindOut('p_skelAmp', 'o_skelAmp', v => v);
+bindOut('p_sens', 'o_sens', v => v);
+bindOut('u_hscale', 'o_hscale', v => v);
+bindOut('dv_strength', 'o_dvs', v => (+v).toFixed(2));
+$('btnDice').onclick = () => $('p_seed').value = Math.floor(Math.random() * 1e8);
+
+// ---------- info / library ----------
+async function loadInfo() {
+  const r = await fetch('/api/info').then(x => x.json());
+  const chip = $('devchip');
+  chip.textContent = r.device === 'gpu' ? 'GPU 推理' : 'CPU 推理';
+  chip.classList.toggle('gpu', r.device === 'gpu');
+  $('outdir').textContent = r.out;
+  if (r.busy) pollJob();
+}
+async function loadLib() {
+  const r = await fetch('/api/library').then(x => x.json());
+  lib = r.items || [];
+  $('cntchip').textContent = lib.length + ' 素材';
+  renderGrid();
+}
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function renderGrid() {
+  const g = $('grid');
+  g.innerHTML = '';
+  $('empty').style.display = lib.length ? 'none' : '';
+  const KN = { field: '整场', mount: '山体', derived: '变体', upload: '上传' };
+  lib.forEach(it => {
+    const c = document.createElement('div');
+    c.className = 'card';
+    const stats = [`${it.w}×${it.h}`, `峰 ${it.peak}m`];
+    if (it.prom) stats.push(`独立 ${it.prom}m`);
+    if (it.truncated) stats.push('⚠ 截边');
+    if (it.seed !== undefined && it.kind !== 'derived') stats.push(`s${it.seed}`);
+    c.innerHTML = `
+      <div class="imgbox">
+        <span class="kind ${it.kind}">${KN[it.kind] || it.kind}</span>
+        <img loading="lazy" src="/files/${it.id}/view_a.png" data-views='${JSON.stringify(it.views)}' data-id="${it.id}">
+      </div>
+      <div class="body">
+        <div class="name" title="${esc(it.name)}">${esc(it.name)}</div>
+        <div class="stats">${stats.join(' · ')}</div>
+        <div class="acts">
+          <a class="btn ghost mini" href="/files/${it.id}/height.png" download="${esc(it.name)}-height.png" title="下载 16-bit 高度图">⬇ 高度图</a>
+          ${it.kind !== 'field' ? `<button class="btn ghost mini" data-derive="${it.id}">🧬 派生</button>` : ''}
+          <button class="btn ghost mini danger" data-del="${it.id}" title="删除">🗑</button>
+        </div>
+      </div>`;
+    const box = c.querySelector('.imgbox');
+    const img = box.querySelector('img');
+    // 悬停轮播视角
+    let vi = 0;
+    box.addEventListener('mouseenter', () => {
+      hoverTimer = setInterval(() => {
+        const vs = it.views.filter(v => v.startsWith('view'));
+        vi = (vi + 1) % vs.length;
+        img.src = `/files/${it.id}/${vs[vi]}`;
+      }, 650);
+    });
+    box.addEventListener('mouseleave', () => { clearInterval(hoverTimer); img.src = `/files/${it.id}/view_a.png`; vi = 0; });
+    box.addEventListener('click', () => openLightbox(it));
+    g.appendChild(c);
+  });
+  g.querySelectorAll('[data-derive]').forEach(b => b.onclick = () => openDerive(b.dataset.derive));
+  g.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('删除该素材（含全部渲染图）？')) return;
+    await fetch('/api/delete', { method: 'POST', body: JSON.stringify({ id: b.dataset.del }) });
+    loadLib();
+  });
+}
+
+// ---------- job ----------
+function showJob(j) {
+  const bar = $('jobbar');
+  bar.style.display = '';
+  bar.classList.toggle('err', j.state === 'error');
+  $('jobmsg').textContent = j.state === 'error' ? ('出错：' + (j.error || '未知')) : j.message;
+  $('jobpct').textContent = j.progress + '%';
+  $('jobfill').style.width = j.progress + '%';
+  $('btnGen').disabled = !(j.state === 'done' || j.state === 'error');
+}
+function pollJob() {
+  if (jobTimer) return;
+  jobTimer = setInterval(async () => {
+    const r = await fetch('/api/job').then(x => x.json());
+    if (!r.job) { stopPoll(); return; }
+    showJob(r.job);
+    if (r.job.state === 'done' || r.job.state === 'error') {
+      stopPoll();
+      loadLib();
+      if (r.job.state === 'done') setTimeout(() => $('jobbar').style.display = 'none', 2500);
+    }
+  }, 800);
+}
+function stopPoll() { clearInterval(jobTimer); jobTimer = null; $('btnGen').disabled = false; }
+async function startJob(url, body, isRaw) {
+  const opt = isRaw ? body : { method: 'POST', body: JSON.stringify(body) };
+  const r = await fetch(url, opt).then(x => x.json());
+  if (r.busy) { alert('有任务正在进行，请等待完成'); return false; }
+  if (r.error) { alert(r.error); return false; }
+  showJob(r.job);
+  pollJob();
+  return true;
+}
+
+// ---------- 生成 ----------
+$('btnGen').onclick = () => {
+  startJob('/api/generate', {
+    seed: $('p_seed').value.trim(),
+    size: +$('p_size').value,
+    variety: +$('p_variety').value,
+    mountain: +$('p_mountain').value,
+    skeleton: $('p_skeleton').value,
+    skelAmp: +$('p_skelAmp').value,
+    sens: +$('p_sens').value,
+    preset: selPreset(),
+  });
+};
+
+// ---------- 派生 ----------
+let deriveId = null;
+function openDerive(id) {
+  deriveId = id;
+  const it = lib.find(x => x.id === id);
+  $('dv_name').textContent = it ? it.name : id;
+  $('deriveDlg').showModal();
+}
+$('dv_cancel').onclick = () => $('deriveDlg').close();
+$('dv_go').onclick = async () => {
+  $('deriveDlg').close();
+  startJob('/api/derive', {
+    id: deriveId,
+    count: +$('dv_count').value,
+    strength: +$('dv_strength').value,
+    seed: $('dv_seed').value.trim(),
+  });
+};
+
+// ---------- 上传 ----------
+const drop = $('drop'), fileIn = $('file');
+drop.onclick = () => fileIn.click();
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => {
+  e.preventDefault();
+  drop.classList.remove('over');
+  if (e.dataTransfer.files[0]) doUpload(e.dataTransfer.files[0]);
+});
+fileIn.onchange = () => { if (fileIn.files[0]) doUpload(fileIn.files[0]); fileIn.value = ''; };
+async function doUpload(f) {
+  const name = f.name.replace(/\.[^.]+$/, '');
+  const q = new URLSearchParams({
+    name, mode: $('u_mode').value,
+    hscale: $('u_hscale').value, sens: $('p_sens').value,
+  });
+  await startJob('/api/upload?' + q, { method: 'POST', body: f }, true);
+}
+
+// ---------- lightbox ----------
+function openLightbox(it) {
+  const lb = $('lightbox');
+  const views = it.views || [];
+  let cur = views.includes('view_a.png') ? 'view_a.png' : views[0];
+  const set = v => {
+    cur = v;
+    $('lb_img').src = `/files/${it.id}/${v}`;
+    $('lb_thumbs').querySelectorAll('img').forEach(t => t.classList.toggle('sel', t.dataset.v === v));
+  };
+  $('lb_thumbs').innerHTML = '';
+  views.forEach(v => {
+    const t = document.createElement('img');
+    t.src = `/files/${it.id}/${v}`;
+    t.dataset.v = v;
+    t.onclick = () => set(v);
+    $('lb_thumbs').appendChild(t);
+  });
+  const meta = [`${it.w}×${it.h} 格（约 ${(it.planMeters / 1000).toFixed(1)} km）`, `峰高 ${it.peak}m`];
+  if (it.prom) meta.push(`独立度 ${it.prom}m`);
+  if (it.base) meta.push(`山脚基准 ${it.base}m`);
+  $('lb_meta').textContent = `${it.name} — ${meta.join(' · ')}`;
+  set(cur);
+  lb.showModal();
+  lb.onclick = e => { if (e.target === lb) lb.close(); };
+}
+
+syncOutputs();
+loadInfo();
+loadLib();
+</script>
+</body>
+</html>

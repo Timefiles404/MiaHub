@@ -111,6 +111,29 @@ tasks.register<JavaExec>("riverMap") {
     args(layout.buildDirectory.dir("rivermap").get().asFile.absolutePath)
 }
 
+// 地形工作室（0.36.0）：本地 Web 工作台——diffusion 生成高度场、自动切山、
+// 2.5D 渲染预览、变体派生、上传高度图。素材落盘仓库外 ../terra-studio/。
+tasks.register<JavaExec>("terraStudio") {
+    group = "application"
+    description = "Local web studio: generate/carve/render/derive mountain heightmaps"
+    dependsOn("classes")
+    mainClass.set("dev.timefiles.miaeco.tool.TerraStudioTool")
+    classpath = files(
+        provider { project.the<JavaPluginExtension>().sourceSets["main"].output },
+        provider { project.configurations["compileClasspath"] },
+        provider { terraTool }
+    )
+    jvmArgs("-Xmx" + (findProperty("miaeco.dumpXmx") ?: "3g"))
+    systemProperty("miaeco.modelDir",
+        (findProperty("miaeco.modelDir")
+            ?: rootProject.projectDir.parentFile.resolve("references/terrain-diffusion/weights").absolutePath).toString())
+    systemProperty("miaeco.device", (findProperty("miaeco.device") ?: "cpu").toString())
+    systemProperty("miaeco.studioPort", (findProperty("miaeco.studioPort") ?: "8756").toString())
+    systemProperty("miaeco.studioOut",
+        (findProperty("miaeco.studioOut")
+            ?: rootProject.projectDir.parentFile.resolve("terra-studio").absolutePath).toString())
+}
+
 // 离线开发工具：导出各树种×阶段×体型的生成结构（无需服务器），供渲染核对形态。
 // classpath 用 provider 延迟解析（java 插件由根脚本 subprojects 注入，避免时序问题）。
 tasks.register<JavaExec>("dumpTrees") {
