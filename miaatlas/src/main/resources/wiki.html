@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>MiaAtlas 手册</title>
+<style>
+  body { background:#14161a; color:#d8dce2; font-family:"Microsoft YaHei",system-ui,sans-serif;
+         max-width:900px; margin:2em auto; padding:0 1.2em; line-height:1.75; }
+  h1 { color:#7fd0ff; border-bottom:2px solid #2a3542; padding-bottom:.3em; }
+  h2 { color:#8fe08f; margin-top:1.8em; }
+  code, pre { background:#20242c; border-radius:4px; padding:.12em .45em; color:#ffd479; }
+  pre { padding:.7em 1em; overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; margin:.8em 0; }
+  th, td { border:1px solid #333c48; padding:.4em .7em; text-align:left; }
+  th { background:#1c2129; color:#9fc4e8; }
+  .tip { color:#8fa8c0; font-size:.92em; }
+</style>
+</head>
+<body>
+<h1>MiaAtlas —— 定制地图世界生成器</h1>
+<p>MiaAtlas 生成「环形分流 / 扇区轮盘」布局的定制世界：中央核心岛 → 环形海 →
+12 扇区轮盘 → 四周外海。<b>纯地形 + 纯群系</b>：不生成任何结构建筑、树木植被、
+原版装饰（唯一例外：委托规格指定的沙漠地下繁茂洞穴植被）。山体等大型地貌留白，
+供后期手工塑造。</p>
+
+<h2>快速开始</h2>
+<pre>/miaatlas create wheel                       # basic 模式，随机种子
+/miaatlas create wheel mode=basic seed=123   # 指定种子
+/miaatlas tp wheel                           # 传送查看
+/miaatlas pregen wheel                       # 预生成全图（断点续跑，交付前必做）</pre>
+<p class="tip">别名 <code>/atlas</code>。权限 <code>miaatlas.use</code>（默认 op）。</p>
+
+<h2>三种细节源（mode）</h2>
+<table>
+<tr><th>模式</th><th>说明</th><th>要求</th></tr>
+<tr><td><code>basic</code></td><td>程序噪声细节，秒级建世界（默认）</td><td>无</td></tr>
+<tr><td><code>diffusion</code></td><td>MiaEco 扩散管线出真实地貌纹理（分位归一化后按扇区调制，宏观轮盘布局不变）</td>
+<td>服务器装有 MiaEco；首次使用自动下载模型权重（约 2GB，CPU 推理需较长时间）</td></tr>
+<tr><td><code>import</code></td><td>导入外部高度图作细节源（16-bit 灰度 PNG 最佳，普通图按亮度）</td>
+<td>把 PNG 放到 <code>plugins/MiaAtlas/import/</code>，加 <code>file=xx.png</code></td></tr>
+</table>
+<p class="tip">提示：可先在本地用 MiaEco 的 Terra Studio 生成/挑选高度图，再以 import 模式喂给服务器——
+免去服务器上跑推理。</p>
+
+<h2>轮盘布局（默认配置 = 委托规格）</h2>
+<table>
+<tr><th>钟位</th><th>扇区</th><th>群系</th><th>地表风格</th></tr>
+<tr><td>核心</td><td>核心岛</td><td>meadow</td><td>环海包围的草甸台地</td></tr>
+<tr><td>12</td><td>玄武岩火山</td><td>basalt_deltas</td><td>玄武岩/黑石/平滑玄武岩 + 玄武岩柱簇 + 岩浆斑</td></tr>
+<tr><td>1</td><td>风袭浮空岛</td><td>windswept_hills</td><td>台阶崖地 + 4 座浮空岛（Y150~192）</td></tr>
+<tr><td>2</td><td>化石高原</td><td>badlands / 外半径 eroded_badlands</td><td>红沙 + 24 层陶瓦层理台地</td></tr>
+<tr><td>3</td><td>沙漠</td><td>desert</td><td>各向异性沙丘；<b>地下繁茂洞穴带</b></td></tr>
+<tr><td>4</td><td>热带丛林</td><td>jungle</td><td>草地起伏（不刷树）</td></tr>
+<tr><td>5</td><td>蘑菇岛</td><td>mushroom_fields</td><td>菌丝体地表</td></tr>
+<tr><td>6</td><td>红树林沼泽</td><td>mangrove_swamp</td><td>泥地低洼 + 天然水洼网</td></tr>
+<tr><td>7</td><td>海洋蓝洞</td><td>ocean / deep_ocean（岛屿 plains）</td><td>绿岛群 + 月牙岛环抱蓝洞（详下）</td></tr>
+<tr><td>8</td><td>樱花林</td><td>cherry_grove</td><td>草地丘陵</td></tr>
+<tr><td>9</td><td>寒冰极地</td><td>snowy_plains / 高处 jagged_peaks</td><td>雪块地表 + 岸冰 + 冰刺</td></tr>
+<tr><td>10</td><td>针叶林高地</td><td>old_growth_pine_taiga</td><td>灰化土/粗泥高地</td></tr>
+<tr><td>11</td><td>黑森林</td><td>dark_forest（1.21.1 无苍白之园的替代）</td><td>草地起伏</td></tr>
+</table>
+<p class="tip">扇区顺序/群系/方块风格/高度参数全部在 <code>config.yml</code> 可改；
+创建世界时配置被快照进 <code>plugins/MiaAtlas/worlds/&lt;名&gt;.yml</code>，之后改配置不影响已建世界。</p>
+
+<h2>特制地下（三处）</h2>
+<p><b>① 蓝洞系统</b>（海洋扇区，坐标见 <code>/miaatlas info</code>）：礁盘浅台 →
+半径 52 陡壁深洞（洞底 Y-20）→ 4 条 1~3 格宽扭曲死亡竖井 → 基岩层 75×75 圆角方形暗室
+（地面 Y-59、穹顶至 Y-46，基岩/深板岩地面 + 岩浆眼气泡柱）。整套系统<b>全水密封</b>——
+潜水挑战，无流体坍塌风险。</p>
+<p><b>② ★ 深暗之域</b>（西南外海地下，全图<b>唯一</b>）：中央大厅 + 4 卫星室 + 连接隧道的
+密封洞窟，幽匿块/幽匿感测体/尖啸体（可召唤监守者）/催发体铺装；群系 deep_dark 仅覆盖此处。
+无地表入口——需要挖掘寻找。</p>
+<p><b>③ 沙漠繁茂洞穴</b>：沙漠扇区地下 Y-28~52 为 lush_caves 群系，天然洞穴加宽加密，
+苔藓地面、发光浆果藤、孢子花、黏土洼。</p>
+
+<h2>全局地下规则</h2>
+<ul>
+<li>深暗之域：<b>除 ★ 外全图禁止</b>（群系逐格判定，不可能泄漏）。</li>
+<li>试炼大厅及一切原版结构：<b>全图禁止</b>（自定义生成器不产结构）。</li>
+<li>其余区域：天然洞穴（意面+奶酪+深处熔岩）正常生成；蓝洞/深暗之域周边自动禁刻保密封。</li>
+<li>矿物：原版风格分布（煤铁铜金红石青金钻，深板岩变体），<code>ores.enabled: false</code> 可关。</li>
+</ul>
+
+<h2>命令一览</h2>
+<pre>/miaatlas create &lt;名&gt; [mode=basic|diffusion|import] [seed=N] [file=xx.png]
+/miaatlas pregen &lt;世界&gt;     预生成全图（约 22 万区块；进度播报，随时 stop 暂停，游标续跑）
+/miaatlas stop &lt;世界&gt;       暂停预生成
+/miaatlas list | tp | info | remove</pre>
+<p class="tip">交付流程建议：create → tp 抽查 → pregen 跑完 → 关服 → 打包世界文件夹交付。
+<code>remove</code> 只注销登记，不删世界文件夹。</p>
+</body>
+</html>

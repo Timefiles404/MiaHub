@@ -1,0 +1,17 @@
+name: MiaAtlas
+main: dev.timefiles.miaatlas.MiaAtlasPlugin
+version: ${version}
+api-version: "1.21"
+description: 定制地图世界生成器：轮盘扇区布局、纯地形纯群系、特制地下（蓝洞/深暗之域/繁茂洞穴）。
+author: Timefiles404
+softdepend: [MiaEco]
+commands:
+  miaatlas:
+    description: MiaAtlas 轮盘世界管理。
+    usage: /miaatlas help
+    aliases: [atlas]
+    permission: miaatlas.use
+permissions:
+  miaatlas.use:
+    description: 允许使用 MiaAtlas。
+    default: op

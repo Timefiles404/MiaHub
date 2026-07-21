@@ -1,0 +1,67 @@
+# ==================== MiaAtlas 轮盘世界规格 ====================
+# /miaatlas create <名字> [mode=basic|diffusion|import] [seed=数字] [file=xx.png]
+# 创建时本配置会被快照进 plugins/MiaAtlas/worlds/<名字>.yml——
+# 之后修改这里只影响新建的世界，已建世界永远按快照生成（防接缝）。
+
+geometry:
+  size: 7500            # 正方形边长（格）；世界边界自动设为此值、以 (0,0) 为中心
+  sea-level: 63
+  core-radius: 850      # 中央核心岛半径
+  ring-sea-width: 400   # 环形海宽度（核心岛与轮盘之间）
+  wheel-radius: 3460    # 轮盘外缘半径（以外为外海，四角深海）
+  coast-noise: 70       # 海岸线摆动幅度（格）
+  rotation-deg: 0.0     # 整盘顺时针旋转（度）；第一个扇区默认居中正北
+
+detail:                 # 细节场（扇区内部丘谷起伏的纹理来源）
+  diffusion-grid: 1024  # diffusion 模式推理场分辨率
+  diffusion-variety: 2.0
+
+core:                   # 中央核心岛：环海包围的草甸台地
+  biome: meadow
+  palette: grass
+  base: 16
+  relief: 5
+  shape: rolling
+
+# 12 扇区，顺时针排列；第一个居中在正北（12点方向）。
+# 字段: biome 群系 / palette 方块风格 / base 内陆基准高(格,相对海面) /
+#       relief 起伏幅度 / terrace 台阶高(恶地风袭) / shape 细节形状 /
+#       pools 低洼积水 / ocean 整扇区为海 / high-biome+high-at 高处换群系 /
+#       split-biome 外半径换群系 / features 特制件
+sectors:
+  s01_volcanic: {biome: basalt_deltas, palette: basalt, base: 14, relief: 24, shape: ridged, features: [basalt_columns]}
+  s02_floating: {biome: windswept_hills, palette: alpine, base: 22, relief: 55, terrace: 12, shape: ridged, features: [floating_islands]}
+  s03_fossil:   {biome: badlands, split-biome: eroded_badlands, palette: badlands, base: 30, relief: 26, terrace: 8}
+  s04_desert:   {biome: desert, palette: desert, base: 10, relief: 14, shape: dune, features: [lush_caves]}
+  s05_jungle:   {biome: jungle, palette: grass, base: 10, relief: 18}
+  s06_mushroom: {biome: mushroom_fields, palette: mycelium, base: 9, relief: 14}
+  s07_mangrove: {biome: mangrove_swamp, palette: mangrove, base: 2, relief: 5, pools: true}
+  s08_bluehole: {biome: ocean, palette: seabed, ocean: true, features: [blue_hole, islands]}
+  s09_cherry:   {biome: cherry_grove, palette: grass, base: 12, relief: 26}
+  s10_arctic:   {biome: snowy_plains, high-biome: jagged_peaks, high-at: 60, palette: snowy, base: 12, relief: 30, shape: ridged, features: [ice_spikes]}
+  s11_taiga:    {biome: old_growth_pine_taiga, palette: podzol, base: 20, relief: 22, shape: highland}
+  s12_darkwood: {biome: dark_forest, palette: grass, base: 10, relief: 20}
+
+features:
+  blue-hole:            # 海洋扇区蓝洞：礁盘浅台→陡壁深洞→竖井→基岩暗室（全水密封系统）
+    radius: 52          # 洞口半径
+    floor-y: -20        # 洞底 Y
+    shafts: 4           # 1~3 格宽死亡竖井条数（洞底→暗室顶，扭曲下行）
+    chamber-size: 75    # 基岩暗室边长（圆角方形）
+    chamber-floor-y: -59
+    chamber-top-y: -46
+    # x/z 缺省 = 自动落在蓝洞扇区中线 66% 半径处；可显式覆盖:
+    # x: -1150.0
+    # z: 1992.0
+  deep-dark:            # ★ 全图唯一深暗之域：西南外海地下密封洞窟（中央大厅+4卫星室+隧道，幽匿铺装）
+    x: -3050.0
+    z: 3050.0
+    radius: 130         # 群系覆盖半径（洞窟本体略小）
+  lush-caves:           # 沙漠扇区地下繁茂洞穴带（发光浆果藤/苔藓/孢子花，洞穴加宽）
+    y-min: -28
+    y-max: 52
+
+ores:
+  enabled: true         # 原版风格矿物分布（煤铁铜金红石青金钻；关掉则地下无矿）
+caves:
+  enabled: true         # 天然洞穴（意面+奶酪+深处熔岩；蓝洞/深暗之域周边自动禁刻保密封）

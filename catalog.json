@@ -116,6 +116,22 @@
       "description": "Parametric procedural forest plugin: terrain-driven tree placement, async cellular tree growth, and succession."
     },
     {
+      "id": "miaatlas",
+      "name": "MiaAtlas",
+      "pluginName": "MiaAtlas",
+      "repository": "Timefiles404/MiaHub",
+      "releaseTag": "miaatlas-v0.1.0",
+      "asset": "MiaAtlas-0.1.0.jar",
+      "fileName": "MiaAtlas.jar",
+      "version": "0.1.0",
+      "minecraft": "1.21.x",
+      "java": 21,
+      "restartRequired": false,
+      "dependencies": [],
+      "passwordProtected": false,
+      "description": "Custom commissioned-map world generator: sector-wheel layout, pure terrain + biomes, bespoke underground (blue hole / deep dark / lush caves)."
+    },
+    {
       "id": "miaattributes",
       "name": "MiaAttributes",
       "pluginName": "MiaAttributes",
