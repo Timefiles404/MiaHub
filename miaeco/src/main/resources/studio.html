@@ -119,23 +119,33 @@
         <button class="btn ghost mini" id="btnDice" title="随机">🎲</button>
       </span>
     </label>
-    <label class="row"><span>山地强度</span><input type="range" id="p_mountain" min="0.4" max="2.5" step="0.05" value="1.0"><output id="o_mountain">1.0</output></label>
-    <label class="row"><span>多样性</span><input type="range" id="p_variety" min="0.5" max="3" step="0.1" value="2.0"><output id="o_variety">2.0</output></label>
-    <label class="row"><span>骨架</span>
-      <select id="p_skeleton">
-        <option value="none">无（纯采样）</option>
-        <option value="peak">中央孤峰</option>
-        <option value="twin">双子峰</option>
-        <option value="ridge">斜脊山脉</option>
-        <option value="ring">环形山垒</option>
-        <option value="basin">盆地缘山</option>
-        <option value="plateau">高原台地</option>
-      </select>
-    </label>
-    <label class="row"><span>骨架幅度</span><input type="range" id="p_skelAmp" min="0" max="1500" step="50" value="800"><output id="o_skelAmp">800</output></label>
+    <div id="mesaCtl">
+      <label class="row"><span>台地高度</span><input type="range" id="p_hAmp" min="60" max="420" step="10" value="190"><output id="o_hAmp">190</output></label>
+      <label class="row" title="崖壁+平台的叠层数：3~4 = 照片式大台阶，6 = 细碎劣地"><span>崖阶层数</span><input type="range" id="p_levels" min="2" max="6" step="1" value="4"><output id="o_levels">4</output></label>
+      <label class="row" title="越高崖越陡、坡积裙越短"><span>崖壁锐度</span><input type="range" id="p_cliff" min="0" max="1" step="0.05" value="0.65"><output id="o_cliff">0.65</output></label>
+      <label class="row" title="沿台地脚雕蛇曲河谷的深度；0 = 不刻河"><span>河谷深度</span><input type="range" id="p_canyon" min="0" max="1" step="0.05" value="0.75"><output id="o_canyon">0.75</output></label>
+      <label class="row" title="域翘曲幅度 + 崖缘破碎度：越高轮廓越蜿蜒"><span>侵蚀扭曲</span><input type="range" id="p_warp" min="0" max="1" step="0.05" value="0.55"><output id="o_warp">0.55</output></label>
+      <label class="row" title="首崖以上高地的面积占比"><span>高地覆盖</span><input type="range" id="p_cover" min="0.2" max="0.78" step="0.02" value="0.5"><output id="o_cover">0.50</output></label>
+    </div>
+    <div id="diffCtl" style="display:none">
+      <label class="row"><span>山地强度</span><input type="range" id="p_mountain" min="0.4" max="2.5" step="0.05" value="1.0"><output id="o_mountain">1.0</output></label>
+      <label class="row"><span>多样性</span><input type="range" id="p_variety" min="0.5" max="3" step="0.1" value="2.0"><output id="o_variety">2.0</output></label>
+      <label class="row"><span>骨架</span>
+        <select id="p_skeleton">
+          <option value="none">无（纯采样）</option>
+          <option value="peak">中央孤峰</option>
+          <option value="twin">双子峰</option>
+          <option value="ridge">斜脊山脉</option>
+          <option value="ring">环形山垒</option>
+          <option value="basin">盆地缘山</option>
+          <option value="plateau">高原台地</option>
+        </select>
+      </label>
+      <label class="row"><span>骨架幅度</span><input type="range" id="p_skelAmp" min="0" max="1500" step="50" value="800"><output id="o_skelAmp">800</output></label>
+    </div>
     <label class="row" title="低于此突起量（米）的峰并入邻山：调低切得碎、调高切得整"><span>独立度</span><input type="range" id="p_sens" min="10" max="120" step="5" value="30"><output id="o_sens">30</output></label>
     <button class="btn" id="btnGen">⛏ 生成并切块</button>
-    <div class="hint">生成 → 自动切出每座山 → 逐一渲染 2.5D 预览。GPU 下 1024 约 1~2 分钟。</div>
+    <div class="hint" id="genHint">台地模式为纯程序合成：生成 → 自动切台 → 渲染预览，1024 数秒完成，无需模型。</div>
   </div>
 
   <div class="panel">
@@ -184,15 +194,19 @@
 
 <script>
 const PRESETS = [
-  { id:'continent', name:'随机大陆', desc:'纯 diffusion', p:{ variety:2.0, mountain:1.0, skeleton:'none', skelAmp:0 } },
-  { id:'alps',      name:'苍茫山脉', desc:'斜脊引导',     p:{ variety:2.2, mountain:1.5, skeleton:'ridge', skelAmp:800 } },
-  { id:'lonepeak',  name:'中央孤峰', desc:'单体素材',     p:{ variety:1.8, mountain:1.3, skeleton:'peak', skelAmp:900 } },
-  { id:'twin',      name:'双子峰',   desc:'对峙双峰',     p:{ variety:1.8, mountain:1.25, skeleton:'twin', skelAmp:850 } },
-  { id:'ring',      name:'环形山垒', desc:'环状山墙',     p:{ variety:1.9, mountain:1.15, skeleton:'ring', skelAmp:700 } },
-  { id:'mesa',      name:'高原台地', desc:'平顶方山',     p:{ variety:1.6, mountain:0.95, skeleton:'plateau', skelAmp:500 } },
-  { id:'hills',     name:'丘陵原野', desc:'低缓起伏',     p:{ variety:1.2, mountain:0.7, skeleton:'none', skelAmp:0 } },
-  { id:'fjord',     name:'峡湾峻岭', desc:'盆地陡缘',     p:{ variety:2.6, mountain:1.7, skeleton:'basin', skelAmp:600 } },
+  { id:'mesa-canyon',  name:'峡谷台原', desc:'平顶台地·蛇曲深峡', mode:'mesa', p:{ hAmp:190, levels:4, cliff:0.65, canyon:0.75, warp:0.55, cover:0.50 } },
+  { id:'mesa-butte',   name:'孤峰方山', desc:'散布孤台·切片素材', mode:'mesa', p:{ hAmp:220, levels:4, cliff:0.75, canyon:0.35, warp:0.50, cover:0.30 } },
+  { id:'mesa-gorge',   name:'蛇曲深峡', desc:'高原深切窄谷',      mode:'mesa', p:{ hAmp:170, levels:3, cliff:0.70, canyon:1.0,  warp:0.65, cover:0.62 } },
+  { id:'mesa-badland', name:'破碎劣地', desc:'多阶细碎丹霞',      mode:'mesa', p:{ hAmp:120, levels:6, cliff:0.55, canyon:0.60, warp:0.85, cover:0.42 } },
+  { id:'continent', name:'随机大陆', desc:'纯 diffusion', mode:'diff', p:{ variety:2.0, mountain:1.0, skeleton:'none', skelAmp:0 } },
+  { id:'alps',      name:'苍茫山脉', desc:'斜脊引导',     mode:'diff', p:{ variety:2.2, mountain:1.5, skeleton:'ridge', skelAmp:800 } },
+  { id:'lonepeak',  name:'中央孤峰', desc:'单体素材',     mode:'diff', p:{ variety:1.8, mountain:1.3, skeleton:'peak', skelAmp:900 } },
+  { id:'twin',      name:'双子峰',   desc:'对峙双峰',     mode:'diff', p:{ variety:1.8, mountain:1.25, skeleton:'twin', skelAmp:850 } },
+  { id:'ring',      name:'环形山垒', desc:'环状山墙',     mode:'diff', p:{ variety:1.9, mountain:1.15, skeleton:'ring', skelAmp:700 } },
+  { id:'hills',     name:'丘陵原野', desc:'低缓起伏',     mode:'diff', p:{ variety:1.2, mountain:0.7, skeleton:'none', skelAmp:0 } },
+  { id:'fjord',     name:'峡湾峻岭', desc:'盆地陡缘',     mode:'diff', p:{ variety:2.6, mountain:1.7, skeleton:'basin', skelAmp:600 } },
 ];
+let curMode = 'mesa';
 const $ = id => document.getElementById(id);
 let lib = [], jobTimer = null, hoverTimer = null;
 
@@ -205,10 +219,25 @@ PRESETS.forEach((pr, i) => {
   b.onclick = () => {
     document.querySelectorAll('.preset').forEach(x => x.classList.remove('sel'));
     b.classList.add('sel');
-    $('p_mountain').value = pr.p.mountain;
-    $('p_variety').value = pr.p.variety;
-    $('p_skeleton').value = pr.p.skeleton;
-    $('p_skelAmp').value = pr.p.skelAmp;
+    curMode = pr.mode;
+    $('mesaCtl').style.display = curMode === 'mesa' ? '' : 'none';
+    $('diffCtl').style.display = curMode === 'mesa' ? 'none' : '';
+    $('genHint').textContent = curMode === 'mesa'
+      ? '台地模式为纯程序合成：生成 → 自动切台 → 渲染预览，1024 数秒完成，无需模型。'
+      : '生成 → 自动切出每座山 → 逐一渲染 2.5D 预览。GPU 下 1024 约 1~2 分钟。';
+    if (curMode === 'mesa') {
+      $('p_hAmp').value = pr.p.hAmp;
+      $('p_levels').value = pr.p.levels;
+      $('p_cliff').value = pr.p.cliff;
+      $('p_canyon').value = pr.p.canyon;
+      $('p_warp').value = pr.p.warp;
+      $('p_cover').value = pr.p.cover;
+    } else {
+      $('p_mountain').value = pr.p.mountain;
+      $('p_variety').value = pr.p.variety;
+      $('p_skeleton').value = pr.p.skeleton;
+      $('p_skelAmp').value = pr.p.skelAmp;
+    }
     syncOutputs();
   };
   presetsBox.appendChild(b);
@@ -223,6 +252,12 @@ function syncOutputs() {
   $('o_skelAmp').textContent = $('p_skelAmp').value;
   $('o_sens').textContent = $('p_sens').value;
   $('o_hscale').textContent = $('u_hscale').value;
+  $('o_hAmp').textContent = $('p_hAmp').value;
+  $('o_levels').textContent = $('p_levels').value;
+  $('o_cliff').textContent = (+$('p_cliff').value).toFixed(2);
+  $('o_canyon').textContent = (+$('p_canyon').value).toFixed(2);
+  $('o_warp').textContent = (+$('p_warp').value).toFixed(2);
+  $('o_cover').textContent = (+$('p_cover').value).toFixed(2);
 }
 bindOut('p_mountain', 'o_mountain', v => (+v).toFixed(2).replace(/0$/, ''));
 bindOut('p_variety', 'o_variety', v => (+v).toFixed(1));
@@ -230,6 +265,12 @@ bindOut('p_skelAmp', 'o_skelAmp', v => v);
 bindOut('p_sens', 'o_sens', v => v);
 bindOut('u_hscale', 'o_hscale', v => v);
 bindOut('dv_strength', 'o_dvs', v => (+v).toFixed(2));
+bindOut('p_hAmp', 'o_hAmp', v => v);
+bindOut('p_levels', 'o_levels', v => v);
+bindOut('p_cliff', 'o_cliff', v => (+v).toFixed(2));
+bindOut('p_canyon', 'o_canyon', v => (+v).toFixed(2));
+bindOut('p_warp', 'o_warp', v => (+v).toFixed(2));
+bindOut('p_cover', 'o_cover', v => (+v).toFixed(2));
 $('btnDice').onclick = () => $('p_seed').value = Math.floor(Math.random() * 1e8);
 
 // ---------- info / library ----------
@@ -333,16 +374,31 @@ async function startJob(url, body, isRaw) {
 
 // ---------- 生成 ----------
 $('btnGen').onclick = () => {
-  startJob('/api/generate', {
+  const body = {
     seed: $('p_seed').value.trim(),
     size: +$('p_size').value,
-    variety: +$('p_variety').value,
-    mountain: +$('p_mountain').value,
-    skeleton: $('p_skeleton').value,
-    skelAmp: +$('p_skelAmp').value,
     sens: +$('p_sens').value,
     preset: selPreset(),
-  });
+    mode: curMode,
+  };
+  if (curMode === 'mesa') {
+    Object.assign(body, {
+      hAmp: +$('p_hAmp').value,
+      levels: +$('p_levels').value,
+      cliff: +$('p_cliff').value,
+      canyon: +$('p_canyon').value,
+      warp: +$('p_warp').value,
+      cover: +$('p_cover').value,
+    });
+  } else {
+    Object.assign(body, {
+      variety: +$('p_variety').value,
+      mountain: +$('p_mountain').value,
+      skeleton: $('p_skeleton').value,
+      skelAmp: +$('p_skelAmp').value,
+    });
+  }
+  startJob('/api/generate', body);
 };
 
 // ---------- 派生 ----------

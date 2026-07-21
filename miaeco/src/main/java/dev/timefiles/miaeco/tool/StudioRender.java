@@ -1,5 +1,7 @@
 package dev.timefiles.miaeco.tool;
 
+import dev.timefiles.miaeco.terrain.PlanOps;
+
 import java.awt.image.BufferedImage;
 
 /**
@@ -21,7 +23,7 @@ final class StudioRender {
     // ============================ 顶视图 ============================
 
     /** 原分辨率顶视：海拔分层 × 山体阴影 × 投射阴影，water 格画深度渐变海蓝。 */
-    static BufferedImage top(float[] h, boolean[] water, int w, int hgt) {
+    static BufferedImage top(float[] h, boolean[] water, int w, int hgt, boolean mesa) {
         float peak = 1;
         for (float v : h) if (v > peak) peak = v;
         float[] shadow = shadowMask(h, w, hgt, StudioCore.METERS_PER_GRID);
@@ -33,7 +35,8 @@ final class StudioRender {
                 if (water != null && water[i]) {
                     boolean shore = (x > 0 && !water[i - 1]) || (x < w - 1 && !water[i + 1])
                             || (z > 0 && !water[i - w]) || (z < hgt - 1 && !water[i + w]);
-                    rgb = shore ? 0x6FB7D9 : 0x2E5F96;
+                    rgb = mesa ? (shore ? 0x8FB3A6 : 0x5D8577)
+                            : (shore ? 0x6FB7D9 : 0x2E5F96);
                 } else {
                     float y = h[i];
                     float yE = x + 1 < w ? h[i + 1] : y;
@@ -42,7 +45,8 @@ final class StudioRender {
                     light = Math.max(0.55, Math.min(1.3, light));
                     light *= 0.65 + 0.35 * shadow[i];
                     double slope = Math.hypot(gx(h, w, hgt, x, z), gz(h, w, hgt, x, z));
-                    rgb = shade(terrainColor(y, slope, peak, x, z), light);
+                    rgb = shade(mesa ? terrainColorMesa(y, slope, peak, x, z)
+                            : terrainColor(y, slope, peak, x, z), light);
                 }
                 img.setRGB(x, z, rgb);
             }
@@ -57,7 +61,8 @@ final class StudioRender {
      * 峰高 ≈ 平面长边 × 0.34（上限 3.5× 于 60m/格 的自然比例，防丘陵夸成假山）。
      * 背景透明（ARGB）。
      */
-    static BufferedImage view(float[] h, boolean[] water, int w, int hgt, double yawDeg) {
+    static BufferedImage view(float[] h, boolean[] water, int w, int hgt, double yawDeg,
+                              boolean mesa) {
         // 降采样到 ≤288 网格
         int maxDim = Math.max(w, hgt);
         int gw, gh;
@@ -154,11 +159,12 @@ final class StudioRender {
                 light *= 0.68 + 0.32 * shadow[i];
                 int col;
                 if (isWater) {
-                    col = 0x3B6EA8;
+                    col = mesa ? 0x6B8F7E : 0x3B6EA8;
                     light = 0.55 + 0.45 * shadow[i] * 0.5 + 0.25;
                 } else {
                     double slopeM = Math.hypot(gx(gH, gw, gh, x, z), gz(gH, gw, gh, x, z)) / step;
-                    col = terrainColor((float) ym, slopeM, peak, x, z);
+                    col = mesa ? terrainColorMesa((float) ym, slopeM, peak, x, z)
+                            : terrainColor((float) ym, slopeM, peak, x, z);
                 }
                 vcol[i] = shade(col, Math.min(1.35, light));
             }
@@ -312,6 +318,38 @@ final class StudioRender {
                 * (1 - 0.55 * wRock);
         if (wSnow > 0) base = mix(base, 0xF4F6F7, wSnow);
         double nz = (StudioCore.hash01(0x5EEDL, x, z) - 0.5) * 0.08;
+        return shade(base, 1 + nz);
+    }
+
+    /**
+     * 台地/峡谷调色（科罗拉多高原样）：崖壁按海拔循环红岩层理色带（微抖破带），
+     * 平缓面覆草甸（台面越高越绿、带斑块噪声），低地干河床沙色，河水浑绿。
+     */
+    static int terrainColorMesa(float h, double slopeM, float peak, int x, int z) {
+        int[] strata = {0x9C5233, 0xB06A3F, 0x8A4630, 0xC08A55,
+                0xB5713F, 0xCBA06B, 0x8E4F38, 0xC29A69};
+        double bandH = Math.max(9, peak / 16.0);
+        double dith = (StudioCore.hash01(0xD17L, x, z) - 0.5) * bandH * 0.35;
+        int bi = (int) Math.floor((h + dith) / bandH);
+        int rock = strata[((bi % strata.length) + strata.length) % strata.length];
+        rock = shade(rock, 0.86 + 0.30 * Math.min(1, h / Math.max(1f, peak)));
+        int base = rock;
+        double flat = 1 - smoothstep(slopeM, 5.5, 14);
+        if (h < 12) {
+            // 干谷底 / 冲积面：沙色 + 稀疏灌丛斑
+            int wash = mix(0xC2A377, 0x9A9155, PlanOps.patch(0x5CB2L, x, z, 7.0) * 0.35);
+            base = mix(rock, wash, Math.min(1, flat + 0.35));
+        } else if (flat > 0.02) {
+            int grass = mix(0xA8A15C, 0x6E8F42, Math.min(1, h / (peak * 0.85)));
+            // 双尺度平滑斑块（碎迷彩教训）；植被偏向高台面，低阶平台多留裸岩沙
+            double pn = 0.6 * PlanOps.patch(0x9E11L, x, z, 27.0)
+                    + 0.4 * PlanOps.patch(0x3D77L, x, z, 9.0);
+            double hi = smoothstep(h, peak * 0.18, peak * 0.55);
+            double veg = flat * (0.25 + 0.75 * smoothstep(pn, 0.42, 0.66))
+                    * (0.30 + 0.70 * hi);
+            base = mix(rock, grass, Math.min(1, veg));
+        }
+        double nz = (StudioCore.hash01(0x5EEDL, x, z) - 0.5) * 0.09;
         return shade(base, 1 + nz);
     }
 

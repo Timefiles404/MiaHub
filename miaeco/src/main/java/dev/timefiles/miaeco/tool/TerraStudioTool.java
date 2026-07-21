@@ -190,66 +190,101 @@ public final class TerraStudioTool {
                 ? Long.parseLong(req.get("seed").getAsString().trim())
                 : (new java.util.Random().nextLong() & 0x7fffffffffffffL) % 100000000L;
         int size = clampInt(getInt(req, "size", 1024), 256, 2048);
-        double variety = clampD(getD(req, "variety", 2.0), 0.5, 3.0);
-        double mountain = clampD(getD(req, "mountain", 1.0), 0.4, 2.5);
-        String skeleton = req.has("skeleton") ? req.get("skeleton").getAsString() : "none";
-        double skelAmp = clampD(getD(req, "skelAmp", 800), 0, 1500);
         double sens = clampD(getD(req, "sens", 30), 10, 120);
         String preset = req.has("preset") ? req.get("preset").getAsString() : "";
+        String mode = req.has("mode") ? req.get("mode").getAsString() : "diff";
 
         Job job = new Job("generate");
-        boolean ok = submit(job, () -> {
-            try {
-                StudioCore.Field f = StudioCore.generate(seed, size, variety, mountain,
-                        skeleton, skelAmp, (p, m) -> {
-                            job.progress = p;
-                            job.message = m;
-                        });
-                job.message = "切块中…";
-                job.progress = 71;
-                List<StudioCore.Mount> mounts = StudioCore.carve(f, sens, 500);
-                // 整场入库
-                String fid = newId("f");
-                JsonObject fm = baseMeta(fid, "field", "场 s" + seed + " · " + size,
-                        f.w(), f.hgt());
-                float fpeak = 1;
-                for (float v : f.h()) if (v > fpeak) fpeak = v;
-                fm.addProperty("peak", round1(fpeak));
-                genParams(fm, seed, size, preset, variety, mountain, skeleton, skelAmp, sens);
-                saveEntry(fid, fm, f.h(), f.w(), f.hgt(), fpeak, f.water(),
-                        (p, m) -> {
-                            job.progress = 72 + p * 6 / 100;
-                            job.message = m;
-                        });
-                synchronized (job.results) {
-                    job.results.add(fid);
+        boolean ok;
+        if ("mesa".equals(mode)) {
+            double hAmp = clampD(getD(req, "hAmp", 190), 60, 420);
+            int levels = clampInt(getInt(req, "levels", 4), 2, 6);
+            double cliff = clampD(getD(req, "cliff", 0.65), 0, 1);
+            double canyon = clampD(getD(req, "canyon", 0.75), 0, 1);
+            double warp = clampD(getD(req, "warp", 0.55), 0, 1);
+            double cover = clampD(getD(req, "cover", 0.50), 0.2, 0.78);
+            ok = submit(job, () -> {
+                try {
+                    StudioCore.Field f = StudioCore.generateMesa(seed, size, hAmp, levels,
+                            cliff, canyon, warp, cover, (p, m) -> {
+                                job.progress = p;
+                                job.message = m;
+                            });
+                    finishField(job, f, seed, size, sens, 300, "台地场", "台地", "mesa",
+                            m -> genParamsMesa(m, seed, size, preset, hAmp, levels,
+                                    cliff, canyon, warp, cover, sens));
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
                 }
-                // 每座山入库
-                int k = 0;
-                for (StudioCore.Mount mt : mounts) {
-                    k++;
-                    job.message = "渲染山体 " + k + "/" + mounts.size() + "…";
-                    job.progress = 78 + 21 * k / Math.max(1, mounts.size());
-                    String id = newId("m");
-                    JsonObject meta = baseMeta(id, "mount",
-                            "峰 " + String.format("%02d", k) + " · s" + seed, mt.bw(), mt.bh());
-                    meta.addProperty("peak", round1(mt.peak()));
-                    meta.addProperty("base", round1(mt.base()));
-                    meta.addProperty("prom", round1(mt.prom()));
-                    meta.addProperty("area", mt.area());
-                    if (mt.truncated()) meta.addProperty("truncated", true);
-                    genParams(meta, seed, size, preset, variety, mountain, skeleton, skelAmp, sens);
-                    saveEntry(id, meta, mt.data(), mt.bw(), mt.bh(), mt.peak(), null, null);
-                    synchronized (job.results) {
-                        job.results.add(id);
-                    }
+            });
+        } else {
+            double variety = clampD(getD(req, "variety", 2.0), 0.5, 3.0);
+            double mountain = clampD(getD(req, "mountain", 1.0), 0.4, 2.5);
+            String skeleton = req.has("skeleton") ? req.get("skeleton").getAsString() : "none";
+            double skelAmp = clampD(getD(req, "skelAmp", 800), 0, 1500);
+            ok = submit(job, () -> {
+                try {
+                    StudioCore.Field f = StudioCore.generate(seed, size, variety, mountain,
+                            skeleton, skelAmp, (p, m) -> {
+                                job.progress = p;
+                                job.message = m;
+                            });
+                    finishField(job, f, seed, size, sens, 500, "场", "峰", null,
+                            m -> genParams(m, seed, size, preset, variety, mountain,
+                                    skeleton, skelAmp, sens));
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
                 }
-                job.message = "完成：整场 + " + mounts.size() + " 座山";
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        });
+            });
+        }
         sendJson(ex, 200, ok ? okJob(job) : busy());
+    }
+
+    /** 生成后共通流程：切块 → 整场入库 → 逐山入库（fieldWord/mountWord 定命名）。 */
+    private static void finishField(Job job, StudioCore.Field f, long seed, int size,
+                                    double sens, int areaMin, String fieldWord,
+                                    String mountWord, String style,
+                                    java.util.function.Consumer<JsonObject> params)
+            throws Exception {
+        job.message = "切块中…";
+        job.progress = 71;
+        List<StudioCore.Mount> mounts = StudioCore.carve(f, sens, areaMin);
+        String fid = newId("f");
+        JsonObject fm = baseMeta(fid, "field", fieldWord + " s" + seed + " · " + size,
+                f.w(), f.hgt());
+        float fpeak = 1;
+        for (float v : f.h()) if (v > fpeak) fpeak = v;
+        fm.addProperty("peak", round1(fpeak));
+        params.accept(fm);
+        saveEntry(fid, fm, f.h(), f.w(), f.hgt(), fpeak, f.water(), style,
+                (p, m) -> {
+                    job.progress = 72 + p * 6 / 100;
+                    job.message = m;
+                });
+        synchronized (job.results) {
+            job.results.add(fid);
+        }
+        int k = 0;
+        for (StudioCore.Mount mt : mounts) {
+            k++;
+            job.message = "渲染山体 " + k + "/" + mounts.size() + "…";
+            job.progress = 78 + 21 * k / Math.max(1, mounts.size());
+            String id = newId("m");
+            JsonObject meta = baseMeta(id, "mount",
+                    mountWord + " " + String.format("%02d", k) + " · s" + seed,
+                    mt.bw(), mt.bh());
+            meta.addProperty("peak", round1(mt.peak()));
+            meta.addProperty("base", round1(mt.base()));
+            meta.addProperty("prom", round1(mt.prom()));
+            meta.addProperty("area", mt.area());
+            if (mt.truncated()) meta.addProperty("truncated", true);
+            params.accept(meta);
+            saveEntry(id, meta, mt.data(), mt.bw(), mt.bh(), mt.peak(), null, style, null);
+            synchronized (job.results) {
+                job.results.add(id);
+            }
+        }
+        job.message = "完成：整场 + " + mounts.size() + " 座山";
     }
 
     private static void genParams(JsonObject m, long seed, int size, String preset,
@@ -262,6 +297,21 @@ public final class TerraStudioTool {
         m.addProperty("mountain", mountain);
         m.addProperty("skeleton", skeleton);
         m.addProperty("skelAmp", skelAmp);
+        m.addProperty("sens", sens);
+    }
+
+    private static void genParamsMesa(JsonObject m, long seed, int size, String preset,
+                                      double hAmp, int levels, double cliff, double canyon,
+                                      double warp, double cover, double sens) {
+        m.addProperty("seed", seed);
+        m.addProperty("size", size);
+        m.addProperty("preset", preset);
+        m.addProperty("hAmp", hAmp);
+        m.addProperty("levels", levels);
+        m.addProperty("cliff", cliff);
+        m.addProperty("canyon", canyon);
+        m.addProperty("warp", warp);
+        m.addProperty("cover", cover);
         m.addProperty("sens", sens);
     }
 
@@ -289,6 +339,8 @@ public final class TerraStudioTool {
                 float peak = pm.get("peak").getAsFloat();
                 for (int i = 0; i < src.length; i++) src[i] *= peak;
                 String pname = pm.get("name").getAsString();
+                String style = pm.has("style") && !pm.get("style").isJsonNull()
+                        ? pm.get("style").getAsString() : null;
                 for (int k = 0; k < count; k++) {
                     job.message = "派生变体 " + (k + 1) + "/" + count + "…";
                     job.progress = 100 * k / count;
@@ -305,7 +357,7 @@ public final class TerraStudioTool {
                     meta.addProperty("parent", pid);
                     meta.addProperty("strength", strength);
                     meta.addProperty("seed", seed + k * 7919L);
-                    saveEntry(id, meta, d, ow[0], ow[1], dpeak, null, null);
+                    saveEntry(id, meta, d, ow[0], ow[1], dpeak, null, style, null);
                     synchronized (job.results) {
                         job.results.add(id);
                     }
@@ -353,7 +405,7 @@ public final class TerraStudioTool {
                     JsonObject fm = baseMeta(fid, "field", "上传场 · " + name, wh[0], wh[1]);
                     fm.addProperty("peak", round1((float) hscale));
                     fm.addProperty("hscale", hscale);
-                    saveEntry(fid, fm, a, wh[0], wh[1], maxOf(a), null,
+                    saveEntry(fid, fm, a, wh[0], wh[1], maxOf(a), null, null,
                             (p, m) -> job.message = m);
                     synchronized (job.results) {
                         job.results.add(fid);
@@ -375,7 +427,8 @@ public final class TerraStudioTool {
                         meta.addProperty("area", mt.area());
                         if (mt.truncated()) meta.addProperty("truncated", true);
                         meta.addProperty("parent", fid);
-                        saveEntry(id, meta, mt.data(), mt.bw(), mt.bh(), mt.peak(), null, null);
+                        saveEntry(id, meta, mt.data(), mt.bw(), mt.bh(), mt.peak(), null,
+                                null, null);
                         synchronized (job.results) {
                             job.results.add(id);
                         }
@@ -388,7 +441,7 @@ public final class TerraStudioTool {
                     JsonObject meta = baseMeta(id, "upload", name + "（上传）", wh[0], wh[1]);
                     meta.addProperty("peak", round1(maxOf(a)));
                     meta.addProperty("hscale", hscale);
-                    saveEntry(id, meta, a, wh[0], wh[1], maxOf(a), null, null);
+                    saveEntry(id, meta, a, wh[0], wh[1], maxOf(a), null, null, null);
                     synchronized (job.results) {
                         job.results.add(id);
                     }
@@ -453,19 +506,22 @@ public final class TerraStudioTool {
 
     /** 写 height.png(16bit) + top + 4 向 2.5D + meta.json，登记入内存库。 */
     private static void saveEntry(String id, JsonObject meta, float[] data, int w, int h,
-                                  float peak, boolean[] water,
+                                  float peak, boolean[] water, String style,
                                   java.util.function.BiConsumer<Integer, String> prog)
             throws Exception {
         File dir = new File(libDir, id);
         dir.mkdirs();
+        boolean mesa = "mesa".equals(style);
+        if (style != null) meta.addProperty("style", style);
         StudioCore.writeGray16(new File(dir, "height.png"), data, w, h, peak);
         if (prog != null) prog.accept(10, "渲染顶视…");
-        ImageIO.write(StudioRender.top(data, water, w, h), "png", new File(dir, "top.png"));
+        ImageIO.write(StudioRender.top(data, water, w, h, mesa), "png",
+                new File(dir, "top.png"));
         String[] vn = {"view_a", "view_b", "view_c", "view_d"};
         double[] yaws = {45, 135, 225, 315};
         for (int i = 0; i < 4; i++) {
             if (prog != null) prog.accept(20 + i * 20, "渲染视角 " + (i + 1) + "/4…");
-            ImageIO.write(StudioRender.view(data, water, w, h, yaws[i]), "png",
+            ImageIO.write(StudioRender.view(data, water, w, h, yaws[i], mesa), "png",
                     new File(dir, vn[i] + ".png"));
         }
         JsonArray views = new JsonArray();

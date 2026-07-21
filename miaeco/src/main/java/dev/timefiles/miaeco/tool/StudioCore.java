@@ -185,6 +185,158 @@ final class StudioCore {
         return t * t * (3 - 2 * t);
     }
 
+    // ============================ 台地/峡谷生成 ============================
+
+    /**
+     * 桌状台地（mesa/canyon）程序化生成：域翘曲基场分位归一化后过多级
+     * 「坡积裙 + 近垂直崖壁」阶梯剖面（逐带崖缘游移 + 侵蚀刻槽），再沿
+     * 台地脚等值线雕蛇曲河谷——河道天然绕台环行（嵌入式蛇曲）。纯噪声
+     * 合成不走 diffusion，1024² 秒级。
+     *
+     * @param hAmp   台地总高（米，全部崖阶合计，区域起伏 ±25%）
+     * @param levels 崖阶层数 2..6
+     * @param cliff  崖壁锐度 0..1：越高崖越陡、坡积裙越短
+     * @param canyon 河谷强度 0..1（0 = 不刻河）
+     * @param warp   侵蚀扭曲 0..1：域翘曲幅度 + 崖缘破碎度
+     * @param cover  高地覆盖率：首崖以上的面积占比
+     */
+    static Field generateMesa(long seed, int size, double hAmp, int levels, double cliff,
+                              double canyon, double warp, double cover,
+                              BiConsumer<Integer, String> progress) {
+        int n = size * size;
+        float[] e = new float[n];
+        double wAmp = size * (0.05 + 0.11 * warp);
+        double wCell = size * 0.26, eCell = size * 0.45;
+        for (int z = 0; z < size; z++) {
+            if ((z & 127) == 0) progress.accept(4 + (int) (30.0 * z / size), "基场（域翘曲）…");
+            for (int x = 0; x < size; x++) {
+                double wx = x + (fbmD(seed ^ 0xA17L, x, z, wCell, 3) - 0.5) * 2 * wAmp;
+                double wz = z + (fbmD(seed ^ 0xB29L, x, z, wCell, 3) - 0.5) * 2 * wAmp;
+                e[z * size + x] = (float) fbmD(seed ^ 0xC31L, wx, wz, eCell, 4);
+            }
+        }
+        progress.accept(36, "分位归一化…");
+        normRank(e);
+
+        // 崖阶带（e' 均匀 → 阈值即面积分位）：b1 = 首崖基线，其上均分 levels 带。
+        // 崖体/河道宽度都按局部梯度归一到目标水平格数——e' 梯度平缓处不再把
+        // 崖拉成糊坡、河摊成大湖（首渲教训）
+        double b1 = 1 - cover;
+        double bandW = (0.985 - b1) / levels;
+        double riserCells = 5.5 - 2.5 * cliff;                   // 崖体目标水平宽（格）
+        double riverCells = 3.2 + 2.8 * canyon;                  // 河道目标半宽（格）
+        double[] amp = new double[levels];
+        double aTot = 0;
+        for (int i = 0; i < levels; i++) {
+            amp[i] = 1.18 - 0.36 * i / Math.max(1, levels - 1);  // 下阶崖稍高
+            aTot += amp[i];
+        }
+        for (int i = 0; i < levels; i++) amp[i] *= hAmp / aTot;
+        double rimCells = 9 + 14 * warp;                         // 崖缘游移（水平格）
+        double notchCells = 5 + 9 * warp;                        // 侵蚀刻槽（只向内咬）
+        double riverIso1 = b1 - 0.055, riverIso2 = b1 * 0.52;
+        double riverDeep = 11 + 26 * canyon;
+
+        float[] h = new float[n];
+        boolean[] water = new boolean[n];
+        for (int z = 0; z < size; z++) {
+            if ((z & 127) == 0) progress.accept(40 + (int) (28.0 * z / size), "崖阶 + 河谷…");
+            for (int x = 0; x < size; x++) {
+                int i = z * size + x;
+                double ev = e[i];
+                // e' 局部梯度（中心差分，边界夹取）：宽度归一的分母
+                float exm = e[z * size + Math.max(0, x - 1)];
+                float exp = e[z * size + Math.min(size - 1, x + 1)];
+                float ezm = e[Math.max(0, z - 1) * size + x];
+                float ezp = e[Math.min(size - 1, z + 1) * size + x];
+                double ge = Math.max(1e-4, Math.hypot((exp - exm) / 2.0, (ezp - ezm) / 2.0));
+                double rw = ge * riserCells;
+                // 区域起伏：各台面绝对高度不同（整叠崖阶同乘）
+                double reg = 0.78 + 0.50 * fbmD(seed ^ 0xD43L, x, z, size * 0.55, 3);
+                double m = 5.5 + (fbmD(seed ^ 0x661L, x, z, size * 0.20, 3) - 0.5) * 6;
+                for (int b = 0; b < levels; b++) {
+                    double rim = (fbmD(seed ^ (0xE05L + b * 977L), x, z, 96, 3) - 0.5)
+                            * 2 * ge * rimCells
+                            - Math.abs(fbmD(seed ^ (0xF11L + b * 499L), x, z, 23, 2) - 0.5)
+                            * 2 * ge * notchCells;
+                    double t = (ev + rim - (b1 + b * bandW)) / rw;
+                    if (t > 0) m += amp[b] * reg * riser(Math.min(1, t), cliff);
+                }
+                // 台面/低地微起伏（照片顶面平整，幅度收小）
+                m += (fbmD(seed ^ 0x775L, x, z, 46, 3) - 0.5) * (2.2 + hAmp * 0.012);
+                if (canyon > 0.01) {
+                    double rwR = ge * riverCells;
+                    double c1 = 1 - smooth01(Math.abs(ev - riverIso1) / rwR);
+                    double c2 = 1 - smooth01(Math.abs(ev - riverIso2) / rwR);
+                    double c = Math.max(c1, c2 * 0.9);
+                    if (c > 0) m -= riverDeep * Math.pow(c, 1.6);
+                }
+                water[i] = m < -1.5;
+                h[i] = Math.max(0f, (float) m);
+            }
+        }
+        progress.accept(70, "台地场生成完毕");
+        return new Field(h, size, size, water);
+    }
+
+    /** 崖阶剖面：t∈[0,1] → [0,1]，前段上凹坡积裙，后段近垂直崖壁。 */
+    private static double riser(double t, double cliff) {
+        double tf = 0.60 - 0.28 * cliff;                         // 坡积裙水平占比
+        double th = 0.34 - 0.10 * cliff;                         // 坡积裙高度占比
+        if (t <= tf) {
+            double u = t / tf;
+            return th * u * u * (0.35 + 0.65 * u);
+        }
+        double u = (t - tf) / (1 - tf);
+        u = u * u * (3 - 2 * u);
+        return th + (1 - th) * u;
+    }
+
+    /** 直方图分位归一化：任意分布 → [0,1] 均匀（保持大小序）。 */
+    static void normRank(float[] a) {
+        float lo = Float.MAX_VALUE, hi = -Float.MAX_VALUE;
+        for (float v : a) {
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+        }
+        if (hi - lo < 1e-9f) return;
+        int nb = 8192;
+        int[] hist = new int[nb];
+        float k = (nb - 1) / (hi - lo);
+        for (float v : a) hist[(int) ((v - lo) * k)]++;
+        float[] cdf = new float[nb];
+        long acc = 0;
+        for (int b = 0; b < nb; b++) {
+            acc += hist[b];
+            cdf[b] = (float) ((double) acc / a.length);
+        }
+        for (int i = 0; i < a.length; i++) a[i] = cdf[(int) ((a[i] - lo) * k)];
+    }
+
+    /** 双精度坐标值噪声 fBm（翘曲采样用；PlanOps.patch 只收整型坐标）。 */
+    static double fbmD(long seed, double x, double z, double cell, int oct) {
+        double sum = 0, ampl = 1, tot = 0, f = 1;
+        for (int o = 0; o < oct; o++) {
+            sum += ampl * vnoise(seed + o * 1013L, x * f / cell, z * f / cell);
+            tot += ampl;
+            ampl *= 0.5;
+            f *= 2;
+        }
+        return sum / tot;
+    }
+
+    private static double vnoise(long seed, double x, double z) {
+        int x0 = (int) Math.floor(x), z0 = (int) Math.floor(z);
+        double tx = x - x0, tz = z - z0;
+        tx = tx * tx * (3 - 2 * tx);
+        tz = tz * tz * (3 - 2 * tz);
+        double v00 = hash01(seed, x0, z0), v10 = hash01(seed, x0 + 1, z0);
+        double v01 = hash01(seed, x0, z0 + 1), v11 = hash01(seed, x0 + 1, z0 + 1);
+        double a = v00 + (v10 - v00) * tx;
+        double b = v01 + (v11 - v01) * tx;
+        return a + (b - a) * tz;
+    }
+
     // ============================ 山体切块 ============================
 
     /**
